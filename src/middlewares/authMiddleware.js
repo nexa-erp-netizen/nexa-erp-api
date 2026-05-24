@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken")
 
-const JWT_SECRET = "nexa_segredo_temporario"
+const JWT_SECRET = process.env.JWT_SECRET || "nexa_segredo_temporario"
 
 function autenticar(req, res, next) {
   const authHeader = req.headers.authorization

@@ -51,6 +51,11 @@ const LancamentoContabil = sequelize.define("LancamentoContabil", {
     type: DataTypes.JSON,
     allowNull: true,
   },
+
+  empresaId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 })
 
 module.exports = LancamentoContabil

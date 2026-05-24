@@ -31,6 +31,17 @@ const Financeiro = sequelize.define("Financeiro", {
     type: DataTypes.STRING,
     allowNull: false,
   },
+
+  anexos: {
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: [],
+  },
+
+  empresaId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 })
 
 module.exports = Financeiro

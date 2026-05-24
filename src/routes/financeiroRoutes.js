@@ -1,111 +1,81 @@
 const express = require("express")
+
 const Financeiro = require("../models/Financeiro")
+
+const {
+  autenticar,
+} = require("../middlewares/authMiddleware")
+
+const upload = require("../middlewares/upload")
 
 const router = express.Router()
 
-router.get("/", async (req, res) => {
+// LISTAR
+router.get("/", autenticar, async (req, res) => {
   try {
-    const lancamentos =
-      await Financeiro.findAll({
-        order: [["createdAt", "DESC"]],
-      })
+    const where = {}
+
+    if (req.usuario.empresaId) {
+      where.empresaId = req.usuario.empresaId
+    }
+
+    const lancamentos = await Financeiro.findAll({
+      where,
+      order: [["createdAt", "DESC"]],
+    })
 
     res.json(lancamentos)
   } catch (error) {
-    console.error(
-      "ERRO AO LISTAR FINANCEIRO:",
-      error
-    )
-
     res.status(500).json({
-      message:
-        "Erro ao listar financeiro",
+      message: "Erro ao listar financeiro",
+      error,
     })
   }
 })
 
-router.post("/", async (req, res) => {
+// CRIAR
+router.post("/", autenticar, async (req, res) => {
   try {
-    const novoLancamento =
-      await Financeiro.create(req.body)
+    const novoLancamento = await Financeiro.create({
+      ...req.body,
 
-    res.status(201).json(
-      novoLancamento
-    )
+      empresaId:
+        req.usuario?.empresaId ||
+        req.body.empresaId ||
+        null,
+    })
+
+    res.status(201).json(novoLancamento)
   } catch (error) {
-    console.error(
-      "ERRO AO CRIAR LANÇAMENTO:",
-      error
-    )
-
     res.status(500).json({
-      message:
-        "Erro ao criar lançamento",
+      message: "Erro ao criar lançamento",
+      error,
     })
   }
 })
 
-router.put("/:id", async (req, res) => {
-  try {
-    const { id } = req.params
+// UPLOAD DE ANEXOS
+router.post(
+  "/upload",
+  autenticar,
+  upload.array("arquivos"),
 
-    const lancamento =
-      await Financeiro.findByPk(id)
+  async (req, res) => {
+    try {
+      const arquivos = req.files.map((file) => ({
+        nome: file.originalname,
 
-    if (!lancamento) {
-      return res.status(404).json({
+        caminho: `/uploads/${file.filename}`,
+      }))
+
+      res.json(arquivos)
+    } catch (error) {
+      res.status(500).json({
         message:
-          "Lançamento não encontrado",
+          "Erro ao enviar anexo financeiro",
       })
     }
-
-    await lancamento.update(req.body)
-
-    res.json(lancamento)
-  } catch (error) {
-    console.error(
-      "ERRO AO ATUALIZAR LANÇAMENTO:",
-      error
-    )
-
-    res.status(500).json({
-      message:
-        "Erro ao atualizar lançamento",
-    })
   }
-})
-
-router.delete("/:id", async (req, res) => {
-  try {
-    const { id } = req.params
-
-    const lancamento =
-      await Financeiro.findByPk(id)
-
-    if (!lancamento) {
-      return res.status(404).json({
-        message:
-          "Lançamento não encontrado",
-      })
-    }
-
-    await lancamento.destroy()
-
-    res.json({
-      message:
-        "Lançamento excluído com sucesso",
-    })
-  } catch (error) {
-    console.error(
-      "ERRO AO EXCLUIR LANÇAMENTO:",
-      error
-    )
-
-    res.status(500).json({
-      message:
-        "Erro ao excluir lançamento",
-    })
-  }
-})
+)
 
 module.exports = router

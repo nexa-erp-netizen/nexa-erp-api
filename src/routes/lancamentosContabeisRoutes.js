@@ -1,12 +1,14 @@
 const express = require("express")
-const LancamentoContabil = require("../models/LancamentoContabil")
-const upload = require("../middlewares/upload")
 
-const router = express.Router()
+const LancamentoContabil = require("../models/LancamentoContabil")
+const Financeiro = require("../models/Financeiro")
+const upload = require("../middlewares/upload")
 
 const {
   autenticar,
 } = require("../middlewares/authMiddleware")
+
+const router = express.Router()
 
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -16,58 +18,60 @@ router.get("/", autenticar, async (req, res) => {
       where.cliente = req.usuario.clienteVinculado
     }
 
-    const lancamentos =
-      await LancamentoContabil.findAll({
-        where,
-        order: [["createdAt", "DESC"]],
+    if (req.usuario.empresaId) {
+      where.empresaId = req.usuario.empresaId
+    }
+
+    const lancamentos = await LancamentoContabil.findAll({
+      where,
+      order: [["createdAt", "DESC"]],
     })
 
     res.json(lancamentos)
   } catch (error) {
-    console.error(
-      "ERRO AO LISTAR LANÇAMENTOS:",
-      error
-    )
+    console.error("ERRO AO LISTAR LANÇAMENTOS:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao listar lançamentos",
+      message: "Erro ao listar lançamentos",
     })
   }
 })
 
-router.post("/", async (req, res) => {
+router.post("/", autenticar, async (req, res) => {
   try {
-    const novoLancamento =
-      await LancamentoContabil.create(req.body)
+    const novoLancamento = await LancamentoContabil.create({
+      ...req.body,
+      empresaId: req.usuario?.empresaId || null,
+    })
 
-    res.status(201).json(
-      novoLancamento
-    )
+    await Financeiro.create({
+      descricao: req.body.descricao || "Honorários",
+      cliente: req.body.cliente,
+      tipo: "Receber",
+      valor: req.body.valor,
+      vencimento: req.body.data,
+      status: "Pendente",
+      anexos: req.body.anexos || [],
+      empresaId: req.usuario?.empresaId || null,
+    })
+
+    res.status(201).json(novoLancamento)
   } catch (error) {
-    console.error(
-      "ERRO AO CRIAR LANÇAMENTO:",
-      error
-    )
+    console.error("ERRO AO CRIAR LANÇAMENTO:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao criar lançamento",
+      message: "Erro ao criar lançamento",
     })
   }
 })
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", autenticar, async (req, res) => {
   try {
-    const { id } = req.params
-
-    const lancamento =
-      await LancamentoContabil.findByPk(id)
+    const lancamento = await LancamentoContabil.findByPk(req.params.id)
 
     if (!lancamento) {
       return res.status(404).json({
-        message:
-          "Lançamento não encontrado",
+        message: "Lançamento não encontrado",
       })
     }
 
@@ -75,53 +79,41 @@ router.put("/:id", async (req, res) => {
 
     res.json(lancamento)
   } catch (error) {
-    console.error(
-      "ERRO AO ATUALIZAR LANÇAMENTO:",
-      error
-    )
+    console.error("ERRO AO ATUALIZAR LANÇAMENTO:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao atualizar lançamento",
+      message: "Erro ao atualizar lançamento",
     })
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", autenticar, async (req, res) => {
   try {
-    const { id } = req.params
-
-    const lancamento =
-      await LancamentoContabil.findByPk(id)
+    const lancamento = await LancamentoContabil.findByPk(req.params.id)
 
     if (!lancamento) {
       return res.status(404).json({
-        message:
-          "Lançamento não encontrado",
+        message: "Lançamento não encontrado",
       })
     }
 
     await lancamento.destroy()
 
     res.json({
-      message:
-        "Lançamento excluído com sucesso",
+      message: "Lançamento excluído com sucesso",
     })
   } catch (error) {
-    console.error(
-      "ERRO AO EXCLUIR LANÇAMENTO:",
-      error
-    )
+    console.error("ERRO AO EXCLUIR LANÇAMENTO:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao excluir lançamento",
+      message: "Erro ao excluir lançamento",
     })
   }
 })
 
-  router.post(
+router.post(
   "/upload",
+  autenticar,
   upload.array("arquivos"),
   async (req, res) => {
     try {
@@ -132,10 +124,7 @@ router.delete("/:id", async (req, res) => {
 
       res.json(arquivos)
     } catch (error) {
-      console.error(
-        "ERRO NO UPLOAD CONTÁBIL:",
-        error
-      )
+      console.error("ERRO NO UPLOAD CONTÁBIL:", error)
 
       res.status(500).json({
         message: "Erro ao fazer upload contábil",

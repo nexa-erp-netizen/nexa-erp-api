@@ -1,5 +1,6 @@
 const express = require("express")
 const Cliente = require("../models/Cliente")
+const filtroEmpresa = require("../utils/empresaFiltro")
 
 const {
   autenticar,
