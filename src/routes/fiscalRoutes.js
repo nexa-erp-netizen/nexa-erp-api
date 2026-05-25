@@ -45,7 +45,15 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente = req.usuario.clienteVinculado
+      if (req.usuario.clienteVinculado) {
+        where.cliente = req.usuario.clienteVinculado
+      } else {
+        return res.json([])
+      }
+    }
+
+    if (req.usuario.empresaId) {
+      where.empresaId = req.usuario.empresaId
     }
 
     const obrigacoes = await Fiscal.findAll({
@@ -66,9 +74,8 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", async (req, res) => {
+router.post("/", autenticar, async (req, res) => {
   try {
-
     const alerta = calcularAlertaFiscal(
       req.body.vencimento,
       req.body.status
@@ -79,6 +86,10 @@ router.post("/", async (req, res) => {
         ...req.body,
         diasParaVencer: alerta.diasParaVencer,
         alertaFiscal: alerta.alertaFiscal,
+        empresaId:
+          req.usuario?.empresaId ||
+          req.body.empresaId ||
+          null,
       })
 
     res.status(201).json(novaObrigacao)
@@ -94,7 +105,7 @@ router.post("/", async (req, res) => {
   }
 })
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
@@ -133,7 +144,7 @@ router.put("/:id", async (req, res) => {
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
@@ -168,6 +179,7 @@ router.delete("/:id", async (req, res) => {
 
 router.post(
   "/upload",
+  autenticar,
   upload.array("arquivos"),
   async (req, res) => {
     try {

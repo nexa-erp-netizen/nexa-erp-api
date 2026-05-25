@@ -13,8 +13,15 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente =
-        req.usuario.clienteVinculado
+      if (req.usuario.clienteVinculado) {
+        where.cliente = req.usuario.clienteVinculado
+      } else {
+        return res.json([])
+      }
+    }
+
+    if (req.usuario.empresaId) {
+      where.empresaId = req.usuario.empresaId
     }
 
     const documentos =
@@ -36,9 +43,16 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", async (req, res) => {
+router.post("/", autenticar, async (req, res) => {
   try {
-    const novoDocumento = await DocumentoDigital.create(req.body)
+    const novoDocumento =
+      await DocumentoDigital.create({
+        ...req.body,
+        empresaId:
+          req.usuario?.empresaId ||
+          req.body.empresaId ||
+          null,
+      })
 
     res.status(201).json(novoDocumento)
   } catch (error) {
@@ -50,11 +64,12 @@ router.post("/", async (req, res) => {
   }
 })
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
-    const documento = await DocumentoDigital.findByPk(id)
+    const documento =
+      await DocumentoDigital.findByPk(id)
 
     if (!documento) {
       return res.status(404).json({
@@ -66,7 +81,10 @@ router.put("/:id", async (req, res) => {
 
     res.json(documento)
   } catch (error) {
-    console.error("ERRO AO ATUALIZAR DOCUMENTO:", error)
+    console.error(
+      "ERRO AO ATUALIZAR DOCUMENTO:",
+      error
+    )
 
     res.status(500).json({
       message: "Erro ao atualizar documento",
@@ -74,11 +92,12 @@ router.put("/:id", async (req, res) => {
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
-    const documento = await DocumentoDigital.findByPk(id)
+    const documento =
+      await DocumentoDigital.findByPk(id)
 
     if (!documento) {
       return res.status(404).json({
@@ -92,7 +111,10 @@ router.delete("/:id", async (req, res) => {
       message: "Documento excluído com sucesso",
     })
   } catch (error) {
-    console.error("ERRO AO EXCLUIR DOCUMENTO:", error)
+    console.error(
+      "ERRO AO EXCLUIR DOCUMENTO:",
+      error
+    )
 
     res.status(500).json({
       message: "Erro ao excluir documento",
@@ -102,6 +124,7 @@ router.delete("/:id", async (req, res) => {
 
 router.post(
   "/upload",
+  autenticar,
   upload.array("arquivos"),
   async (req, res) => {
     try {
@@ -112,7 +135,10 @@ router.post(
 
       res.json(arquivos)
     } catch (error) {
-      console.error("ERRO NO UPLOAD DE DOCUMENTO:", error)
+      console.error(
+        "ERRO NO UPLOAD DE DOCUMENTO:",
+        error
+      )
 
       res.status(500).json({
         message: "Erro ao fazer upload de documento",
