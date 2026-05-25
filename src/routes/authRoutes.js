@@ -5,7 +5,7 @@ const Usuario = require("../models/Usuario")
 
 const router = express.Router()
 
-const JWT_SECRET = "nexa_segredo_temporario"
+const JWT_SECRET = process.env.JWT_SECRET || "nexa_segredo_temporario"
 
 router.post("/registrar", async (req, res) => {
   try {
