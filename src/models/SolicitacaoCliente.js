@@ -32,6 +32,11 @@ const SolicitacaoCliente = sequelize.define("SolicitacaoCliente", {
     type: DataTypes.JSON,
     allowNull: true,
   },
+
+  empresaId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 })
 
 module.exports = SolicitacaoCliente

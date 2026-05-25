@@ -38,10 +38,14 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", async (req, res) => {
+router.post("/", autenticar, async (req, res) => {
   try {
     const novaSolicitacao =
-      await SolicitacaoCliente.create(req.body)
+      await SolicitacaoCliente.create({
+        ...req.body,
+        empresaId:
+          req.usuario?.empresaId || null,
+      })
 
     res.status(201).json(
       novaSolicitacao
@@ -58,7 +62,6 @@ router.post("/", async (req, res) => {
     })
   }
 })
-
 router.put("/:id", async (req, res) => {
   try {
     const { id } = req.params
