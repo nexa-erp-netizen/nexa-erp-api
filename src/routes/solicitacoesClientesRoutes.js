@@ -14,8 +14,11 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente =
-        req.usuario.clienteVinculado
+      if (req.usuario.clienteVinculado) {
+        where.cliente = req.usuario.clienteVinculado
+      } else {
+        return res.json([])
+      }
     }
 
     const solicitacoes =
