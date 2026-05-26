@@ -75,14 +75,24 @@ app.get("/dashboard", async (req, res) => {
     }
 
     const totalReceber = lancamentos
-      .filter((item) => item.tipo === "Receber")
+      .filter(
+        (item) =>
+          item.tipo === "Receber" &&
+          item.status !== "Pago" &&
+          item.status !== "Recebido"
+      )
       .reduce(
         (total, item) => total + valorNumerico(item.valor),
         0
       )
 
     const totalPagar = lancamentos
-      .filter((item) => item.tipo === "Pagar")
+      .filter(
+        (item) =>
+          item.tipo === "Pagar" &&
+          item.status !== "Pago" &&
+          item.status !== "Recebido"
+      )
       .reduce(
         (total, item) => total + valorNumerico(item.valor),
         0
