@@ -8,12 +8,17 @@ const {
 
 const router = express.Router()
 
+// LISTAR FINANCEIRO
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente = req.usuario.clienteVinculado
+      if (req.usuario.clienteVinculado) {
+        where.cliente = req.usuario.clienteVinculado
+      } else {
+        return res.json([])
+      }
     }
 
     if (req.usuario.empresaId) {
@@ -35,6 +40,7 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
+// CRIAR LANÇAMENTO
 router.post("/", autenticar, async (req, res) => {
   try {
     const novoLancamento = await Financeiro.create({
@@ -47,6 +53,8 @@ router.post("/", autenticar, async (req, res) => {
 
     res.status(201).json(novoLancamento)
   } catch (error) {
+    console.error("ERRO AO CRIAR FINANCEIRO:", error)
+
     res.status(500).json({
       message: "Erro ao criar lançamento",
       error,
@@ -54,6 +62,79 @@ router.post("/", autenticar, async (req, res) => {
   }
 })
 
+// ATUALIZAR / MARCAR COMO PAGO
+router.put("/:id", autenticar, async (req, res) => {
+  try {
+    const lancamento = await Financeiro.findByPk(
+      req.params.id
+    )
+
+    if (!lancamento) {
+      return res.status(404).json({
+        message: "Lançamento financeiro não encontrado",
+      })
+    }
+
+    if (
+      req.usuario.empresaId &&
+      lancamento.empresaId !== req.usuario.empresaId
+    ) {
+      return res.status(403).json({
+        message: "Acesso não autorizado",
+      })
+    }
+
+    await lancamento.update(req.body)
+
+    res.json(lancamento)
+  } catch (error) {
+    console.error("ERRO AO ATUALIZAR FINANCEIRO:", error)
+
+    res.status(500).json({
+      message: "Erro ao atualizar lançamento",
+      error,
+    })
+  }
+})
+
+// EXCLUIR LANÇAMENTO
+router.delete("/:id", autenticar, async (req, res) => {
+  try {
+    const lancamento = await Financeiro.findByPk(
+      req.params.id
+    )
+
+    if (!lancamento) {
+      return res.status(404).json({
+        message: "Lançamento financeiro não encontrado",
+      })
+    }
+
+    if (
+      req.usuario.empresaId &&
+      lancamento.empresaId !== req.usuario.empresaId
+    ) {
+      return res.status(403).json({
+        message: "Acesso não autorizado",
+      })
+    }
+
+    await lancamento.destroy()
+
+    res.json({
+      message: "Lançamento financeiro excluído com sucesso",
+    })
+  } catch (error) {
+    console.error("ERRO AO EXCLUIR FINANCEIRO:", error)
+
+    res.status(500).json({
+      message: "Erro ao excluir lançamento",
+      error,
+    })
+  }
+})
+
+// UPLOAD DE ANEXOS
 router.post(
   "/upload",
   autenticar,
@@ -67,6 +148,8 @@ router.post(
 
       res.json(arquivos)
     } catch (error) {
+      console.error("ERRO AO ENVIAR ANEXO FINANCEIRO:", error)
+
       res.status(500).json({
         message: "Erro ao enviar anexo financeiro",
       })
