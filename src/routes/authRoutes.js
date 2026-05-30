@@ -5,7 +5,8 @@ const Usuario = require("../models/Usuario")
 
 const router = express.Router()
 
-const JWT_SECRET = process.env.JWT_SECRET || "nexa_segredo_temporario"
+const JWT_SECRET =
+  process.env.JWT_SECRET || "nexa_segredo_temporario"
 
 router.post("/registrar", async (req, res) => {
   try {
@@ -24,6 +25,12 @@ router.post("/registrar", async (req, res) => {
       })
     }
 
+    if (perfil === "Cliente" && !clienteVinculado) {
+      return res.status(400).json({
+        message: "Selecione o cliente vinculado",
+      })
+    }
+
     const usuarioExiste = await Usuario.findOne({
       where: { email },
     })
@@ -34,14 +41,18 @@ router.post("/registrar", async (req, res) => {
       })
     }
 
-    const senhaCriptografada = await bcrypt.hash(senha, 10)
+    const senhaCriptografada = await bcrypt.hash(
+      senha,
+      10
+    )
 
     const usuario = await Usuario.create({
       nome,
       email,
       senha: senhaCriptografada,
       perfil,
-      clienteVinculado,
+      clienteVinculado:
+        perfil === "Cliente" ? clienteVinculado : null,
       empresaId,
     })
 
@@ -98,6 +109,8 @@ router.post("/login", async (req, res) => {
         id: usuario.id,
         email: usuario.email,
         perfil: usuario.perfil,
+        clienteVinculado: usuario.clienteVinculado,
+        empresaId: usuario.empresaId,
       },
       JWT_SECRET,
       {
@@ -112,6 +125,8 @@ router.post("/login", async (req, res) => {
         nome: usuario.nome,
         email: usuario.email,
         perfil: usuario.perfil,
+        clienteVinculado: usuario.clienteVinculado,
+        empresaId: usuario.empresaId,
       },
     })
   } catch (error) {

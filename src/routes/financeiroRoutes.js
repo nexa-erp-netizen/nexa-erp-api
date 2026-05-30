@@ -8,6 +8,15 @@ const {
 
 const router = express.Router()
 
+function adicionarMeses(dataBase, quantidadeMeses, diaVencimento) {
+  const data = new Date(dataBase)
+
+  data.setMonth(data.getMonth() + quantidadeMeses)
+  data.setDate(Number(diaVencimento))
+
+  return data.toISOString().slice(0, 10)
+}
+
 // LISTAR FINANCEIRO
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -43,12 +52,56 @@ router.get("/", autenticar, async (req, res) => {
 // CRIAR LANÇAMENTO
 router.post("/", autenticar, async (req, res) => {
   try {
+    const {
+      recorrenteMensal,
+      diaVencimento,
+      quantidadeMeses,
+      ...dadosLancamento
+    } = req.body
+
+    const empresaId =
+      req.usuario?.empresaId ||
+      req.body.empresaId ||
+      null
+
+    if (recorrenteMensal) {
+      const meses = Number(quantidadeMeses || 12)
+      const dia = Number(diaVencimento || 10)
+
+      const lancamentosRecorrentes = []
+
+      for (let i = 0; i < meses; i++) {
+        const vencimentoGerado = adicionarMeses(
+          dadosLancamento.vencimento || new Date(),
+          i,
+          dia
+        )
+
+        lancamentosRecorrentes.push({
+          ...dadosLancamento,
+          vencimento: vencimentoGerado,
+          status: "Pendente",
+          empresaId,
+          recorrenteMensal: true,
+          diaVencimento: dia,
+          parcelaRecorrente: `${i + 1}/${meses}`,
+        })
+      }
+
+      const criados = await Financeiro.bulkCreate(
+        lancamentosRecorrentes
+      )
+
+      return res.status(201).json({
+        message: "Lançamentos recorrentes criados com sucesso",
+        total: criados.length,
+        lancamentos: criados,
+      })
+    }
+
     const novoLancamento = await Financeiro.create({
-      ...req.body,
-      empresaId:
-        req.usuario?.empresaId ||
-        req.body.empresaId ||
-        null,
+      ...dadosLancamento,
+      empresaId,
     })
 
     res.status(201).json(novoLancamento)

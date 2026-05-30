@@ -14,6 +14,9 @@ const SolicitacaoCliente = require("./src/models/SolicitacaoCliente")
 const DocumentoDigital = require("./src/models/DocumentoDigital")
 const Agenda = require("./src/models/Agenda")
 const Empresa = require("./src/models/Empresa")
+const ContaReceber = require("./src/models/ContaReceber")
+const FluxoCaixa = require("./src/models/FluxoCaixa")
+const usuariosRoutes = require("./src/routes/usuariosRoutes")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -28,6 +31,8 @@ const relatoriosRoutes = require("./src/routes/relatoriosRoutes")
 const backupRoutes = require("./src/routes/backupRoutes")
 const agendaRoutes = require("./src/routes/agendaRoutes")
 const empresasRoutes = require("./src/routes/empresasRoutes")
+const contasReceberRoutes = require("./src/routes/contasReceberRoutes")
+const fluxoCaixaRoutes = require("./src/routes/fluxoCaixaRoutes")
 
 const app = express()
 
@@ -53,6 +58,9 @@ app.use("/documentos-digitais", documentosDigitaisRoutes)
 app.use("/backup", backupRoutes)
 app.use("/agenda", agendaRoutes)
 app.use("/empresas", empresasRoutes)
+app.use("/contas-receber", contasReceberRoutes)
+app.use("/fluxo-caixa", fluxoCaixaRoutes)
+app.use("/usuarios", usuariosRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", async (req, res) => {
@@ -66,7 +74,7 @@ app.get("/dashboard", async (req, res) => {
 
     function valorNumerico(valorFormatado) {
       return Number(
-        String(valorFormatado)
+        String(valorFormatado || 0)
           .replace("R$", "")
           .replace(/\./g, "")
           .replace(",", ".")
@@ -74,36 +82,78 @@ app.get("/dashboard", async (req, res) => {
       )
     }
 
-    const totalReceber = lancamentos
+    function statusAutomatico(item) {
+      if (
+        item.status === "Pago" ||
+        item.status === "Recebido"
+      ) {
+        return item.status
+      }
+
+      if (
+        item.vencimento &&
+        new Date(item.vencimento) < new Date()
+      ) {
+        return "Atrasado"
+      }
+
+      return item.status || "Pendente"
+    }
+
+    const financeiroTratado = lancamentos.map((item) => ({
+      ...item.dataValues,
+      statusCalculado: statusAutomatico(item),
+    }))
+
+    const recebido = financeiroTratado
       .filter(
         (item) =>
           item.tipo === "Receber" &&
-          item.status !== "Pago" &&
-          item.status !== "Recebido"
+          (item.statusCalculado === "Recebido" ||
+            item.statusCalculado === "Pago")
       )
       .reduce(
         (total, item) => total + valorNumerico(item.valor),
         0
       )
 
-    const totalPagar = lancamentos
+    const totalReceber = financeiroTratado
+      .filter(
+        (item) =>
+          item.tipo === "Receber" &&
+          item.statusCalculado !== "Pago" &&
+          item.statusCalculado !== "Recebido"
+      )
+      .reduce(
+        (total, item) => total + valorNumerico(item.valor),
+        0
+      )
+
+    const totalPagar = financeiroTratado
       .filter(
         (item) =>
           item.tipo === "Pagar" &&
-          item.status !== "Pago" &&
-          item.status !== "Recebido"
+          item.statusCalculado !== "Pago" &&
+          item.statusCalculado !== "Recebido"
       )
       .reduce(
         (total, item) => total + valorNumerico(item.valor),
         0
       )
 
+    const inadimplentes = financeiroTratado.filter(
+      (item) => item.statusCalculado === "Atrasado"
+    )
+
     const resumoPorCliente = {}
 
-    lancamentosContabeis.forEach((item) => {
-      if (!resumoPorCliente[item.cliente]) {
-        resumoPorCliente[item.cliente] = {
-          cliente: item.cliente,
+    financeiroTratado.forEach((item) => {
+      const nomeCliente =
+        item.cliente || "Sem cliente"
+
+      if (!resumoPorCliente[nomeCliente]) {
+        resumoPorCliente[nomeCliente] = {
+          cliente: nomeCliente,
           receitas: 0,
           despesas: 0,
           resultado: 0,
@@ -111,19 +161,56 @@ app.get("/dashboard", async (req, res) => {
         }
       }
 
-      if (item.tipo === "Receita") {
-        resumoPorCliente[item.cliente].receitas += valorNumerico(item.valor)
+      if (item.tipo === "Receber") {
+        resumoPorCliente[nomeCliente].receitas +=
+          valorNumerico(item.valor)
       }
 
-      if (item.tipo === "Despesa") {
-        resumoPorCliente[item.cliente].despesas += valorNumerico(item.valor)
+      if (item.tipo === "Pagar") {
+        resumoPorCliente[nomeCliente].despesas +=
+          valorNumerico(item.valor)
       }
 
-      resumoPorCliente[item.cliente].resultado =
-        resumoPorCliente[item.cliente].receitas -
-        resumoPorCliente[item.cliente].despesas
+      resumoPorCliente[nomeCliente].resultado =
+        resumoPorCliente[nomeCliente].receitas -
+        resumoPorCliente[nomeCliente].despesas
 
-      resumoPorCliente[item.cliente].lancamentos += 1
+      resumoPorCliente[nomeCliente].lancamentos += 1
+    })
+
+    const resumoPorCentroCusto = {}
+
+    financeiroTratado.forEach((item) => {
+      const centro =
+        item.centroCusto ||
+        item.centro_custo ||
+        "Sem centro de custo"
+
+      if (!resumoPorCentroCusto[centro]) {
+        resumoPorCentroCusto[centro] = {
+          centroCusto: centro,
+          receitas: 0,
+          despesas: 0,
+          resultado: 0,
+          lancamentos: 0,
+        }
+      }
+
+      if (item.tipo === "Receber") {
+        resumoPorCentroCusto[centro].receitas +=
+          valorNumerico(item.valor)
+      }
+
+      if (item.tipo === "Pagar") {
+        resumoPorCentroCusto[centro].despesas +=
+          valorNumerico(item.valor)
+      }
+
+      resumoPorCentroCusto[centro].resultado =
+        resumoPorCentroCusto[centro].receitas -
+        resumoPorCentroCusto[centro].despesas
+
+      resumoPorCentroCusto[centro].lancamentos += 1
     })
 
     const obrigacoesPendentes = obrigacoes.filter(
@@ -136,15 +223,37 @@ app.get("/dashboard", async (req, res) => {
       (item) => item.status === "Atrasado"
     )
 
+    const topClientes = Object.values(resumoPorCliente)
+      .sort((a, b) => b.receitas - a.receitas)
+      .slice(0, 5)
+
+    const topCentrosCusto = Object.values(
+      resumoPorCentroCusto
+    )
+      .sort((a, b) => b.receitas - a.receitas)
+      .slice(0, 5)
+
     res.json({
       totalClientes,
+
+      recebido,
       totalReceber,
       totalPagar,
-      saldo: totalReceber - totalPagar,
+      inadimplentes: inadimplentes.length,
+      saldoPrevisto: recebido + totalReceber - totalPagar,
+      saldoRealizado: recebido - totalPagar,
+
+      saldo: recebido + totalReceber - totalPagar,
+
       obrigacoesPendentes: obrigacoesPendentes.length,
       obrigacoesAtrasadas: obrigacoesAtrasadas.length,
       ultimasObrigacoes: obrigacoesPendentes.slice(0, 10),
+
       resumoPorCliente: Object.values(resumoPorCliente),
+      resumoPorCentroCusto: Object.values(resumoPorCentroCusto),
+
+      topClientes,
+      topCentrosCusto,
     })
   } catch (error) {
     console.error("ERRO NO DASHBOARD:", error)
@@ -154,7 +263,6 @@ app.get("/dashboard", async (req, res) => {
     })
   }
 })
-
   app.get("/", (req, res) => {
   res.json({
     message: "API Nexa ERP funcionando 🚀",

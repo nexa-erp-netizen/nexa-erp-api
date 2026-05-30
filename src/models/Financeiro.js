@@ -17,6 +17,16 @@ const Financeiro = sequelize.define("Financeiro", {
     allowNull: false,
   },
 
+  centroCusto: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  formaPagamento: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
   valor: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -30,6 +40,11 @@ const Financeiro = sequelize.define("Financeiro", {
   status: {
     type: DataTypes.STRING,
     allowNull: false,
+  },
+
+  dataRecebimento: {
+    type: DataTypes.STRING,
+    allowNull: true,
   },
 
   anexos: {
