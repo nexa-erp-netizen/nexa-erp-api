@@ -13,29 +13,25 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      if (req.usuario.clienteVinculado) {
-        where.cliente = req.usuario.clienteVinculado
-      } else {
+      if (!req.usuario.clienteVinculado) {
         return res.json([])
       }
+
+      where.cliente = req.usuario.clienteVinculado
     }
 
     if (req.usuario.empresaId) {
       where.empresaId = req.usuario.empresaId
     }
 
-    const documentos =
-      await DocumentoDigital.findAll({
-        where,
-        order: [["createdAt", "DESC"]],
-      })
+    const documentos = await DocumentoDigital.findAll({
+      where,
+      order: [["createdAt", "DESC"]],
+    })
 
     res.json(documentos)
   } catch (error) {
-    console.error(
-      "ERRO AO LISTAR DOCUMENTOS:",
-      error
-    )
+    console.error("ERRO AO LISTAR DOCUMENTOS:", error)
 
     res.status(500).json({
       message: "Erro ao listar documentos",
@@ -45,14 +41,26 @@ router.get("/", autenticar, async (req, res) => {
 
 router.post("/", autenticar, async (req, res) => {
   try {
-    const novoDocumento =
-      await DocumentoDigital.create({
-        ...req.body,
-        empresaId:
-          req.usuario?.empresaId ||
-          req.body.empresaId ||
-          null,
-      })
+    let clienteFinal = req.body.cliente
+
+    if (req.usuario.perfil === "Cliente") {
+      if (!req.usuario.clienteVinculado) {
+        return res.status(403).json({
+          message: "Cliente não vinculado ao usuário",
+        })
+      }
+
+      clienteFinal = req.usuario.clienteVinculado
+    }
+
+    const novoDocumento = await DocumentoDigital.create({
+      ...req.body,
+      cliente: clienteFinal,
+      empresaId:
+        req.usuario?.empresaId ||
+        req.body.empresaId ||
+        null,
+    })
 
     res.status(201).json(novoDocumento)
   } catch (error) {
@@ -68,8 +76,7 @@ router.put("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
-    const documento =
-      await DocumentoDigital.findByPk(id)
+    const documento = await DocumentoDigital.findByPk(id)
 
     if (!documento) {
       return res.status(404).json({
@@ -77,14 +84,20 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    if (
+      req.usuario.perfil === "Cliente" &&
+      documento.cliente !== req.usuario.clienteVinculado
+    ) {
+      return res.status(403).json({
+        message: "Acesso não autorizado",
+      })
+    }
+
     await documento.update(req.body)
 
     res.json(documento)
   } catch (error) {
-    console.error(
-      "ERRO AO ATUALIZAR DOCUMENTO:",
-      error
-    )
+    console.error("ERRO AO ATUALIZAR DOCUMENTO:", error)
 
     res.status(500).json({
       message: "Erro ao atualizar documento",
@@ -94,10 +107,15 @@ router.put("/:id", autenticar, async (req, res) => {
 
 router.delete("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({
+        message: "Cliente não pode excluir documentos",
+      })
+    }
+
     const { id } = req.params
 
-    const documento =
-      await DocumentoDigital.findByPk(id)
+    const documento = await DocumentoDigital.findByPk(id)
 
     if (!documento) {
       return res.status(404).json({
@@ -111,10 +129,7 @@ router.delete("/:id", autenticar, async (req, res) => {
       message: "Documento excluído com sucesso",
     })
   } catch (error) {
-    console.error(
-      "ERRO AO EXCLUIR DOCUMENTO:",
-      error
-    )
+    console.error("ERRO AO EXCLUIR DOCUMENTO:", error)
 
     res.status(500).json({
       message: "Erro ao excluir documento",
@@ -135,10 +150,7 @@ router.post(
 
       res.json(arquivos)
     } catch (error) {
-      console.error(
-        "ERRO NO UPLOAD DE DOCUMENTO:",
-        error
-      )
+      console.error("ERRO NO UPLOAD DE DOCUMENTO:", error)
 
       res.status(500).json({
         message: "Erro ao fazer upload de documento",

@@ -1,6 +1,5 @@
 const express = require("express")
 const Cliente = require("../models/Cliente")
-const filtroEmpresa = require("../utils/empresaFiltro")
 
 const {
   autenticar,
@@ -11,6 +10,14 @@ const router = express.Router()
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
+
+    if (req.usuario.perfil === "Cliente") {
+      if (!req.usuario.clienteVinculado) {
+        return res.json([])
+      }
+
+      where.nome = req.usuario.clienteVinculado
+    }
 
     if (req.usuario.empresaId) {
       where.empresaId = req.usuario.empresaId
@@ -23,14 +30,22 @@ router.get("/", autenticar, async (req, res) => {
 
     res.json(clientes)
   } catch (error) {
+    console.error("ERRO AO LISTAR CLIENTES:", error)
+
     res.status(500).json({
       message: "Erro ao listar clientes",
-      error,
     })
   }
 })
+
 router.post("/", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({
+        message: "Cliente não pode cadastrar clientes",
+      })
+    }
+
     const novoCliente = await Cliente.create({
       ...req.body,
       empresaId:
@@ -41,15 +56,22 @@ router.post("/", autenticar, async (req, res) => {
 
     res.status(201).json(novoCliente)
   } catch (error) {
+    console.error("ERRO AO CRIAR CLIENTE:", error)
+
     res.status(500).json({
       message: "Erro ao criar cliente",
-      error,
     })
   }
 })
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({
+        message: "Cliente não pode editar cadastro",
+      })
+    }
+
     const { id } = req.params
 
     const cliente = await Cliente.findByPk(id)
@@ -64,15 +86,22 @@ router.put("/:id", async (req, res) => {
 
     res.json(cliente)
   } catch (error) {
+    console.error("ERRO AO ATUALIZAR CLIENTE:", error)
+
     res.status(500).json({
       message: "Erro ao atualizar cliente",
-      error,
     })
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({
+        message: "Cliente não pode excluir cadastro",
+      })
+    }
+
     const { id } = req.params
 
     const cliente = await Cliente.findByPk(id)
@@ -89,9 +118,10 @@ router.delete("/:id", async (req, res) => {
       message: "Cliente excluído com sucesso",
     })
   } catch (error) {
+    console.error("ERRO AO EXCLUIR CLIENTE:", error)
+
     res.status(500).json({
       message: "Erro ao excluir cliente",
-      error,
     })
   }
 })
