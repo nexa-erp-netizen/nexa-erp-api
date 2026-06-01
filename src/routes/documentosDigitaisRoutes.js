@@ -136,10 +136,40 @@ router.post(
   upload.array("arquivos"),
   async (req, res) => {
     try {
-      const arquivos = req.files.map((file) => ({
-        nome: file.originalname,
-        caminho: `/uploads/${file.filename}`,
-      }))
+      const arquivos = []
+
+      for (const file of req.files) {
+        const fileBuffer = fs.readFileSync(file.path)
+
+        const nomeArquivo = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`
+        const caminhoSupabase = `documentos/${nomeArquivo}`
+
+        const { error } = await supabase.storage
+          .from("nexa-anexos")
+          .upload(caminhoSupabase, fileBuffer, {
+            contentType: file.mimetype,
+            upsert: false,
+          })
+
+        if (error) {
+          console.error("ERRO SUPABASE:", error)
+
+          return res.status(500).json({
+            message: "Erro ao enviar anexo para o Supabase",
+          })
+        }
+
+        const { data } = supabase.storage
+          .from("nexa-anexos")
+          .getPublicUrl(caminhoSupabase)
+
+        fs.unlinkSync(file.path)
+
+        arquivos.push({
+          nome: file.originalname,
+          caminho: data.publicUrl,
+        })
+      }
 
       res.json(arquivos)
     } catch (error) {
