@@ -20,10 +20,7 @@ router.get("/", autenticar, async (req, res) => {
       where.cliente = req.usuario.clienteVinculado
     }
 
-    if (req.usuario.empresaId) {
-      where.empresaId = req.usuario.empresaId
-    }
-
+    
     const documentos = await DocumentoDigital.findAll({
       where,
       order: [["createdAt", "DESC"]],
@@ -56,10 +53,6 @@ router.post("/", autenticar, async (req, res) => {
     const novoDocumento = await DocumentoDigital.create({
       ...req.body,
       cliente: clienteFinal,
-      empresaId:
-        req.usuario?.empresaId ||
-        req.body.empresaId ||
-        null,
     })
 
     res.status(201).json(novoDocumento)
