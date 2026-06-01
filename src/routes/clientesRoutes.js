@@ -19,10 +19,6 @@ router.get("/", autenticar, async (req, res) => {
       where.nome = req.usuario.clienteVinculado
     }
 
-    if (req.usuario.empresaId) {
-      where.empresaId = req.usuario.empresaId
-    }
-
     const clientes = await Cliente.findAll({
       where,
       order: [["createdAt", "DESC"]],
@@ -46,13 +42,7 @@ router.post("/", autenticar, async (req, res) => {
       })
     }
 
-    const novoCliente = await Cliente.create({
-      ...req.body,
-      empresaId:
-        req.usuario?.empresaId ||
-        req.body.empresaId ||
-        null,
-    })
+    const novoCliente = await Cliente.create(req.body)
 
     res.status(201).json(novoCliente)
   } catch (error) {
