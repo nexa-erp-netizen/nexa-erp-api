@@ -52,10 +52,6 @@ router.get("/", autenticar, async (req, res) => {
       }
     }
 
-    if (req.usuario.empresaId) {
-      where.empresaId = req.usuario.empresaId
-    }
-
     const obrigacoes = await Fiscal.findAll({
       where,
       order: [["createdAt", "DESC"]],
