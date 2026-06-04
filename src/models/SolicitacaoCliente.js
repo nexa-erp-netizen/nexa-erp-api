@@ -38,6 +38,12 @@ const SolicitacaoCliente = sequelize.define("SolicitacaoCliente", {
     allowNull: true,
   },
 
+  situacaoCliente: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: "Aguardando Pagamento",
+  },
+
   anexoResposta: {
     type: DataTypes.JSON,
     allowNull: true,
