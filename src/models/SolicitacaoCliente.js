@@ -25,11 +25,26 @@ const SolicitacaoCliente = sequelize.define("SolicitacaoCliente", {
   status: {
     type: DataTypes.STRING,
     allowNull: false,
-    defaultValue: "Aberta",
+    defaultValue: "Pendente",
   },
 
   anexos: {
     type: DataTypes.JSON,
+    allowNull: true,
+  },
+
+  respostaCliente: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+
+  anexoResposta: {
+    type: DataTypes.JSON,
+    allowNull: true,
+  },
+
+  dataResposta: {
+    type: DataTypes.DATE,
     allowNull: true,
   },
 

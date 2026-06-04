@@ -65,7 +65,7 @@ router.post("/", autenticar, async (req, res) => {
     })
   }
 })
-router.put("/:id", async (req, res) => {
+router.put("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
@@ -95,7 +95,7 @@ router.put("/:id", async (req, res) => {
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
 
@@ -130,6 +130,7 @@ router.delete("/:id", async (req, res) => {
 
 router.post(
   "/upload",
+  autenticar,
   upload.array("arquivos"),
   async (req, res) => {
     try {
