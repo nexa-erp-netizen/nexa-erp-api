@@ -58,6 +58,13 @@ const SolicitacaoCliente = sequelize.define("SolicitacaoCliente", {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+
+  novaInteracao: {
+  type: DataTypes.BOOLEAN,
+  allowNull: false,
+  defaultValue: false,
+ },
+
 })
 
 module.exports = SolicitacaoCliente
