@@ -1,12 +1,17 @@
 const express = require("express")
+const fs = require("fs")
 const upload = require("../middlewares/upload")
+const supabase = require("../config/supabase")
 const DocumentoDigital = require("../models/DocumentoDigital")
+const Notificacao = require("../models/Notificacao")
 
 const router = express.Router()
 
 const {
   autenticar,
 } = require("../middlewares/authMiddleware")
+
+console.log("DOCUMENTOS ROUTE V2")
 
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -54,6 +59,17 @@ router.post("/", autenticar, async (req, res) => {
       ...req.body,
       cliente: clienteFinal,
     })
+
+    if (req.usuario.perfil === "Cliente") {
+  await Notificacao.create({
+    empresaId: req.usuario.empresaId,
+    clienteId: null,
+    usuarioId: req.usuario.id,
+    titulo: "Documento enviado",
+    tipo: "documento_enviado",
+    mensagem: `Cliente ${clienteFinal} enviou um documento digital.`,
+  })
+}
 
     res.status(201).json(novoDocumento)
   } catch (error) {
