@@ -1,6 +1,7 @@
 const express = require("express")
 const upload = require("../middlewares/upload")
 const Fiscal = require("../models/Fiscal")
+const supabase = require("../config/supabase")
 
 const router = express.Router()
 
@@ -179,12 +180,46 @@ router.post(
   upload.array("arquivos"),
   async (req, res) => {
     try {
-      const arquivos = req.files.map(
-        (file) => ({
+      const bucket =
+        process.env.SUPABASE_BUCKET ||
+        "nexa-uploads"
+
+      const arquivos = []
+
+      for (const file of req.files) {
+        const nomeLimpo =
+          file.originalname.replace(/\s+/g, "-")
+
+        const caminhoArquivo =
+          `fiscal/${Date.now()}-${nomeLimpo}`
+
+        const { error } =
+          await supabase.storage
+            .from(bucket)
+            .upload(
+              caminhoArquivo,
+              file.buffer,
+              {
+                contentType: file.mimetype,
+                upsert: false,
+              }
+            )
+
+        if (error) {
+          throw error
+        }
+
+        const { data } =
+          supabase.storage
+            .from(bucket)
+            .getPublicUrl(caminhoArquivo)
+
+        arquivos.push({
           nome: file.originalname,
-          caminho: `/uploads/${file.filename}`,
+          caminho: data.publicUrl,
+          url: data.publicUrl,
         })
-      )
+      }
 
       res.json(arquivos)
     } catch (error) {

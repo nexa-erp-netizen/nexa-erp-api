@@ -48,6 +48,12 @@ app.use(
   )
 )
 
+app.use(
+  "/uploads",
+  express.static(
+    path.resolve(__dirname, "src", "uploads")
+  )
+)
 app.use("/clientes", clientesRoutes)
 app.use("/fiscal", fiscalRoutes)
 app.use("/financeiro", financeiroRoutes)
