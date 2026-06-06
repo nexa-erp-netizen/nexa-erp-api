@@ -4,6 +4,10 @@ const router = express.Router()
 const Notificacao = require("../models/Notificacao")
 const { autenticar } = require("../middlewares/authMiddleware")
 
+router.get("/ping", (req, res) => {
+  res.json({ ok: true, rota: "notificacoes funcionando" })
+})
+
 function somenteEquipe(req, res, next) {
   if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
     return res.status(403).json({ erro: "Acesso negado" })
