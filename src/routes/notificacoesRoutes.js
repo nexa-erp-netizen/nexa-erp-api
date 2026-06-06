@@ -30,22 +30,6 @@ router.get("/", autenticar, somenteEquipe, async (req, res) => {
   }
 })
 
-router.get("/teste", async (req, res) => {
-  try {
-    const notificacao = await Notificacao.create({
-      empresaId: 1,
-      titulo: "Teste de Notificação",
-      tipo: "teste",
-      mensagem: "Notificação criada com sucesso"
-    })
-
-    res.json(notificacao)
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ erro: error.message })
-  }
-})
-
 router.get("/contador", autenticar, somenteEquipe, async (req, res) => {
   try {
     const total = await Notificacao.count({
