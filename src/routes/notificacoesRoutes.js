@@ -4,10 +4,6 @@ const router = express.Router()
 const Notificacao = require("../models/Notificacao")
 const { autenticar } = require("../middlewares/authMiddleware")
 
-router.get("/ping", (req, res) => {
-  res.json({ ok: true, rota: "notificacoes funcionando" })
-})
-
 function somenteEquipe(req, res, next) {
   if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
     return res.status(403).json({ erro: "Acesso negado" })
@@ -16,9 +12,17 @@ function somenteEquipe(req, res, next) {
   next()
 }
 
+router.get("/ping", (req, res) => {
+  res.json({ ok: true, rota: "notificacoes funcionando" })
+})
+
 router.get("/", autenticar, somenteEquipe, async (req, res) => {
   try {
-    const notificacoes = await Notificacao.listar(req.usuario.empresaId)
+    const notificacoes = await Notificacao.findAll({
+      where: { empresaId: req.usuario.empresaId },
+      order: [["criado_em", "DESC"]],
+    })
+
     res.json(notificacoes)
   } catch (error) {
     console.error("Erro ao listar notificações:", error)
@@ -26,9 +30,31 @@ router.get("/", autenticar, somenteEquipe, async (req, res) => {
   }
 })
 
+router.get("/teste", async (req, res) => {
+  try {
+    const notificacao = await Notificacao.create({
+      empresaId: 1,
+      titulo: "Teste de Notificação",
+      tipo: "teste",
+      mensagem: "Notificação criada com sucesso"
+    })
+
+    res.json(notificacao)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: error.message })
+  }
+})
+
 router.get("/contador", autenticar, somenteEquipe, async (req, res) => {
   try {
-    const total = await Notificacao.contarNaoLidas(req.usuario.empresaId)
+    const total = await Notificacao.count({
+      where: {
+        empresaId: req.usuario.empresaId,
+        lida: false,
+      },
+    })
+
     res.json({ total })
   } catch (error) {
     console.error("Erro ao contar notificações:", error)
@@ -38,12 +64,17 @@ router.get("/contador", autenticar, somenteEquipe, async (req, res) => {
 
 router.patch("/:id/lida", autenticar, somenteEquipe, async (req, res) => {
   try {
-    const notificacao = await Notificacao.marcarComoLida(
-      req.params.id,
-      req.usuario.empresaId
+    const [atualizadas] = await Notificacao.update(
+      { lida: true },
+      {
+        where: {
+          id: req.params.id,
+          empresaId: req.usuario.empresaId,
+        },
+      }
     )
 
-    res.json(notificacao)
+    res.json({ sucesso: atualizadas > 0 })
   } catch (error) {
     console.error("Erro ao marcar notificação como lida:", error)
     res.status(500).json({ erro: "Erro ao marcar notificação como lida" })
@@ -52,7 +83,16 @@ router.patch("/:id/lida", autenticar, somenteEquipe, async (req, res) => {
 
 router.patch("/marcar-todas/lidas", autenticar, somenteEquipe, async (req, res) => {
   try {
-    await Notificacao.marcarTodasComoLidas(req.usuario.empresaId)
+    await Notificacao.update(
+      { lida: true },
+      {
+        where: {
+          empresaId: req.usuario.empresaId,
+          lida: false,
+        },
+      }
+    )
+
     res.json({ mensagem: "Todas as notificações foram marcadas como lidas" })
   } catch (error) {
     console.error("Erro ao marcar todas como lidas:", error)
