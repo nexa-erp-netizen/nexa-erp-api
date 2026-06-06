@@ -155,7 +155,7 @@ router.post(
       const arquivos = []
 
       for (const file of req.files) {
-        const fileBuffer = fs.readFileSync(file.path)
+        const fileBuffer = file.buffer || fs.readFileSync(file.path)
 
         const nomeArquivo = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`
         const caminhoSupabase = `documentos/${nomeArquivo}`
@@ -170,6 +170,10 @@ router.post(
         if (error) {
           console.error("ERRO SUPABASE:", error)
 
+        if (file.path) {
+          fs.unlinkSync(file.path)
+        }
+
           return res.status(500).json({
             message: "Erro ao enviar anexo para o Supabase",
           })
@@ -178,8 +182,6 @@ router.post(
         const { data } = supabase.storage
           .from("nexa-anexos")
           .getPublicUrl(caminhoSupabase)
-
-        fs.unlinkSync(file.path)
 
         arquivos.push({
           nome: file.originalname,
