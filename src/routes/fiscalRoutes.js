@@ -41,6 +41,22 @@ function calcularAlertaFiscal(vencimento, status) {
   }
 }
 
+function extrairPathSupabase(valor) {
+  if (!valor) return ""
+
+  if (!valor.startsWith("http")) {
+    return valor
+  }
+
+  const marcador = "/storage/v1/object/public/nexa-uploads/"
+
+  if (valor.includes(marcador)) {
+    return valor.split(marcador)[1]
+  }
+
+  return valor
+}
+
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
@@ -67,6 +83,44 @@ router.get("/", autenticar, async (req, res) => {
 
     res.status(500).json({
       message: "Erro ao listar obrigações",
+    })
+  }
+})
+
+router.get("/anexo-url", autenticar, async (req, res) => {
+  try {
+    const bucket =
+      process.env.SUPABASE_BUCKET ||
+      "nexa-uploads"
+
+    const path = extrairPathSupabase(req.query.path)
+
+    if (!path) {
+      return res.status(400).json({
+        message: "Caminho do anexo não informado.",
+      })
+    }
+
+    const { data, error } =
+      await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, 60 * 5)
+
+    if (error) {
+      throw error
+    }
+
+    res.json({
+      url: data.signedUrl,
+    })
+  } catch (error) {
+    console.error(
+      "ERRO AO GERAR URL ASSINADA:",
+      error
+    )
+
+    res.status(500).json({
+      message: "Erro ao gerar URL do anexo.",
     })
   }
 })
@@ -209,15 +263,10 @@ router.post(
           throw error
         }
 
-        const { data } =
-          supabase.storage
-            .from(bucket)
-            .getPublicUrl(caminhoArquivo)
-
         arquivos.push({
           nome: file.originalname,
-          caminho: data.publicUrl,
-          url: data.publicUrl,
+          caminho: caminhoArquivo,
+          url: caminhoArquivo,
         })
       }
 
