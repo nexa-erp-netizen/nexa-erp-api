@@ -7,6 +7,12 @@ const DocumentoDigital = sequelize.define("DocumentoDigital", {
     allowNull: false,
   },
 
+  origem: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    defaultValue: "Cliente → Escritório",
+  },
+
   tipo: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -30,7 +36,7 @@ const DocumentoDigital = sequelize.define("DocumentoDigital", {
   status: {
     type: DataTypes.STRING,
     allowNull: false,
-    defaultValue: "Arquivado",
+    defaultValue: "Entregue pelo cliente",
   },
 
   observacao: {
