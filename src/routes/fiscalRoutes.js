@@ -228,20 +228,16 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
       alertaFiscal: "Regularizado",
     })
 
-    try {
-      await Notificacao.update(
-        { lida: true },
-        {
-          where: {
-            tipo: "fiscal_pago_cliente",
-            lida: false,
-            empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
-          },
-        }
-      )
-    } catch (erroNotificacao) {
-      console.error("ERRO AO ATUALIZAR NOTIFICAÇÕES:", erroNotificacao)
-    }
+    await Notificacao.update(
+  { lida: true },
+  {
+    where: {
+      tipo: "fiscal_pago_cliente",
+      lida: false,
+      empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+    },
+  }
+)
 
     res.json({
       message: "Obrigação concluída e lançamento contábil criado com sucesso",
