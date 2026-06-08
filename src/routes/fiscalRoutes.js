@@ -1,6 +1,7 @@
 const express = require("express")
 const upload = require("../middlewares/upload")
 const Fiscal = require("../models/Fiscal")
+const Notificacao = require("../models/Notificacao")
 const supabase = require("../config/supabase")
 
 const router = express.Router()
@@ -152,6 +153,64 @@ router.post("/", autenticar, async (req, res) => {
 
     res.status(500).json({
       message: "Erro ao criar obrigação",
+    })
+  }
+})
+
+router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Cliente") {
+      return res.status(403).json({
+        message: "Apenas cliente pode marcar como pago",
+      })
+    }
+
+    const { id } = req.params
+
+    const obrigacao = await Fiscal.findByPk(id)
+
+    if (!obrigacao) {
+      return res.status(404).json({
+        message: "Obrigação não encontrada",
+      })
+    }
+
+    if (obrigacao.cliente !== req.usuario.clienteVinculado) {
+      return res.status(403).json({
+        message: "Acesso não autorizado",
+      })
+    }
+
+    const alerta = calcularAlertaFiscal(
+      obrigacao.vencimento,
+      "Pago pelo cliente"
+    )
+
+    await obrigacao.update({
+      status: "Pago pelo cliente",
+      diasParaVencer: alerta.diasParaVencer,
+      alertaFiscal: alerta.alertaFiscal,
+    })
+
+    try {
+      await Notificacao.create({
+        empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+        clienteId: null,
+        usuarioId: req.usuario.id,
+        titulo: "Obrigação marcada como paga",
+        tipo: "fiscal_pago_cliente",
+        mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.descricao || obrigacao.tipo || "uma obrigação fiscal"} como paga.`,
+      })
+    } catch (erroNotificacao) {
+      console.error("ERRO AO CRIAR NOTIFICAÇÃO FISCAL:", erroNotificacao)
+    }
+
+    res.json(obrigacao)
+  } catch (error) {
+    console.error("ERRO AO MARCAR FISCAL COMO PAGO PELO CLIENTE:", error)
+
+    res.status(500).json({
+      message: "Erro ao marcar obrigação como paga",
     })
   }
 })
