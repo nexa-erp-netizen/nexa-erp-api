@@ -2,13 +2,12 @@ const express = require("express")
 const upload = require("../middlewares/upload")
 const Fiscal = require("../models/Fiscal")
 const Notificacao = require("../models/Notificacao")
+const LancamentoContabil = require("../models/LancamentoContabil")
 const supabase = require("../config/supabase")
 
 const router = express.Router()
 
-const {
-  autenticar,
-} = require("../middlewares/authMiddleware")
+const { autenticar } = require("../middlewares/authMiddleware")
 
 function calcularAlertaFiscal(vencimento, status) {
   const hoje = new Date()
@@ -17,16 +16,17 @@ function calcularAlertaFiscal(vencimento, status) {
   hoje.setHours(0, 0, 0, 0)
   dataVencimento.setHours(0, 0, 0, 0)
 
-  const diferencaMs =
-    dataVencimento.getTime() - hoje.getTime()
-
-  const diasParaVencer = Math.ceil(
-    diferencaMs / (1000 * 60 * 60 * 24)
-  )
+  const diferencaMs = dataVencimento.getTime() - hoje.getTime()
+  const diasParaVencer = Math.ceil(diferencaMs / (1000 * 60 * 60 * 24))
 
   let alertaFiscal = "Em dia"
 
-  if (status === "Pago" || status === "Enviado") {
+  if (
+    status === "Pago" ||
+    status === "Enviado" ||
+    status === "Pago pelo cliente" ||
+    status === "Concluído"
+  ) {
     alertaFiscal = "Regularizado"
   } else if (diasParaVencer < 0) {
     alertaFiscal = "Vencido"
@@ -77,10 +77,7 @@ router.get("/", autenticar, async (req, res) => {
 
     res.json(obrigacoes)
   } catch (error) {
-    console.error(
-      "ERRO AO LISTAR OBRIGAÇÕES:",
-      error
-    )
+    console.error("ERRO AO LISTAR OBRIGAÇÕES:", error)
 
     res.status(500).json({
       message: "Erro ao listar obrigações",
@@ -90,10 +87,7 @@ router.get("/", autenticar, async (req, res) => {
 
 router.get("/anexo-url", autenticar, async (req, res) => {
   try {
-    const bucket =
-      process.env.SUPABASE_BUCKET ||
-      "nexa-uploads"
-
+    const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
     const path = extrairPathSupabase(req.query.path)
 
     if (!path) {
@@ -102,10 +96,9 @@ router.get("/anexo-url", autenticar, async (req, res) => {
       })
     }
 
-    const { data, error } =
-      await supabase.storage
-        .from(bucket)
-        .createSignedUrl(path, 60 * 5)
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(path, 60 * 5)
 
     if (error) {
       throw error
@@ -115,10 +108,7 @@ router.get("/anexo-url", autenticar, async (req, res) => {
       url: data.signedUrl,
     })
   } catch (error) {
-    console.error(
-      "ERRO AO GERAR URL ASSINADA:",
-      error
-    )
+    console.error("ERRO AO GERAR URL ASSINADA:", error)
 
     res.status(500).json({
       message: "Erro ao gerar URL do anexo.",
@@ -128,28 +118,18 @@ router.get("/anexo-url", autenticar, async (req, res) => {
 
 router.post("/", autenticar, async (req, res) => {
   try {
-    const alerta = calcularAlertaFiscal(
-      req.body.vencimento,
-      req.body.status
-    )
+    const alerta = calcularAlertaFiscal(req.body.vencimento, req.body.status)
 
-    const novaObrigacao =
-      await Fiscal.create({
-        ...req.body,
-        diasParaVencer: alerta.diasParaVencer,
-        alertaFiscal: alerta.alertaFiscal,
-        empresaId:
-          req.usuario?.empresaId ||
-          req.body.empresaId ||
-          null,
-      })
+    const novaObrigacao = await Fiscal.create({
+      ...req.body,
+      diasParaVencer: alerta.diasParaVencer,
+      alertaFiscal: alerta.alertaFiscal,
+      empresaId: req.usuario?.empresaId || req.body.empresaId || null,
+    })
 
     res.status(201).json(novaObrigacao)
   } catch (error) {
-    console.error(
-      "ERRO AO CRIAR OBRIGAÇÃO:",
-      error
-    )
+    console.error("ERRO AO CRIAR OBRIGAÇÃO:", error)
 
     res.status(500).json({
       message: "Erro ao criar obrigação",
@@ -165,9 +145,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       })
     }
 
-    const { id } = req.params
-
-    const obrigacao = await Fiscal.findByPk(id)
+    const obrigacao = await Fiscal.findByPk(req.params.id)
 
     if (!obrigacao) {
       return res.status(404).json({
@@ -199,7 +177,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
         usuarioId: req.usuario.id,
         titulo: "Obrigação marcada como paga",
         tipo: "fiscal_pago_cliente",
-        mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.descricao || obrigacao.tipo || "uma obrigação fiscal"} como paga.`,
+        mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.obrigacao || "uma obrigação fiscal"} como paga.`,
       })
     } catch (erroNotificacao) {
       console.error("ERRO AO CRIAR NOTIFICAÇÃO FISCAL:", erroNotificacao)
@@ -215,24 +193,82 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
   }
 })
 
-router.put("/:id", autenticar, async (req, res) => {
+router.patch("/:id/concluir", autenticar, async (req, res) => {
   try {
-    const { id } = req.params
-
-    const obrigacao =
-      await Fiscal.findByPk(id)
-
-    if (!obrigacao) {
-      return res.status(404).json({
-        message:
-          "Obrigação não encontrada",
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({
+        message: "Cliente não pode concluir obrigação",
       })
     }
 
-    const alerta = calcularAlertaFiscal(
-      req.body.vencimento,
-      req.body.status
-    )
+    const obrigacao = await Fiscal.findByPk(req.params.id)
+
+    if (!obrigacao) {
+      return res.status(404).json({
+        message: "Obrigação não encontrada",
+      })
+    }
+
+    await LancamentoContabil.create({
+      cliente: obrigacao.cliente,
+      data: new Date().toISOString().slice(0, 10),
+      competencia: obrigacao.competencia || "00/0000",
+      tipo: "Despesa",
+      planoConta: "Fiscal",
+      descricao: `${obrigacao.obrigacao || "Obrigação fiscal"} - ${obrigacao.competencia || ""}`,
+      valor: obrigacao.valor || "0",
+      formaPagamento: "",
+      observacao: obrigacao.observacao || "Gerado automaticamente ao concluir obrigação fiscal.",
+      anexos: obrigacao.anexos || [],
+      empresaId: obrigacao.empresaId || req.usuario.empresaId || null,
+    })
+
+    await obrigacao.update({
+      status: "Concluído",
+      alertaFiscal: "Regularizado",
+    })
+
+    try {
+      await Notificacao.update(
+        { lida: true },
+        {
+          where: {
+            tipo: "fiscal_pago_cliente",
+            lida: false,
+            empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+          },
+        }
+      )
+    } catch (erroNotificacao) {
+      console.error("ERRO AO ATUALIZAR NOTIFICAÇÕES:", erroNotificacao)
+    }
+
+    res.json({
+      message: "Obrigação concluída e lançamento contábil criado com sucesso",
+      obrigacao,
+    })
+  } catch (error) {
+    console.error("ERRO AO CONCLUIR OBRIGAÇÃO:", error)
+
+    res.status(500).json({
+      message: "Erro ao concluir obrigação",
+      erro: error.message,
+    })
+  }
+})
+
+router.put("/:id", autenticar, async (req, res) => {
+  try {
+    const { id } = req.params
+    const obrigacao = await Fiscal.findByPk(id)
+
+    if (!obrigacao) {
+      return res.status(404).json({
+        message: "Obrigação não encontrada",
+      })
+    }
+
+    const alerta = calcularAlertaFiscal(req.body.vencimento, req.body.status)
 
     await obrigacao.update({
       ...req.body,
@@ -242,14 +278,10 @@ router.put("/:id", autenticar, async (req, res) => {
 
     res.json(obrigacao)
   } catch (error) {
-    console.error(
-      "ERRO AO ATUALIZAR OBRIGAÇÃO:",
-      error
-    )
+    console.error("ERRO AO ATUALIZAR OBRIGAÇÃO:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao atualizar obrigação",
+      message: "Erro ao atualizar obrigação",
     })
   }
 })
@@ -257,32 +289,24 @@ router.put("/:id", autenticar, async (req, res) => {
 router.delete("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
-
-    const obrigacao =
-      await Fiscal.findByPk(id)
+    const obrigacao = await Fiscal.findByPk(id)
 
     if (!obrigacao) {
       return res.status(404).json({
-        message:
-          "Obrigação não encontrada",
+        message: "Obrigação não encontrada",
       })
     }
 
     await obrigacao.destroy()
 
     res.json({
-      message:
-        "Obrigação excluída com sucesso",
+      message: "Obrigação excluída com sucesso",
     })
   } catch (error) {
-    console.error(
-      "ERRO AO EXCLUIR OBRIGAÇÃO:",
-      error
-    )
+    console.error("ERRO AO EXCLUIR OBRIGAÇÃO:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao excluir obrigação",
+      message: "Erro ao excluir obrigação",
     })
   }
 })
@@ -293,30 +317,19 @@ router.post(
   upload.array("arquivos"),
   async (req, res) => {
     try {
-      const bucket =
-        process.env.SUPABASE_BUCKET ||
-        "nexa-uploads"
-
+      const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
       const arquivos = []
 
       for (const file of req.files) {
-        const nomeLimpo =
-          file.originalname.replace(/\s+/g, "-")
+        const nomeLimpo = file.originalname.replace(/\s+/g, "-")
+        const caminhoArquivo = `fiscal/${Date.now()}-${nomeLimpo}`
 
-        const caminhoArquivo =
-          `fiscal/${Date.now()}-${nomeLimpo}`
-
-        const { error } =
-          await supabase.storage
-            .from(bucket)
-            .upload(
-              caminhoArquivo,
-              file.buffer,
-              {
-                contentType: file.mimetype,
-                upsert: false,
-              }
-            )
+        const { error } = await supabase.storage
+          .from(bucket)
+          .upload(caminhoArquivo, file.buffer, {
+            contentType: file.mimetype,
+            upsert: false,
+          })
 
         if (error) {
           throw error
@@ -331,14 +344,10 @@ router.post(
 
       res.json(arquivos)
     } catch (error) {
-      console.error(
-        "ERRO NO UPLOAD FISCAL:",
-        error
-      )
+      console.error("ERRO NO UPLOAD FISCAL:", error)
 
       res.status(500).json({
-        message:
-          "Erro ao fazer upload fiscal",
+        message: "Erro ao fazer upload fiscal",
       })
     }
   }
