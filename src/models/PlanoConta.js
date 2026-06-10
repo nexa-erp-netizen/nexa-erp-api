@@ -21,6 +21,12 @@ const PlanoConta = sequelize.define("PlanoConta", {
     type: DataTypes.STRING,
     allowNull: false,
   },
+
+  formas: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: [],
+  },
 })
 
 module.exports = PlanoConta
