@@ -1,11 +1,30 @@
 const express = require("express")
+const fs = require("fs")
 const Cliente = require("../models/Cliente")
+const upload = require("../middlewares/upload")
+const supabase = require("../config/supabase")
 
 const {
   autenticar,
 } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
+
+function extrairPathSupabase(valor) {
+  if (!valor) return ""
+
+  if (!valor.startsWith("http")) {
+    return valor
+  }
+
+  const marcador = "/storage/v1/object/public/nexa-uploads/"
+
+  if (valor.includes(marcador)) {
+    return valor.split(marcador)[1]
+  }
+
+  return valor
+}
 
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -33,6 +52,104 @@ router.get("/", autenticar, async (req, res) => {
     })
   }
 })
+
+router.get("/anexo-url", autenticar, async (req, res) => {
+  try {
+    const bucket =
+      process.env.SUPABASE_BUCKET ||
+      "nexa-uploads"
+
+    const path = extrairPathSupabase(req.query.path)
+
+    if (!path) {
+      return res.status(400).json({
+        message: "Caminho do anexo não informado.",
+      })
+    }
+
+    const { data, error } =
+      await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, 60 * 5)
+
+    if (error) {
+      throw error
+    }
+
+    res.json({
+      url: data.signedUrl,
+    })
+  } catch (error) {
+    console.error("ERRO AO GERAR URL DO ANEXO DO CLIENTE:", error)
+
+    res.status(500).json({
+      message: "Erro ao gerar URL do anexo.",
+    })
+  }
+})
+
+router.post(
+  "/upload",
+  autenticar,
+  upload.array("arquivos"),
+  async (req, res) => {
+    try {
+      if (req.usuario.perfil === "Cliente") {
+        return res.status(403).json({
+          message: "Cliente não pode anexar arquivos no cadastro",
+        })
+      }
+
+      const bucket =
+        process.env.SUPABASE_BUCKET ||
+        "nexa-uploads"
+
+      const arquivos = []
+
+      for (const file of req.files || []) {
+        const nomeLimpo =
+          file.originalname.replace(/\s+/g, "-")
+
+        const caminhoArquivo =
+          `clientes/${Date.now()}-${nomeLimpo}`
+
+        const buffer =
+          file.buffer ||
+          fs.readFileSync(file.path)
+
+        const { error } =
+          await supabase.storage
+            .from(bucket)
+            .upload(caminhoArquivo, buffer, {
+              contentType: file.mimetype,
+              upsert: false,
+            })
+
+        if (error) {
+          throw error
+        }
+
+        if (file.path && fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path)
+        }
+
+        arquivos.push({
+          nome: file.originalname,
+          caminho: caminhoArquivo,
+          url: caminhoArquivo,
+        })
+      }
+
+      res.json(arquivos)
+    } catch (error) {
+      console.error("ERRO NO UPLOAD DE CLIENTE:", error)
+
+      res.status(500).json({
+        message: "Erro ao fazer upload de arquivo do cliente",
+      })
+    }
+  }
+)
 
 router.post("/", autenticar, async (req, res) => {
   try {
@@ -63,7 +180,6 @@ router.put("/:id", autenticar, async (req, res) => {
     }
 
     const { id } = req.params
-
     const cliente = await Cliente.findByPk(id)
 
     if (!cliente) {
@@ -93,7 +209,6 @@ router.delete("/:id", autenticar, async (req, res) => {
     }
 
     const { id } = req.params
-
     const cliente = await Cliente.findByPk(id)
 
     if (!cliente) {
