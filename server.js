@@ -19,6 +19,7 @@ const FluxoCaixa = require("./src/models/FluxoCaixa")
 const usuariosRoutes = require("./src/routes/usuariosRoutes")
 const MovimentoCliente = require("./src/models/MovimentoCliente")
 const Notificacao = require("./src/models/Notificacao")
+const FormaPagamento = require("./src/models/FormaPagamento")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -37,6 +38,7 @@ const contasReceberRoutes = require("./src/routes/contasReceberRoutes")
 const fluxoCaixaRoutes = require("./src/routes/fluxoCaixaRoutes")
 const movimentosClienteRoutes = require("./src/routes/movimentosClienteRoutes")
 const notificacoesRoutes = require("./src/routes/notificacoesRoutes")
+const formasPagamentoRoutes = require("./src/routes/formasPagamentoRoutes")
 
 const app = express()
 
@@ -73,6 +75,7 @@ app.use("/contas-receber", contasReceberRoutes)
 app.use("/fluxo-caixa", fluxoCaixaRoutes)
 app.use("/usuarios", usuariosRoutes)
 app.use("/notificacoes", notificacoesRoutes)
+app.use("/formas-pagamento", formasPagamentoRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", async (req, res) => {
