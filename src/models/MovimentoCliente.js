@@ -27,6 +27,11 @@ const MovimentoCliente = sequelize.define("MovimentoCliente", {
     allowNull: true,
   },
 
+  forma: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
   descricao: {
     type: DataTypes.STRING,
     allowNull: false,
