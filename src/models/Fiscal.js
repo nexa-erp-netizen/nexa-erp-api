@@ -51,6 +51,12 @@ const Fiscal = sequelize.define("Fiscal", {
     type: DataTypes.STRING,
     allowNull: true,
   },
+
+  empresaId: {
+  type: DataTypes.INTEGER,
+  allowNull: true,
+
+  },
 })
 
 module.exports = Fiscal

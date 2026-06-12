@@ -220,7 +220,7 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
       formaPagamento: "",
       observacao: obrigacao.observacao || "Gerado automaticamente ao concluir obrigação fiscal.",
       anexos: obrigacao.anexos || [],
-      empresaId: obrigacao.empresaId || req.usuario.empresaId || null,
+      empresaId: req.usuario.empresaId || obrigacao.empresaId || null,
     })
 
     await obrigacao.update({
