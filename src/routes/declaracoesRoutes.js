@@ -334,20 +334,32 @@ router.post(
   async (req, res) => {
     try {
       const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          message: "Nenhum arquivo recebido.",
+        })
+      }
+
       const arquivos = []
 
       for (const file of req.files) {
-        const nomeLimpo = file.originalname.replace(/\s+/g, "-")
+        const nomeLimpo = file.originalname
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^\w.\-]/g, "-")
+
         const caminhoArquivo = `declaracoes/${Date.now()}-${nomeLimpo}`
 
         const { error } = await supabase.storage
           .from(bucket)
           .upload(caminhoArquivo, file.buffer, {
             contentType: file.mimetype,
-            upsert: false,
+            upsert: true,
           })
 
         if (error) {
+          console.error("ERRO SUPABASE DECLARAÇÃO:", error)
           throw error
         }
 
@@ -364,6 +376,7 @@ router.post(
 
       res.status(500).json({
         message: "Erro ao fazer upload da declaração",
+        erro: error.message,
       })
     }
   }
