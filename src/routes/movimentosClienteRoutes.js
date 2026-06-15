@@ -2,6 +2,7 @@ const express = require("express")
 const fs = require("fs")
 const upload = require("../middlewares/upload")
 const MovimentoCliente = require("../models/MovimentoCliente")
+const LancamentoContabil = require("../models/LancamentoContabil")
 const supabase = require("../config/supabaseClient")
 
 const router = express.Router()
@@ -18,6 +19,80 @@ function valorParaNumero(valor) {
       .replace(",", ".")
       .trim()
   )
+}
+
+function obterCompetencia(data) {
+  if (!data) return "00/0000"
+
+  const partes = String(data).split("-")
+
+  if (partes.length >= 2) {
+    return `${partes[1]}/${partes[0]}`
+  }
+
+  return "00/0000"
+}
+
+function descricaoLancamento(movimento) {
+  return movimento.descricao || "Movimento do cliente"
+}
+
+async function criarLancamentoContabilDoMovimento(movimento, usuario) {
+  const referencia = `movimento-cliente:${movimento.id}`
+
+  const existente = await LancamentoContabil.findOne({
+    where: {
+      cliente: movimento.cliente,
+      observacao: referencia,
+    },
+  })
+
+  if (existente) {
+    await existente.update({
+      data: movimento.data,
+      competencia: obterCompetencia(movimento.data),
+      tipo: movimento.tipo,
+      planoConta: movimento.planoContaNome || "Movimentos Cliente",
+      descricao: descricaoLancamento(movimento),
+      valor: movimento.valor || 0,
+      formaPagamento:
+        movimento.formaPagamento || movimento.forma || "",
+      anexos: movimento.comprovante
+        ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
+        : [],
+      empresaId: usuario?.empresaId || null,
+    })
+
+    return existente
+  }
+
+  return LancamentoContabil.create({
+    cliente: movimento.cliente,
+    data: movimento.data,
+    competencia: obterCompetencia(movimento.data),
+    tipo: movimento.tipo,
+    planoConta: movimento.planoContaNome || "Movimentos Cliente",
+    descricao: descricaoLancamento(movimento),
+    valor: movimento.valor || 0,
+    formaPagamento:
+      movimento.formaPagamento || movimento.forma || "",
+    observacao: referencia,
+    anexos: movimento.comprovante
+      ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
+      : [],
+    empresaId: usuario?.empresaId || null,
+  })
+}
+
+async function removerLancamentoContabilDoMovimento(movimento) {
+  const referencia = `movimento-cliente:${movimento.id}`
+
+  await LancamentoContabil.destroy({
+    where: {
+      cliente: movimento.cliente,
+      observacao: referencia,
+    },
+  })
 }
 
 router.get("/", autenticar, async (req, res) => {
@@ -72,12 +147,21 @@ router.post("/", autenticar, async (req, res) => {
       status: req.body.status || "Pendente",
     })
 
-    res.status(201).json(movimento)
+    const lancamentoContabil = await criarLancamentoContabilDoMovimento(
+      movimento,
+      req.usuario
+    )
+
+    res.status(201).json({
+      movimento,
+      lancamentoContabil,
+    })
   } catch (error) {
     console.error("ERRO AO CRIAR MOVIMENTO:", error)
 
     res.status(500).json({
       message: "Erro ao criar movimento",
+      erro: error.message,
     })
   }
 })
@@ -109,12 +193,27 @@ router.post("/massa", autenticar, async (req, res) => {
 
     const movimentos = await MovimentoCliente.bulkCreate(movimentosTratados)
 
-    res.status(201).json(movimentos)
+    const lancamentosContabeis = []
+
+    for (const movimento of movimentos) {
+      const lancamento = await criarLancamentoContabilDoMovimento(
+        movimento,
+        req.usuario
+      )
+
+      lancamentosContabeis.push(lancamento)
+    }
+
+    res.status(201).json({
+      movimentos,
+      lancamentosContabeis,
+    })
   } catch (error) {
     console.error("ERRO AO CRIAR MOVIMENTOS EM MASSA:", error)
 
     res.status(500).json({
       message: "Erro ao criar movimentos em massa",
+      erro: error.message,
     })
   }
 })
@@ -148,12 +247,21 @@ router.put("/:id", autenticar, async (req, res) => {
           : movimento.valor,
     })
 
-    res.json(movimento)
+    const lancamentoContabil = await criarLancamentoContabilDoMovimento(
+      movimento,
+      req.usuario
+    )
+
+    res.json({
+      movimento,
+      lancamentoContabil,
+    })
   } catch (error) {
     console.error("ERRO AO ATUALIZAR MOVIMENTO:", error)
 
     res.status(500).json({
       message: "Erro ao atualizar movimento",
+      erro: error.message,
     })
   }
 })
@@ -179,6 +287,8 @@ router.delete("/:id", autenticar, async (req, res) => {
       })
     }
 
+    await removerLancamentoContabilDoMovimento(movimento)
+
     await movimento.destroy()
 
     res.json({
@@ -189,6 +299,7 @@ router.delete("/:id", autenticar, async (req, res) => {
 
     res.status(500).json({
       message: "Erro ao excluir movimento",
+      erro: error.message,
     })
   }
 })
