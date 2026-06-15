@@ -5,7 +5,6 @@ const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
 
-
 function somenteEquipe(req, res, next) {
   if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
     return res.status(403).json({ message: "Acesso negado" })
@@ -15,8 +14,6 @@ function somenteEquipe(req, res, next) {
 }
 
 router.use(autenticar)
-router.use(somenteEquipe)
-
 
 router.get("/", async (req, res) => {
   try {
@@ -26,48 +23,36 @@ router.get("/", async (req, res) => {
 
     res.json(contas)
   } catch (error) {
-    console.error(
-      "ERRO AO LISTAR PLANO DE CONTAS:",
-      error
-    )
+    console.error("ERRO AO LISTAR PLANO DE CONTAS:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao listar plano de contas",
+      message: "Erro ao listar plano de contas",
     })
   }
 })
 
-router.post("/", async (req, res) => {
+router.post("/", somenteEquipe, async (req, res) => {
   try {
-    const novaConta =
-      await PlanoConta.create(req.body)
+    const novaConta = await PlanoConta.create(req.body)
 
     res.status(201).json(novaConta)
   } catch (error) {
-    console.error(
-      "ERRO AO CRIAR CONTA:",
-      error
-    )
+    console.error("ERRO AO CRIAR CONTA:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao criar conta",
+      message: "Erro ao criar conta",
     })
   }
 })
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", somenteEquipe, async (req, res) => {
   try {
     const { id } = req.params
-
-    const conta =
-      await PlanoConta.findByPk(id)
+    const conta = await PlanoConta.findByPk(id)
 
     if (!conta) {
       return res.status(404).json({
-        message:
-          "Conta não encontrada",
+        message: "Conta não encontrada",
       })
     }
 
@@ -75,47 +60,35 @@ router.put("/:id", async (req, res) => {
 
     res.json(conta)
   } catch (error) {
-    console.error(
-      "ERRO AO ATUALIZAR CONTA:",
-      error
-    )
+    console.error("ERRO AO ATUALIZAR CONTA:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao atualizar conta",
+      message: "Erro ao atualizar conta",
     })
   }
 })
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", somenteEquipe, async (req, res) => {
   try {
     const { id } = req.params
-
-    const conta =
-      await PlanoConta.findByPk(id)
+    const conta = await PlanoConta.findByPk(id)
 
     if (!conta) {
       return res.status(404).json({
-        message:
-          "Conta não encontrada",
+        message: "Conta não encontrada",
       })
     }
 
     await conta.destroy()
 
     res.json({
-      message:
-        "Conta excluída com sucesso",
+      message: "Conta excluída com sucesso",
     })
   } catch (error) {
-    console.error(
-      "ERRO AO EXCLUIR CONTA:",
-      error
-    )
+    console.error("ERRO AO EXCLUIR CONTA:", error)
 
     res.status(500).json({
-      message:
-        "Erro ao excluir conta",
+      message: "Erro ao excluir conta",
     })
   }
 })
