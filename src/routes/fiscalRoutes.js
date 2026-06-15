@@ -3,6 +3,7 @@ const upload = require("../middlewares/upload")
 const Fiscal = require("../models/Fiscal")
 const Notificacao = require("../models/Notificacao")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const MovimentoCliente = require("../models/MovimentoCliente")
 const supabase = require("../config/supabase")
 
 const router = express.Router()
@@ -40,6 +41,70 @@ function calcularAlertaFiscal(vencimento, status) {
     diasParaVencer,
     alertaFiscal,
   }
+}
+
+function valorSeguro(valor) {
+  if (valor === null || valor === undefined || valor === "") return 0
+
+  let texto = String(valor).replace("R$", "").trim()
+
+  if (texto.includes(",")) {
+    texto = texto.replace(/\./g, "").replace(",", ".")
+  }
+
+  const numero = Number(texto)
+  return Number.isFinite(numero) ? numero : 0
+}
+
+async function criarMovimentoClienteFiscal(obrigacao, usuario) {
+  const referencia = `fiscal:${obrigacao.id}`
+  const clienteMovimento =
+    usuario?.clienteVinculado || obrigacao.cliente
+
+  const movimentoExistente = await MovimentoCliente.findOne({
+    where: {
+      cliente: clienteMovimento,
+      tipo: "Despesa",
+      observacao: referencia,
+    },
+  })
+
+  if (movimentoExistente) {
+    return movimentoExistente
+  }
+
+  const nomeObrigacao =
+    obrigacao.obrigacao ||
+    obrigacao.descricao ||
+    obrigacao.servico ||
+    "Serviço fiscal"
+
+  const competencia = obrigacao.competencia
+    ? ` - ${obrigacao.competencia}`
+    : ""
+
+  const valor = valorSeguro(obrigacao.valor)
+
+  if (valor <= 0) {
+    throw new Error(
+      "Não foi possível criar movimento: obrigação fiscal sem valor válido."
+    )
+  }
+
+  return MovimentoCliente.create({
+    cliente: clienteMovimento,
+    tipo: "Despesa",
+    data: new Date().toISOString().slice(0, 10),
+    planoContaId: null,
+    planoContaNome: "Fiscal",
+    forma: "Confirmado pelo cliente",
+    descricao: `Pagamento confirmado - ${nomeObrigacao}${competencia}`,
+    valor,
+    formaPagamento: "Confirmado pelo cliente",
+    comprovante: null,
+    observacao: referencia,
+    status: "Pendente",
+  })
 }
 
 function extrairPathSupabase(valor) {
@@ -170,25 +235,31 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       alertaFiscal: alerta.alertaFiscal,
     })
 
-    try {
-      await Notificacao.create({
-        empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
-        clienteId: null,
-        usuarioId: req.usuario.id,
-        titulo: "Obrigação marcada como paga",
-        tipo: "fiscal_pago_cliente",
-        mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.obrigacao || "uma obrigação fiscal"} como paga.`,
-      })
-    } catch (erroNotificacao) {
-      console.error("ERRO AO CRIAR NOTIFICAÇÃO FISCAL:", erroNotificacao)
-    }
+    const movimento = await criarMovimentoClienteFiscal({
+      ...obrigacao.dataValues,
+      cliente: req.usuario.clienteVinculado,
+    })
 
-    res.json(obrigacao)
+    await Notificacao.create({
+      empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+      clienteId: null,
+      usuarioId: req.usuario.id,
+      titulo: "Obrigação marcada como paga",
+      tipo: "fiscal_pago_cliente",
+      mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.obrigacao || "uma obrigação fiscal"} como paga.`,
+    })
+
+    res.json({
+      message: "Pagamento confirmado e movimento criado com sucesso",
+      obrigacao,
+      movimento,
+    })
   } catch (error) {
     console.error("ERRO AO MARCAR FISCAL COMO PAGO PELO CLIENTE:", error)
 
     res.status(500).json({
       message: "Erro ao marcar obrigação como paga",
+      erro: error.message,
     })
   }
 })
