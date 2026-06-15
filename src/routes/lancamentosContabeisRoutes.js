@@ -10,6 +10,16 @@ const {
 
 const router = express.Router()
 
+
+function somenteEquipe(req, res, next) {
+  if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
+    return res.status(403).json({ message: "Acesso negado" })
+  }
+
+  next()
+}
+
+
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
@@ -37,7 +47,7 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", autenticar, async (req, res) => {
+router.post("/", autenticar, somenteEquipe, async (req, res) => {
   try {
     const data =
       req.body.data ||
@@ -121,7 +131,7 @@ router.post("/", autenticar, async (req, res) => {
   }
 })
 
-router.put("/:id", autenticar, async (req, res) => {
+router.put("/:id", autenticar, somenteEquipe, async (req, res) => {
   try {
     const lancamento = await LancamentoContabil.findByPk(req.params.id)
 
@@ -143,7 +153,7 @@ router.put("/:id", autenticar, async (req, res) => {
   }
 })
 
-router.delete("/:id", autenticar, async (req, res) => {
+router.delete("/:id", autenticar, somenteEquipe, async (req, res) => {
   try {
     const lancamento = await LancamentoContabil.findByPk(req.params.id)
 
@@ -167,56 +177,4 @@ router.delete("/:id", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", autenticar, async (req, res) => {
-  try {
-    const data = req.body.data || new Date().toISOString().slice(0, 10)
-
-    const [ano, mes] = data.split("-")
-    const competencia = req.body.competencia || `${mes}/${ano}`
-
-    const tipoContabil =
-      String(req.body.tipo || "").toLowerCase() === "receita"
-        ? "Receita"
-        : "Despesa"
-
-    const novoLancamento = await LancamentoContabil.create({
-      cliente: req.body.cliente,
-      data,
-      competencia,
-      tipo: tipoContabil,
-      planoConta:
-        req.body.planoConta ||
-        req.body.categoria ||
-        "Serviços Contábeis",
-      descricao: req.body.descricao || "Serviço",
-      valor: String(req.body.valor || "0"),
-      formaPagamento: req.body.formaPagamento || "",
-      observacao: req.body.observacao || "",
-      anexos: req.body.anexos || [],
-      empresaId: req.usuario?.empresaId || null,
-    })
-
-    if (req.body.origem === "servico") {
-      await Financeiro.create({
-        descricao: req.body.descricao || "Serviço",
-        cliente: req.body.cliente,
-        tipo: "Receber",
-        valor: String(req.body.valor || "0"),
-        vencimento: data,
-        status: "Pendente",
-        anexos: [],
-        empresaId: req.usuario?.empresaId || null,
-      })
-    }
-
-    res.status(201).json(novoLancamento)
-  } catch (error) {
-    console.error("ERRO AO CRIAR LANÇAMENTO:", error)
-
-    res.status(500).json({
-      message: "Erro ao criar lançamento",
-      erro: error.message,
-    })
-  }
-})
 module.exports = router

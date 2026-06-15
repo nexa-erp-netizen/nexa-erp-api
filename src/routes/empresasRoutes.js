@@ -1,7 +1,22 @@
 const express = require("express")
 const Empresa = require("../models/Empresa")
 
+const { autenticar } = require("../middlewares/authMiddleware")
+
 const router = express.Router()
+
+
+function somenteAdmin(req, res, next) {
+  if (req.usuario.perfil !== "Administrador") {
+    return res.status(403).json({ message: "Acesso negado" })
+  }
+
+  next()
+}
+
+router.use(autenticar)
+router.use(somenteAdmin)
+
 
 router.get("/", async (req, res) => {
   try {

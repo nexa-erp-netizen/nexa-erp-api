@@ -2,13 +2,29 @@ const express = require("express")
 const bcrypt = require("bcryptjs")
 const jwt = require("jsonwebtoken")
 const Usuario = require("../models/Usuario")
+const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || "nexa_segredo_temporario"
+function getJwtSecret() {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET
 
-router.post("/registrar", async (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET não configurado")
+  }
+
+  return "nexa_segredo_temporario"
+}
+
+function somenteAdmin(req, res, next) {
+  if (req.usuario.perfil !== "Administrador") {
+    return res.status(403).json({ message: "Acesso negado" })
+  }
+
+  next()
+}
+
+router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
   try {
     const {
       nome,
@@ -112,7 +128,7 @@ router.post("/login", async (req, res) => {
         clienteVinculado: usuario.clienteVinculado,
         empresaId: usuario.empresaId,
       },
-      JWT_SECRET,
+      getJwtSecret(),
       {
         expiresIn: "8h",
       }

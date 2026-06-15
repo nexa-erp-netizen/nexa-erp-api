@@ -1,6 +1,10 @@
 const jwt = require("jsonwebtoken")
 
-const JWT_SECRET = process.env.JWT_SECRET || "nexa_segredo_temporario"
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET não configurado")
+}
 
 function autenticar(req, res, next) {
   const authHeader = req.headers.authorization

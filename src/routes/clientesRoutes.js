@@ -10,6 +10,28 @@ const {
 
 const router = express.Router()
 
+function limparDadosCliente(body) {
+  return {
+    ...body,
+    dataNascimento: body.dataNascimento || null,
+    email: body.email || null,
+    cnpj: body.cnpj || null,
+    regime: body.regime || null,
+    endereco: body.endereco || null,
+    cidade: body.cidade || null,
+    estado: body.estado || null,
+    tituloEleitor: body.tituloEleitor || null,
+    codigoSimplesNacional: body.codigoSimplesNacional || null,
+    senhaGovBr: body.senhaGovBr || null,
+    cnaePrincipal: body.cnaePrincipal || null,
+    inscricaoMunicipal: body.inscricaoMunicipal || null,
+    inscricaoEstadual: body.inscricaoEstadual || null,
+    alvara: body.alvara || null,
+    observacao: body.observacao || null,
+    anexos: body.anexos || [],
+  }
+}
+
 function extrairPathSupabase(valor) {
   if (!valor) return ""
 
@@ -159,7 +181,7 @@ router.post("/", autenticar, async (req, res) => {
       })
     }
 
-    const novoCliente = await Cliente.create(req.body)
+    const novoCliente = await Cliente.create(limparDadosCliente(req.body))
 
     res.status(201).json(novoCliente)
   } catch (error) {
@@ -188,9 +210,11 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
-    await cliente.update(req.body)
+    await cliente.update(limparDadosCliente(req.body))
 
-    res.json(cliente)
+const clienteAtualizado = await Cliente.findByPk(id)
+
+res.json(clienteAtualizado)
   } catch (error) {
     console.error("ERRO AO ATUALIZAR CLIENTE:", error)
 

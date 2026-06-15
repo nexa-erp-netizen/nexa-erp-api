@@ -2,8 +2,20 @@ const express = require("express")
 const fs = require("fs")
 const path = require("path")
 const { exec } = require("child_process")
+const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
+
+function somenteAdmin(req, res, next) {
+  if (req.usuario.perfil !== "Administrador") {
+    return res.status(403).json({ message: "Acesso negado" })
+  }
+
+  next()
+}
+
+router.use(autenticar)
+router.use(somenteAdmin)
 
 router.post("/gerar", async (req, res) => {
   try {
@@ -20,17 +32,20 @@ router.post("/gerar", async (req, res) => {
     )
 
     const pgDumpPath =
-      `"C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe"`
+      process.env.PG_DUMP_PATH || `"C:\\Program Files\\PostgreSQL\\18\\bin\\pg_dump.exe"`
 
-    const comando =
-      `${pgDumpPath} -h localhost -p 5432 -U postgres -d nexa_erp -F p -f "${caminhoBackup}"`
+    const databaseUrl = process.env.DATABASE_URL
+
+    const comando = databaseUrl
+      ? `${pgDumpPath} "${databaseUrl}" -F p -f "${caminhoBackup}"`
+      : `${pgDumpPath} -h localhost -p 5432 -U postgres -d nexa_erp -F p -f "${caminhoBackup}"`
 
     exec(
       comando,
       {
         env: {
           ...process.env,
-          PGPASSWORD: "Nexa123@",
+          PGPASSWORD: process.env.PGPASSWORD || "Nexa123@",
         },
       },
       (error) => {

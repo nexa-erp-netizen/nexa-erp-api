@@ -7,11 +7,48 @@ const Notificacao = require("../models/Notificacao")
 
 const router = express.Router()
 
-const {
-  autenticar,
-} = require("../middlewares/authMiddleware")
+const { autenticar } = require("../middlewares/authMiddleware")
 
-console.log("DOCUMENTOS ROUTE V2")
+const BUCKET = "nexa-anexos"
+const TEMPO_LINK_SEGUNDOS = 60 * 15
+
+async function gerarUrlAssinada(caminho) {
+  if (!caminho) return null
+
+  if (String(caminho).startsWith("http")) {
+    return caminho
+  }
+
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrl(caminho, TEMPO_LINK_SEGUNDOS)
+
+  if (error) {
+    console.error("ERRO AO GERAR URL ASSINADA:", error)
+    return null
+  }
+
+  return data.signedUrl
+}
+
+async function prepararDocumento(documento) {
+  const dados = documento.toJSON()
+
+  if (Array.isArray(dados.anexos)) {
+    dados.anexos = await Promise.all(
+      dados.anexos.map(async (anexo) => ({
+        ...anexo,
+        url: await gerarUrlAssinada(anexo.caminho),
+      }))
+    )
+  }
+
+  if (dados.caminho) {
+    dados.url = await gerarUrlAssinada(dados.caminho)
+  }
+
+  return dados
+}
 
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -25,13 +62,16 @@ router.get("/", autenticar, async (req, res) => {
       where.cliente = req.usuario.clienteVinculado
     }
 
-    
     const documentos = await DocumentoDigital.findAll({
       where,
       order: [["createdAt", "DESC"]],
     })
 
-    res.json(documentos)
+    const documentosTratados = await Promise.all(
+      documentos.map(prepararDocumento)
+    )
+
+    res.json(documentosTratados)
   } catch (error) {
     console.error("ERRO AO LISTAR DOCUMENTOS:", error)
 
@@ -61,17 +101,19 @@ router.post("/", autenticar, async (req, res) => {
     })
 
     if (req.usuario.perfil === "Cliente") {
-  await Notificacao.create({
-    empresaId: req.usuario.empresaId,
-    clienteId: null,
-    usuarioId: req.usuario.id,
-    titulo: "Documento enviado",
-    tipo: "documento_enviado",
-    mensagem: `Cliente ${clienteFinal} enviou um documento digital.`,
-  })
-}
+      await Notificacao.create({
+        empresaId: req.usuario.empresaId,
+        clienteId: null,
+        usuarioId: req.usuario.id,
+        titulo: "Documento enviado",
+        tipo: "documento_enviado",
+        mensagem: `Cliente ${clienteFinal} enviou um documento digital.`,
+      })
+    }
 
-    res.status(201).json(novoDocumento)
+    const documentoTratado = await prepararDocumento(novoDocumento)
+
+    res.status(201).json(documentoTratado)
   } catch (error) {
     console.error("ERRO AO CRIAR DOCUMENTO:", error)
 
@@ -104,7 +146,9 @@ router.put("/:id", autenticar, async (req, res) => {
 
     await documento.update(req.body)
 
-    res.json(documento)
+    const documentoTratado = await prepararDocumento(documento)
+
+    res.json(documentoTratado)
   } catch (error) {
     console.error("ERRO AO ATUALIZAR DOCUMENTO:", error)
 
@@ -161,31 +205,30 @@ router.post(
         const caminhoSupabase = `documentos/${nomeArquivo}`
 
         const { error } = await supabase.storage
-          .from("nexa-anexos")
+          .from(BUCKET)
           .upload(caminhoSupabase, fileBuffer, {
             contentType: file.mimetype,
             upsert: false,
           })
 
-        if (error) {
-          console.error("ERRO SUPABASE:", error)
-
         if (file.path) {
           fs.unlinkSync(file.path)
         }
+
+        if (error) {
+          console.error("ERRO SUPABASE:", error)
 
           return res.status(500).json({
             message: "Erro ao enviar anexo para o Supabase",
           })
         }
 
-        const { data } = supabase.storage
-          .from("nexa-anexos")
-          .getPublicUrl(caminhoSupabase)
+        const urlTemporaria = await gerarUrlAssinada(caminhoSupabase)
 
         arquivos.push({
           nome: file.originalname,
-          caminho: data.publicUrl,
+          caminho: caminhoSupabase,
+          url: urlTemporaria,
         })
       }
 

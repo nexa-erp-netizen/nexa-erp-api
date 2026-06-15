@@ -27,6 +27,46 @@ const Cliente = sequelize.define("Cliente", {
     allowNull: true,
   },
 
+  dataNascimento: {
+  type: DataTypes.DATEONLY,
+  allowNull: true,
+},
+
+senhaGovBr: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+tituloEleitor: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+codigoSimplesNacional: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+cnaePrincipal: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+inscricaoMunicipal: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+inscricaoEstadual: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
+alvara: {
+  type: DataTypes.STRING,
+  allowNull: true,
+},
+
   regime: {
     type: DataTypes.STRING,
     allowNull: true,
@@ -55,11 +95,11 @@ const Cliente = sequelize.define("Cliente", {
   anexos: {
     type: DataTypes.JSON,
     allowNull: true,
+  },
 
   empresaId: {
     type: DataTypes.INTEGER,
     allowNull: true,
-},
   },
 })
 

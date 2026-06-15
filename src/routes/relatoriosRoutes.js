@@ -1,5 +1,6 @@
 const express = require("express")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
 
@@ -21,13 +22,23 @@ function normalizar(texto) {
     .toLowerCase()
 }
 
-router.get("/dre", async (req, res) => {
+router.get("/dre", autenticar, async (req, res) => {
   try {
     const { cliente } = req.query
 
-    let lancamentos = await LancamentoContabil.findAll()
+    const where = {}
 
-    if (cliente) {
+    if (req.usuario.perfil === "Cliente") {
+      where.cliente = req.usuario.clienteVinculado
+    }
+
+    if (req.usuario.empresaId) {
+      where.empresaId = req.usuario.empresaId
+    }
+
+    let lancamentos = await LancamentoContabil.findAll({ where })
+
+    if (cliente && req.usuario.perfil !== "Cliente") {
       lancamentos = lancamentos.filter(
         (item) =>
           normalizar(item.cliente) === normalizar(cliente)
@@ -53,7 +64,10 @@ router.get("/dre", async (req, res) => {
     )
 
     res.json({
-      cliente: cliente || "Todos",
+      cliente:
+        req.usuario.perfil === "Cliente"
+          ? req.usuario.clienteVinculado
+          : cliente || "Todos",
       totalReceitas,
       totalDespesas,
       resultado: totalReceitas - totalDespesas,

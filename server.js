@@ -1,3 +1,5 @@
+require("dotenv").config()
+
 const express = require("express")
 const cors = require("cors")
 const path = require("path")
@@ -21,6 +23,7 @@ const MovimentoCliente = require("./src/models/MovimentoCliente")
 const Notificacao = require("./src/models/Notificacao")
 const FormaPagamento = require("./src/models/FormaPagamento")
 const Declaracao = require("./src/models/Declaracao")
+const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -81,7 +84,7 @@ app.use("/formas-pagamento", formasPagamentoRoutes)
 app.use("/declaracoes", declaracoesRoutes)
 app.use("/auth", authRoutes)
 
-app.get("/dashboard", async (req, res) => {
+app.get("/dashboard", autenticar, async (req, res) => {
   try {
     const totalClientes = await Cliente.count()
 
