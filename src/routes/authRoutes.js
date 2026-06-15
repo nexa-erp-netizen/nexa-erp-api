@@ -1,7 +1,9 @@
 const express = require("express")
 const bcrypt = require("bcryptjs")
 const jwt = require("jsonwebtoken")
+const { Op } = require("sequelize")
 const Usuario = require("../models/Usuario")
+const Cliente = require("../models/Cliente")
 const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
@@ -22,6 +24,49 @@ function somenteAdmin(req, res, next) {
   }
 
   next()
+}
+
+function limparDocumento(valor) {
+  return String(valor || "").replace(/\D/g, "")
+}
+
+async function localizarUsuarioPorLogin(loginInformado) {
+  const login = String(loginInformado || "").trim()
+  const documento = limparDocumento(login)
+
+  let usuario = await Usuario.findOne({
+    where: {
+      [Op.or]: [
+        { email: login },
+        { nome: login },
+      ],
+    },
+  })
+
+  if (usuario) return usuario
+
+  if (documento) {
+    const cliente = await Cliente.findOne({
+      where: {
+        [Op.or]: [
+          { cpf: documento },
+          { cnpj: documento },
+          { cpf: login },
+          { cnpj: login },
+        ],
+      },
+    })
+
+    if (cliente) {
+      usuario = await Usuario.findOne({
+        where: {
+          clienteVinculado: cliente.nome,
+        },
+      })
+    }
+  }
+
+  return usuario
 }
 
 router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
@@ -91,17 +136,16 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
 
 router.post("/login", async (req, res) => {
   try {
-    const { email, senha } = req.body
+    const login = req.body.login || req.body.email
+    const { senha } = req.body
 
-    if (!email || !senha) {
+    if (!login || !senha) {
       return res.status(400).json({
-        message: "Preencha e-mail e senha",
+        message: "Preencha usuário, CPF, e-mail ou CNPJ e senha",
       })
     }
 
-    const usuario = await Usuario.findOne({
-      where: { email },
-    })
+    const usuario = await localizarUsuarioPorLogin(login)
 
     if (!usuario) {
       return res.status(401).json({
