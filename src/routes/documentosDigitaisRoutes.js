@@ -206,7 +206,7 @@ router.post(
           .replace(/[\u0300-\u036f]/g, "")
           .replace(/[^a-zA-Z0-9._-]/g, "-")
 
-        const nomeArquivo = `${Date.now()}-${nomeLimpo}``
+        const nomeArquivo = `${Date.now()}-${nomeLimpo}`
         const caminhoSupabase = `documentos/${nomeArquivo}`
 
         const { error } = await supabase.storage
