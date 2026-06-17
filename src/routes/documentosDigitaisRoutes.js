@@ -236,8 +236,10 @@ router.post(
     } catch (error) {
       console.error("ERRO NO UPLOAD DE DOCUMENTO:", error)
 
-      res.status(500).json({
-        message: "Erro ao fazer upload de documento",
+      return res.status(500).json({
+        erro: error?.message,
+        stack: error?.stack,
+        completo: error,
       })
     }
   }

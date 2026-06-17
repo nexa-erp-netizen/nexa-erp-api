@@ -12,13 +12,26 @@ const { autenticar } = require("../middlewares/authMiddleware")
 function valorParaNumero(valor) {
   if (typeof valor === "number") return valor
 
-  return Number(
-    String(valor || 0)
-      .replace("R$", "")
-      .replace(/\./g, "")
-      .replace(",", ".")
-      .trim()
-  )
+  if (valor === null || valor === undefined || valor === "") {
+    return 0
+  }
+
+  let texto = String(valor)
+    .replace("R$", "")
+    .trim()
+
+  const temVirgula = texto.includes(",")
+  const temPonto = texto.includes(".")
+
+  if (temVirgula) {
+    texto = texto.replace(/\./g, "").replace(",", ".")
+  } else if (temPonto) {
+    texto = texto
+  }
+
+  const numero = Number(texto)
+
+  return Number.isFinite(numero) ? numero : 0
 }
 
 function obterCompetencia(data) {
@@ -47,40 +60,30 @@ async function criarLancamentoContabilDoMovimento(movimento, usuario) {
     },
   })
 
-  if (existente) {
-    await existente.update({
-      data: movimento.data,
-      competencia: obterCompetencia(movimento.data),
-      tipo: movimento.tipo,
-      planoConta: movimento.planoContaNome || "Movimentos Cliente",
-      descricao: descricaoLancamento(movimento),
-      valor: movimento.valor || 0,
-      formaPagamento:
-        movimento.formaPagamento || movimento.forma || "",
-      anexos: movimento.comprovante
-        ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
-        : [],
-      empresaId: usuario?.empresaId || null,
-    })
-
-    return existente
-  }
-
-  return LancamentoContabil.create({
-    cliente: movimento.cliente,
+  const dadosLancamento = {
     data: movimento.data,
     competencia: obterCompetencia(movimento.data),
     tipo: movimento.tipo,
     planoConta: movimento.planoContaNome || "Movimentos Cliente",
     descricao: descricaoLancamento(movimento),
-    valor: movimento.valor || 0,
+    valor: valorParaNumero(movimento.valor),
     formaPagamento:
       movimento.formaPagamento || movimento.forma || "",
-    observacao: referencia,
     anexos: movimento.comprovante
       ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
       : [],
     empresaId: usuario?.empresaId || null,
+  }
+
+  if (existente) {
+    await existente.update(dadosLancamento)
+    return existente
+  }
+
+  return LancamentoContabil.create({
+    cliente: movimento.cliente,
+    ...dadosLancamento,
+    observacao: referencia,
   })
 }
 

@@ -56,6 +56,16 @@ function valorSeguro(valor) {
   return Number.isFinite(numero) ? numero : 0
 }
 
+function obterPlanoContaDaObrigacao(nomeObrigacao) {
+  const texto = String(nomeObrigacao || "").toLowerCase()
+
+  if (texto.includes("honor")) {
+    return "Honorários Contábeis"
+  }
+
+  return "Fiscal"
+}
+
 async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   const referencia = `fiscal:${obrigacao.id}`
   const clienteMovimento =
@@ -87,7 +97,7 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
 
   if (valor <= 0) {
     throw new Error(
-      "Não foi possível criar movimento: obrigação fiscal sem valor válido."
+      "Não foi possível criar movimento: pendência sem valor válido."
     )
   }
 
@@ -96,7 +106,7 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
     tipo: "Despesa",
     data: new Date().toISOString().slice(0, 10),
     planoContaId: null,
-    planoContaNome: "Fiscal",
+    planoContaNome: obterPlanoContaDaObrigacao(nomeObrigacao),
     forma: "Confirmado pelo cliente",
     descricao: `Pagamento confirmado - ${nomeObrigacao}${competencia}`,
     valor,
@@ -235,18 +245,21 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       alertaFiscal: alerta.alertaFiscal,
     })
 
-    const movimento = await criarMovimentoClienteFiscal({
-      ...obrigacao.dataValues,
-      cliente: req.usuario.clienteVinculado,
-    })
+    const movimento = await criarMovimentoClienteFiscal(
+      {
+        ...obrigacao.dataValues,
+        cliente: req.usuario.clienteVinculado,
+      },
+      req.usuario
+    )
 
     await Notificacao.create({
       empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
       clienteId: null,
       usuarioId: req.usuario.id,
-      titulo: "Obrigação marcada como paga",
+      titulo: "Pendência marcada como paga",
       tipo: "fiscal_pago_cliente",
-      mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.obrigacao || "uma obrigação fiscal"} como paga.`,
+      mensagem: `Cliente ${req.usuario.clienteVinculado} marcou ${obrigacao.obrigacao || "uma pendência"} como paga.`,
     })
 
     res.json({
@@ -255,10 +268,10 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       movimento,
     })
   } catch (error) {
-    console.error("ERRO AO MARCAR FISCAL COMO PAGO PELO CLIENTE:", error)
+    console.error("ERRO AO MARCAR PENDÊNCIA COMO PAGA PELO CLIENTE:", error)
 
     res.status(500).json({
-      message: "Erro ao marcar obrigação como paga",
+      message: "Erro ao marcar pendência como paga",
       erro: error.message,
     })
   }
@@ -280,16 +293,20 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
       })
     }
 
+    const nomeObrigacao = obrigacao.obrigacao || "Obrigação fiscal"
+
     await LancamentoContabil.create({
       cliente: obrigacao.cliente,
       data: new Date().toISOString().slice(0, 10),
       competencia: obrigacao.competencia || "00/0000",
       tipo: "Despesa",
-      planoConta: "Fiscal",
-      descricao: `${obrigacao.obrigacao || "Obrigação fiscal"} - ${obrigacao.competencia || ""}`,
+      planoConta: obterPlanoContaDaObrigacao(nomeObrigacao),
+      descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
       valor: obrigacao.valor || "0",
       formaPagamento: "",
-      observacao: obrigacao.observacao || "Gerado automaticamente ao concluir obrigação fiscal.",
+      observacao:
+        obrigacao.observacao ||
+        "Gerado automaticamente ao concluir pendência.",
       anexos: obrigacao.anexos || [],
       empresaId: req.usuario.empresaId || obrigacao.empresaId || null,
     })
@@ -300,18 +317,18 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
     })
 
     await Notificacao.update(
-  { lida: true },
-  {
-    where: {
-      tipo: "fiscal_pago_cliente",
-      lida: false,
-      empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
-    },
-  }
-)
+      { lida: true },
+      {
+        where: {
+          tipo: "fiscal_pago_cliente",
+          lida: false,
+          empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+        },
+      }
+    )
 
     res.json({
-      message: "Obrigação concluída e lançamento contábil criado com sucesso",
+      message: "Pendência concluída e lançamento contábil criado com sucesso",
       obrigacao,
     })
   } catch (error) {
