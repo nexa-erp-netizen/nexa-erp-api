@@ -201,7 +201,12 @@ router.post(
       for (const file of req.files) {
         const fileBuffer = file.buffer || fs.readFileSync(file.path)
 
-        const nomeArquivo = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`
+        const nomeLimpo = file.originalname
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-zA-Z0-9._-]/g, "-")
+
+        const nomeArquivo = `${Date.now()}-${nomeLimpo}``
         const caminhoSupabase = `documentos/${nomeArquivo}`
 
         const { error } = await supabase.storage
