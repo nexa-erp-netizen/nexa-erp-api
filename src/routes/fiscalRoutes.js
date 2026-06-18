@@ -318,7 +318,7 @@ router.post(
       }
 
       const anexosAtuais = Array.isArray(obrigacao.anexos)
-        ? obrigacao.anexos
+        ? obrigacao.anexos.filter((arquivo) => arquivo.tipo !== "recibo")
         : []
 
       const alerta = calcularAlertaFiscal(
