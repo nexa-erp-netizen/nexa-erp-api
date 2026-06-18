@@ -65,15 +65,19 @@ function obterPlanoContaDaObrigacao(nomeObrigacao) {
 
   return "Fiscal"
 }
+function limparNomeArquivo(nome) {
+  return String(nome || "arquivo")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+}
 
 async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   const referencia = `fiscal:${obrigacao.id}`
-  const clienteMovimento =
-    usuario?.clienteVinculado || obrigacao.cliente
 
   const movimentoExistente = await MovimentoCliente.findOne({
     where: {
-      cliente: clienteMovimento,
+      cliente: usuario?.clienteVinculado || obrigacao.cliente,
       tipo: "Despesa",
       observacao: referencia,
     },
@@ -82,16 +86,6 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   if (movimentoExistente) {
     return movimentoExistente
   }
-
-  const nomeObrigacao =
-    obrigacao.obrigacao ||
-    obrigacao.descricao ||
-    obrigacao.servico ||
-    "Serviço fiscal"
-
-  const competencia = obrigacao.competencia
-    ? ` - ${obrigacao.competencia}`
-    : ""
 
   const valor = valorSeguro(obrigacao.valor)
 
@@ -102,13 +96,17 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   }
 
   return MovimentoCliente.create({
-    cliente: clienteMovimento,
+    cliente: usuario?.clienteVinculado || obrigacao.cliente,
     tipo: "Despesa",
     data: new Date().toISOString().slice(0, 10),
     planoContaId: null,
-    planoContaNome: obterPlanoContaDaObrigacao(nomeObrigacao),
+    planoContaNome: obterPlanoContaDaObrigacao(
+      obrigacao.obrigacao
+    ),
     forma: "Confirmado pelo cliente",
-    descricao: `Pagamento confirmado - ${nomeObrigacao}${competencia}`,
+    descricao: `Pagamento confirmado - ${
+      obrigacao.obrigacao
+    }`,
     valor,
     formaPagamento: "Confirmado pelo cliente",
     comprovante: null,
@@ -117,32 +115,12 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   })
 }
 
-function extrairPathSupabase(valor) {
-  if (!valor) return ""
-
-  if (!valor.startsWith("http")) {
-    return valor
-  }
-
-  const marcador = "/storage/v1/object/public/nexa-uploads/"
-
-  if (valor.includes(marcador)) {
-    return valor.split(marcador)[1]
-  }
-
-  return valor
-}
-
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      if (req.usuario.clienteVinculado) {
-        where.cliente = req.usuario.clienteVinculado
-      } else {
-        return res.json([])
-      }
+      where.cliente = req.usuario.clienteVinculado
     }
 
     const obrigacoes = await Fiscal.findAll({
@@ -152,7 +130,7 @@ router.get("/", autenticar, async (req, res) => {
 
     res.json(obrigacoes)
   } catch (error) {
-    console.error("ERRO AO LISTAR OBRIGAÇÕES:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao listar obrigações",
@@ -160,58 +138,32 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.get("/anexo-url", autenticar, async (req, res) => {
-  try {
-    const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
-    const path = extrairPathSupabase(req.query.path)
-
-    if (!path) {
-      return res.status(400).json({
-        message: "Caminho do anexo não informado.",
-      })
-    }
-
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(path, 60 * 5)
-
-    if (error) {
-      throw error
-    }
-
-    res.json({
-      url: data.signedUrl,
-    })
-  } catch (error) {
-    console.error("ERRO AO GERAR URL ASSINADA:", error)
-
-    res.status(500).json({
-      message: "Erro ao gerar URL do anexo.",
-    })
-  }
-})
-
 router.post("/", autenticar, async (req, res) => {
   try {
-    const alerta = calcularAlertaFiscal(req.body.vencimento, req.body.status)
+    const alerta = calcularAlertaFiscal(
+      req.body.vencimento,
+      req.body.status
+    )
 
     const novaObrigacao = await Fiscal.create({
       ...req.body,
       diasParaVencer: alerta.diasParaVencer,
       alertaFiscal: alerta.alertaFiscal,
-      empresaId: req.usuario?.empresaId || req.body.empresaId || null,
+      empresaId:
+        req.usuario?.empresaId ||
+        req.body.empresaId ||
+        null,
     })
 
     res.status(201).json(novaObrigacao)
   } catch (error) {
-    console.error("ERRO AO CRIAR OBRIGAÇÃO:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao criar obrigação",
     })
   }
 })
-
 router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
   try {
     if (req.usuario.perfil !== "Cliente") {
@@ -268,7 +220,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       movimento,
     })
   } catch (error) {
-    console.error("ERRO AO MARCAR PENDÊNCIA COMO PAGA PELO CLIENTE:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao marcar pendência como paga",
@@ -277,6 +229,116 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
   }
 })
 
+router.post(
+  "/:id/anexar-recibo",
+  autenticar,
+  upload.array("arquivos"),
+  async (req, res) => {
+    try {
+      if (req.usuario.perfil !== "Cliente") {
+        return res.status(403).json({
+          message: "Apenas cliente pode anexar recibo",
+        })
+      }
+
+      const obrigacao = await Fiscal.findByPk(req.params.id)
+
+      if (!obrigacao) {
+        return res.status(404).json({
+          message: "Obrigação não encontrada",
+        })
+      }
+
+      if (obrigacao.cliente !== req.usuario.clienteVinculado) {
+        return res.status(403).json({
+          message: "Acesso não autorizado",
+        })
+      }
+
+      const arquivosRecebidos = Array.isArray(req.files) ? req.files : []
+
+      if (arquivosRecebidos.length === 0) {
+        return res.status(400).json({
+          message: "Nenhum recibo enviado",
+        })
+      }
+
+      const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
+      const recibos = []
+
+      for (const file of arquivosRecebidos) {
+        const nomeLimpo = limparNomeArquivo(file.originalname)
+        const caminhoArquivo = `fiscal/recibos/${Date.now()}-${nomeLimpo}`
+
+        const { error } = await supabase.storage
+          .from(bucket)
+          .upload(caminhoArquivo, file.buffer, {
+            contentType: file.mimetype,
+            upsert: false,
+          })
+
+        if (error) throw error
+
+        recibos.push({
+          nome: file.originalname,
+          caminho: caminhoArquivo,
+          url: caminhoArquivo,
+          tipo: "recibo",
+          enviadoEm: new Date().toISOString(),
+        })
+      }
+
+      const anexosAtuais = Array.isArray(obrigacao.anexos)
+        ? obrigacao.anexos
+        : []
+
+      const alerta = calcularAlertaFiscal(
+        obrigacao.vencimento,
+        "Pago pelo cliente"
+      )
+
+      await obrigacao.update({
+        anexos: [...anexosAtuais, ...recibos],
+        status: "Pago pelo cliente",
+        diasParaVencer: alerta.diasParaVencer,
+        alertaFiscal: alerta.alertaFiscal,
+      })
+
+      const obrigacaoAtualizada = await Fiscal.findByPk(req.params.id)
+
+      const movimento = await criarMovimentoClienteFiscal(
+        {
+          ...obrigacaoAtualizada.dataValues,
+          cliente: req.usuario.clienteVinculado,
+        },
+        req.usuario
+      )
+
+      await Notificacao.create({
+        empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+        clienteId: null,
+        usuarioId: req.usuario.id,
+        titulo: "Recibo de pagamento anexado",
+        tipo: "fiscal_recibo_cliente",
+        mensagem: `Cliente ${req.usuario.clienteVinculado} anexou recibo em ${obrigacao.obrigacao || "uma pendência"}.`,
+      })
+
+      res.json({
+        message: "Recibo anexado e pagamento confirmado com sucesso",
+        obrigacao: obrigacaoAtualizada,
+        recibos,
+        movimento,
+      })
+    } catch (error) {
+      console.error(error)
+
+      res.status(500).json({
+        message: "Erro ao anexar recibo",
+        erro: error.message,
+      })
+    }
+  }
+)
 router.patch("/:id/concluir", autenticar, async (req, res) => {
   try {
     if (req.usuario.perfil === "Cliente") {
@@ -327,12 +389,23 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
       }
     )
 
+    await Notificacao.update(
+      { lida: true },
+      {
+        where: {
+          tipo: "fiscal_recibo_cliente",
+          lida: false,
+          empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
+        },
+      }
+    )
+
     res.json({
       message: "Pendência concluída e lançamento contábil criado com sucesso",
       obrigacao,
     })
   } catch (error) {
-    console.error("ERRO AO CONCLUIR OBRIGAÇÃO:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao concluir obrigação",
@@ -340,7 +413,6 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
     })
   }
 })
-
 router.put("/:id", autenticar, async (req, res) => {
   try {
     const { id } = req.params
@@ -352,7 +424,10 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
-    const alerta = calcularAlertaFiscal(req.body.vencimento, req.body.status)
+    const alerta = calcularAlertaFiscal(
+      req.body.vencimento,
+      req.body.status
+    )
 
     await obrigacao.update({
       ...req.body,
@@ -362,7 +437,7 @@ router.put("/:id", autenticar, async (req, res) => {
 
     res.json(obrigacao)
   } catch (error) {
-    console.error("ERRO AO ATUALIZAR OBRIGAÇÃO:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao atualizar obrigação",
@@ -387,14 +462,13 @@ router.delete("/:id", autenticar, async (req, res) => {
       message: "Obrigação excluída com sucesso",
     })
   } catch (error) {
-    console.error("ERRO AO EXCLUIR OBRIGAÇÃO:", error)
+    console.error(error)
 
     res.status(500).json({
       message: "Erro ao excluir obrigação",
     })
   }
 })
-
 router.post(
   "/upload",
   autenticar,
@@ -405,7 +479,7 @@ router.post(
       const arquivos = []
 
       for (const file of req.files) {
-        const nomeLimpo = file.originalname.replace(/\s+/g, "-")
+        const nomeLimpo = limparNomeArquivo(file.originalname)
         const caminhoArquivo = `fiscal/${Date.now()}-${nomeLimpo}`
 
         const { error } = await supabase.storage
@@ -415,20 +489,19 @@ router.post(
             upsert: false,
           })
 
-        if (error) {
-          throw error
-        }
+        if (error) throw error
 
         arquivos.push({
           nome: file.originalname,
           caminho: caminhoArquivo,
           url: caminhoArquivo,
+          tipo: "guia",
         })
       }
 
       res.json(arquivos)
     } catch (error) {
-      console.error("ERRO NO UPLOAD FISCAL:", error)
+      console.error(error)
 
       res.status(500).json({
         message: "Erro ao fazer upload fiscal",
