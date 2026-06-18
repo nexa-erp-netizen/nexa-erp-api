@@ -138,6 +138,35 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
+router.get("/anexo-url", autenticar, async (req, res) => {
+  try {
+    const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
+    const path = req.query.path
+
+    if (!path) {
+      return res.status(400).json({
+        message: "Caminho do anexo não informado.",
+      })
+    }
+
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(path, 60 * 5)
+
+    if (error) throw error
+
+    res.json({
+      url: data.signedUrl,
+    })
+  } catch (error) {
+    console.error("ERRO AO GERAR URL ASSINADA:", error)
+
+    res.status(500).json({
+      message: "Erro ao gerar URL do anexo.",
+    })
+  }
+})
+
 router.post("/", autenticar, async (req, res) => {
   try {
     const alerta = calcularAlertaFiscal(
