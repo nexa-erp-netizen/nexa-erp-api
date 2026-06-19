@@ -47,6 +47,16 @@ const Financeiro = sequelize.define("Financeiro", {
     allowNull: true,
   },
 
+  origem: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  referenciaOrigem: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
   anexos: {
     type: DataTypes.JSONB,
     allowNull: true,

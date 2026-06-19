@@ -3,6 +3,7 @@ const fs = require("fs")
 const upload = require("../middlewares/upload")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const Financeiro = require("../models/Financeiro")
 const supabase = require("../config/supabaseClient")
 
 const router = express.Router()
@@ -48,6 +49,91 @@ function obterCompetencia(data) {
 
 function descricaoLancamento(movimento) {
   return movimento.descricao || "Movimento do cliente"
+}
+
+
+function textoIndicaReceitaDoEscritorio(movimento) {
+  const texto = [
+    movimento.descricao,
+    movimento.planoContaNome,
+    movimento.forma,
+    movimento.observacao,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+
+  const palavrasChave = [
+    "honor",
+    "servico avulso",
+    "servicos avulsos",
+    "certificado",
+    "abertura mei",
+    "regularizacao",
+    "consultoria",
+    "declaracao",
+    "alteracao contratual",
+    "baixa mei",
+    "mei",
+  ]
+
+  return palavrasChave.some((palavra) => texto.includes(palavra))
+}
+
+async function criarFinanceiroDoMovimento(movimento, usuario) {
+  if (movimento.tipo !== "Receita") return null
+
+  if (!textoIndicaReceitaDoEscritorio(movimento)) return null
+
+  const referencia = `movimento-cliente:${movimento.id}`
+
+  const existente = await Financeiro.findOne({
+    where: {
+      observacao: referencia,
+    },
+  })
+
+  const dataMovimento = movimento.data || new Date().toISOString().slice(0, 10)
+
+  const dadosFinanceiro = {
+    descricao: movimento.descricao || "Receita automática de cliente",
+    cliente: movimento.cliente || "Cliente",
+    tipo: "Receber",
+    centroCusto: movimento.planoContaNome || "Honorários / Serviços",
+    formaPagamento:
+      movimento.formaPagamento || movimento.forma || "Automático",
+    valor: String(valorParaNumero(movimento.valor)),
+    vencimento: dataMovimento,
+    status: "Recebido",
+    dataRecebimento: dataMovimento,
+    anexos: movimento.comprovante
+      ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
+      : [],
+    origem: "Automático - Movimento Cliente",
+    empresaId: usuario?.empresaId || null,
+  }
+
+  if (existente) {
+    await existente.update(dadosFinanceiro)
+    return existente
+  }
+
+  return Financeiro.create({
+    ...dadosFinanceiro,
+    observacao: referencia,
+  })
+}
+
+async function removerFinanceiroDoMovimento(movimento) {
+  const referencia = `movimento-cliente:${movimento.id}`
+
+  await Financeiro.destroy({
+    where: {
+      observacao: referencia,
+    },
+  })
 }
 
 async function criarLancamentoContabilDoMovimento(movimento, usuario) {
@@ -155,9 +241,15 @@ router.post("/", autenticar, async (req, res) => {
       req.usuario
     )
 
+    const financeiro = await criarFinanceiroDoMovimento(
+      movimento,
+      req.usuario
+    )
+
     res.status(201).json({
       movimento,
       lancamentoContabil,
+      financeiro,
     })
   } catch (error) {
     console.error("ERRO AO CRIAR MOVIMENTO:", error)
@@ -197,6 +289,7 @@ router.post("/massa", autenticar, async (req, res) => {
     const movimentos = await MovimentoCliente.bulkCreate(movimentosTratados)
 
     const lancamentosContabeis = []
+    const financeiros = []
 
     for (const movimento of movimentos) {
       const lancamento = await criarLancamentoContabilDoMovimento(
@@ -204,12 +297,22 @@ router.post("/massa", autenticar, async (req, res) => {
         req.usuario
       )
 
+      const financeiro = await criarFinanceiroDoMovimento(
+        movimento,
+        req.usuario
+      )
+
       lancamentosContabeis.push(lancamento)
+
+      if (financeiro) {
+        financeiros.push(financeiro)
+      }
     }
 
     res.status(201).json({
       movimentos,
       lancamentosContabeis,
+      financeiros,
     })
   } catch (error) {
     console.error("ERRO AO CRIAR MOVIMENTOS EM MASSA:", error)
@@ -255,9 +358,15 @@ router.put("/:id", autenticar, async (req, res) => {
       req.usuario
     )
 
+    const financeiro = await criarFinanceiroDoMovimento(
+      movimento,
+      req.usuario
+    )
+
     res.json({
       movimento,
       lancamentoContabil,
+      financeiro,
     })
   } catch (error) {
     console.error("ERRO AO ATUALIZAR MOVIMENTO:", error)
@@ -291,6 +400,7 @@ router.delete("/:id", autenticar, async (req, res) => {
     }
 
     await removerLancamentoContabilDoMovimento(movimento)
+    await removerFinanceiroDoMovimento(movimento)
 
     await movimento.destroy()
 

@@ -67,54 +67,66 @@ function obterPlanoContaDaObrigacao(nomeObrigacao) {
   return "Fiscal"
 }
 
-function deveEntrarNoFinanceiro(obrigacao) {
-  const texto = String(obrigacao?.obrigacao || "").toLowerCase()
+function ehReceitaDoEscritorio(nomeObrigacao) {
+  const texto = String(nomeObrigacao || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
 
-  return (
-    texto.includes("honor") ||
-    texto.includes("serviço") ||
-    texto.includes("servico") ||
-    texto.includes("certificado") ||
-    texto.includes("abertura") ||
-    texto.includes("regularização") ||
-    texto.includes("regularizacao") ||
-    texto.includes("consultoria")
-  )
+  const palavrasChave = [
+    "honor",
+    "servico avulso",
+    "servicos avulsos",
+    "certificado",
+    "abertura mei",
+    "regularizacao",
+    "consultoria",
+    "declaracao",
+    "alteracao contratual",
+    "baixa mei",
+  ]
+
+  return palavrasChave.some((palavra) => texto.includes(palavra))
 }
 
-async function criarFinanceiroDaObrigacaoFiscal(obrigacao, usuario, origemAcao = "Fiscal") {
-  if (!deveEntrarNoFinanceiro(obrigacao)) {
-    return null
-  }
+async function criarFinanceiroFiscal(obrigacao, usuario) {
+  const nomeObrigacao = obrigacao.obrigacao || "Serviço"
+
+  if (!ehReceitaDoEscritorio(nomeObrigacao)) return null
 
   const valor = valorSeguro(obrigacao.valor)
 
-  if (valor <= 0) {
-    return null
-  }
+  if (valor <= 0) return null
 
-  const referenciaOrigem = `fiscal:${obrigacao.id}`
+  const referencia = `fiscal:${obrigacao.id}`
 
   const existente = await Financeiro.findOne({
     where: {
-      referenciaOrigem,
-      empresaId: usuario?.empresaId || obrigacao.empresaId || null,
+      observacao: referencia,
     },
   })
 
+  const hoje = new Date().toISOString().slice(0, 10)
+  const vencimento = obrigacao.vencimento || hoje
+  const recebido = [
+    "Pago",
+    "Pago pelo cliente",
+    "Concluído",
+    "Enviado",
+  ].includes(obrigacao.status)
+
   const dadosFinanceiro = {
-    descricao: `${obrigacao.obrigacao || "Serviço"} - ${obrigacao.competencia || ""}`.trim(),
+    descricao: `${nomeObrigacao}${obrigacao.competencia ? ` - ${obrigacao.competencia}` : ""}`,
     cliente: usuario?.clienteVinculado || obrigacao.cliente || "Cliente",
     tipo: "Receber",
-    centroCusto: obterPlanoContaDaObrigacao(obrigacao.obrigacao),
-    formaPagamento: "Confirmado pelo cliente",
+    centroCusto: obterPlanoContaDaObrigacao(nomeObrigacao),
+    formaPagamento: "Automático - Fiscal",
     valor: String(valor),
-    vencimento: new Date().toISOString().slice(0, 10),
-    status: "Recebido",
-    dataRecebimento: new Date().toISOString().slice(0, 10),
+    vencimento,
+    status: recebido ? "Recebido" : "Pendente",
+    dataRecebimento: recebido ? hoje : null,
     anexos: Array.isArray(obrigacao.anexos) ? obrigacao.anexos : [],
-    origem: origemAcao,
-    referenciaOrigem,
+    origem: "Automático - Fiscal",
     empresaId: usuario?.empresaId || obrigacao.empresaId || null,
   }
 
@@ -123,7 +135,10 @@ async function criarFinanceiroDaObrigacaoFiscal(obrigacao, usuario, origemAcao =
     return existente
   }
 
-  return Financeiro.create(dadosFinanceiro)
+  return Financeiro.create({
+    ...dadosFinanceiro,
+    observacao: referencia,
+  })
 }
 
 function limparNomeArquivo(nome) {
@@ -295,13 +310,13 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       req.usuario
     )
 
-    const financeiro = await criarFinanceiroDaObrigacaoFiscal(
+    const financeiro = await criarFinanceiroFiscal(
       {
         ...obrigacao.dataValues,
         cliente: req.usuario.clienteVinculado,
+        status: "Pago pelo cliente",
       },
-      req.usuario,
-      "Fiscal - Cliente marcou pago"
+      req.usuario
     )
 
     await Notificacao.create({
@@ -414,13 +429,13 @@ router.post(
         req.usuario
       )
 
-      const financeiro = await criarFinanceiroDaObrigacaoFiscal(
+      const financeiro = await criarFinanceiroFiscal(
         {
           ...obrigacaoAtualizada.dataValues,
           cliente: req.usuario.clienteVinculado,
+          status: "Pago pelo cliente",
         },
-        req.usuario,
-        "Fiscal - Recibo anexado"
+        req.usuario
       )
 
       await Notificacao.create({
@@ -483,10 +498,12 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
       empresaId: req.usuario.empresaId || obrigacao.empresaId || null,
     })
 
-    const financeiro = await criarFinanceiroDaObrigacaoFiscal(
-      obrigacao,
-      req.usuario,
-      "Fiscal - Escritório concluiu"
+    const financeiro = await criarFinanceiroFiscal(
+      {
+        ...obrigacao.dataValues,
+        status: "Concluído",
+      },
+      req.usuario
     )
 
     await obrigacao.update({
@@ -552,20 +569,7 @@ router.put("/:id", autenticar, async (req, res) => {
       alertaFiscal: alerta.alertaFiscal,
     })
 
-    let financeiro = null
-
-    if (["Pago", "Pago pelo cliente", "Concluído", "Recebido"].includes(req.body.status)) {
-      financeiro = await criarFinanceiroDaObrigacaoFiscal(
-        obrigacao,
-        req.usuario,
-        "Fiscal - Atualização manual"
-      )
-    }
-
-    res.json({
-      obrigacao,
-      financeiro,
-    })
+    res.json(obrigacao)
   } catch (error) {
     console.error(error)
 
