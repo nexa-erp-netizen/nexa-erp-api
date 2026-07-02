@@ -72,7 +72,27 @@ alvara: {
     allowNull: true,
   },
 
+  cep: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
   endereco: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  numero: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  bairro: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  complemento: {
     type: DataTypes.STRING,
     allowNull: true,
   },
