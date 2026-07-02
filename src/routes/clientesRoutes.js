@@ -17,7 +17,11 @@ function limparDadosCliente(body) {
     email: body.email || null,
     cnpj: body.cnpj || null,
     regime: body.regime || null,
+    cep: body.cep || null,
     endereco: body.endereco || null,
+    numero: body.numero || null,
+    bairro: body.bairro || null,
+    complemento: body.complemento || null,
     cidade: body.cidade || null,
     estado: body.estado || null,
     tituloEleitor: body.tituloEleitor || null,
@@ -129,8 +133,11 @@ router.post(
       const arquivos = []
 
       for (const file of req.files || []) {
-        const nomeLimpo =
-          file.originalname.replace(/\s+/g, "-")
+        const nomeLimpo = file.originalname
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-zA-Z0-9.\-_]/g, "-")
+          .replace(/-+/g, "-")
 
         const caminhoArquivo =
           `clientes/${Date.now()}-${nomeLimpo}`
