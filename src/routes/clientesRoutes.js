@@ -33,6 +33,7 @@ function limparDadosCliente(body) {
     alvara: body.alvara || null,
     observacao: body.observacao || null,
     anexos: body.anexos || [],
+    anotacoes: Array.isArray(body.anotacoes) ? body.anotacoes : [],
   }
 }
 
