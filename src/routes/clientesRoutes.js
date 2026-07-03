@@ -34,6 +34,7 @@ function limparDadosCliente(body) {
     observacao: body.observacao || null,
     anexos: body.anexos || [],
     anotacoes: Array.isArray(body.anotacoes) ? body.anotacoes : [],
+    proximasAcoes: Array.isArray(body.proximasAcoes) ? body.proximasAcoes : [],
   }
 }
 

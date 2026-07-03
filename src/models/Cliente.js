@@ -123,6 +123,12 @@ alvara: {
     defaultValue: [],
   },
 
+  proximasAcoes: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: [],
+  },
+
   empresaId: {
     type: DataTypes.INTEGER,
     allowNull: true,
