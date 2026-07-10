@@ -72,6 +72,47 @@ alvara: {
     allowNull: true,
   },
 
+  ramoAtividade: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  anexoSimples: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  utilizaFatorR: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  aliquotaIss: {
+    type: DataTypes.DECIMAL(7, 4),
+    allowNull: true,
+  },
+
+  dataOpcaoRegime: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
+  dataInicioAtividades: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
+  situacaoEmpresa: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: "Ativa",
+  },
+
+  observacoesTributarias: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+
   cep: {
     type: DataTypes.STRING,
     allowNull: true,
