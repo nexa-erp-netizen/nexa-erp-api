@@ -24,6 +24,7 @@ const Notificacao = require("./src/models/Notificacao")
 const FormaPagamento = require("./src/models/FormaPagamento")
 const Declaracao = require("./src/models/Declaracao")
 const CertificadoDigital = require("./src/models/CertificadoDigital")
+const ProcuracaoEcac = require("./src/models/ProcuracaoEcac")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
@@ -46,6 +47,7 @@ const notificacoesRoutes = require("./src/routes/notificacoesRoutes")
 const formasPagamentoRoutes = require("./src/routes/formasPagamentoRoutes")
 const declaracoesRoutes = require("./src/routes/declaracoesRoutes")
 const certificadosDigitaisRoutes = require("./src/routes/certificadosDigitaisRoutes")
+const procuracoesEcacRoutes = require("./src/routes/procuracoesEcacRoutes")
 
 const app = express()
 
@@ -85,6 +87,7 @@ app.use("/notificacoes", notificacoesRoutes)
 app.use("/formas-pagamento", formasPagamentoRoutes)
 app.use("/declaracoes", declaracoesRoutes)
 app.use("/certificados-digitais", certificadosDigitaisRoutes)
+app.use("/procuracoes-ecac", procuracoesEcacRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
