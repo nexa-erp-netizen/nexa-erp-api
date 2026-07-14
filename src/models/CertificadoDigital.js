@@ -35,6 +35,32 @@ const CertificadoDigital = sequelize.define("CertificadoDigital", {
     type: DataTypes.STRING,
     allowNull: true,
   },
+  tipoLocalizacao: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: "Computador",
+  },
+  caminhoPasta: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  nomeArquivo: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+  possuiBackup: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  localBackup: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  dataUltimoBackup: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
   responsavel: {
     type: DataTypes.STRING,
     allowNull: true,
