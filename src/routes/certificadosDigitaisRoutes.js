@@ -1,6 +1,5 @@
 const express = require("express")
 const CertificadoDigital = require("../models/CertificadoDigital")
-const HistoricoCertificado = require("../models/HistoricoCertificado")
 const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
