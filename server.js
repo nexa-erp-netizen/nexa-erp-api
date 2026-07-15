@@ -53,6 +53,7 @@ const ecacRoutes = require("./src/routes/ecacRoutes")
 const memoriaRoutes = require("./src/routes/memoriaRoutes")
 const recomendacoesRoutes = require("./src/routes/recomendacoesRoutes")
 const consultoriaTributariaRoutes = require("./src/routes/consultoriaTributariaRoutes")
+const conversaRoutes = require("./src/routes/conversaRoutes")
 
 const app = express()
 
@@ -97,6 +98,7 @@ app.use("/ecac", ecacRoutes)
 app.use("/memoria", memoriaRoutes)
 app.use("/recomendacoes", recomendacoesRoutes)
 app.use("/consultoria-tributaria", consultoriaTributariaRoutes)
+app.use("/conversa", conversaRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
