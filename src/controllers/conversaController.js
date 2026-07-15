@@ -4,6 +4,7 @@ const Financeiro = require("../models/Financeiro")
 const DocumentoDigital = require("../models/DocumentoDigital")
 const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
+const Usuario = require("../models/Usuario")
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
@@ -41,7 +42,7 @@ async function contextoCliente(clienteId, usuario) {
   return { cliente, nome, fiscais, financeiros, documentos, certificados, procuracoes }
 }
 
-function respostaCliente(ctx, pergunta) {
+function respostaCliente(ctx, pergunta, nomeUsuario = "Administrador") {
   const pendFiscal = ctx.fiscais.filter((i) => !encerrado(i.status))
   const pendFin = ctx.financeiros.filter((i) => !encerrado(i.status))
   const pendDocs = ctx.documentos.filter((i) => !encerrado(i.status))
@@ -68,7 +69,7 @@ function respostaCliente(ctx, pergunta) {
   else if (pendDocs.length) recomendacao = "Eu resolveria os documentos pendentes para evitar bloqueios no próximo fechamento."
 
   const alvo = normalizar(pergunta)
-  let resposta = `William, analisei ${ctx.nome}. Nos dados disponíveis, identifiquei ${pendFiscal.length + pendFin.length + pendDocs.length} item(ns) em aberto.`
+  let resposta = `${nomeUsuario}, analisei ${ctx.nome}. Nos dados disponíveis, identifiquei ${pendFiscal.length + pendFin.length + pendDocs.length} item(ns) em aberto.`
   if (alvo.includes("certificado")) resposta = certificado ? `O certificado de ${ctx.nome} está cadastrado${diasCert === null ? "." : diasCert < 0 ? `, mas venceu há ${Math.abs(diasCert)} dia(s).` : ` e vence em ${diasCert} dia(s).`}` : `Ainda não encontrei certificado digital cadastrado para ${ctx.nome}.`
   else if (alvo.includes("procuracao") || alvo.includes("ecac")) resposta = procuracao ? `A procuração e-CAC de ${ctx.nome} está cadastrada até ${procuracao.dataValidade || "data não informada"}.` : `Não encontrei procuração e-CAC cadastrada para ${ctx.nome}.`
   else if (alvo.includes("tribut") || alvo.includes("anexo") || alvo.includes("regime")) resposta = `Minha leitura tributária inicial de ${ctx.nome} considera o regime ${ctx.cliente.regime || "ainda não informado"} e o ramo ${ctx.cliente.ramo || "ainda não informado"}. Para uma conclusão mais forte, a Nexa precisa dos dados completos de faturamento, folha e atividade.`
@@ -76,7 +77,7 @@ function respostaCliente(ctx, pergunta) {
   return { resposta, pontos, recomendacao, fundamentos }
 }
 
-async function respostaEscritorio(pergunta) {
+async function respostaEscritorio(pergunta, nomeUsuario = "Administrador") {
   const [clientes, fiscais, financeiros, certificados, procuracoes] = await Promise.all([
     Cliente.findAll(), Fiscal.findAll(), Financeiro.findAll(), CertificadoDigital.findAll(), ProcuracaoEcac.findAll(),
   ])
@@ -105,7 +106,7 @@ async function respostaEscritorio(pergunta) {
   else if (certProximos.length) recomendacao = "Eu revisaria primeiro os certificados e procurações próximos do vencimento."
 
   const q = normalizar(pergunta)
-  let resposta = `William, o escritório tem ${ativos.length} cliente(s) ativo(s) na rotina. Encontrei ${fiscaisVencidos.length} pendência(s) fiscal(is) vencida(s) e ${certProximos.length + procProximas.length} alerta(s) de identidade digital.`
+  let resposta = `${nomeUsuario}, o escritório tem ${ativos.length} cliente(s) ativo(s) na rotina. Encontrei ${fiscaisVencidos.length} pendência(s) fiscal(is) vencida(s) e ${certProximos.length + procProximas.length} alerta(s) de identidade digital.`
   if (q.includes("certificado")) resposta = `Encontrei ${certProximos.length} certificado(s) vencido(s) ou com vencimento nos próximos 30 dias.`
   else if (q.includes("cliente") && (q.includes("atencao") || q.includes("prior"))) resposta = fiscaisVencidos.length ? `Os clientes ligados às ${fiscaisVencidos.length} obrigações fiscais vencidas devem aparecer primeiro na sua análise de hoje.` : "Não encontrei obrigações fiscais vencidas; priorize os vencimentos mais próximos e os alertas digitais."
   else if (q.includes("recomenda") || q.includes("agora")) resposta = `Minha recomendação para agora é: ${recomendacao}`
@@ -119,14 +120,17 @@ async function conversar(req, res) {
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
     if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
 
+    const usuarioBanco = await Usuario.findByPk(req.usuario.id)
+    const nomeUsuario = usuarioBanco?.nome || "Administrador"
+
     let resultado
     if (clienteId) {
       const ctx = await contextoCliente(clienteId, req.usuario)
       if (!ctx) return res.status(404).json({ message: "Cliente não encontrado" })
       if (ctx.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
-      resultado = respostaCliente(ctx, mensagem)
+      resultado = respostaCliente(ctx, mensagem, nomeUsuario)
     } else {
-      resultado = await respostaEscritorio(mensagem)
+      resultado = await respostaEscritorio(mensagem, nomeUsuario)
     }
 
     return res.json({
