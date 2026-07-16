@@ -6,9 +6,6 @@ const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const Usuario = require("../models/Usuario")
 
-const OPENAI_URL = "https://api.openai.com/v1/responses"
-const MODELO_PADRAO = process.env.OPENAI_MODEL || "gpt-4.1-mini"
-
 function normalizar(valor) {
   return String(valor || "")
     .normalize("NFD")
@@ -221,84 +218,15 @@ Retorne SOMENTE JSON válido, sem markdown, no formato:
 {"resposta":"texto natural","pontos":["ponto opcional"],"recomendacao":"recomendação opcional","fundamentos":["fundamento opcional"]}`
 }
 
-function extrairTextoResposta(dados) {
-  if (typeof dados?.output_text === "string" && dados.output_text.trim()) return dados.output_text.trim()
-  const partes = []
-  for (const item of dados?.output || []) {
-    for (const conteudo of item?.content || []) {
-      if (conteudo?.type === "output_text" && conteudo?.text) partes.push(conteudo.text)
-    }
-  }
-  return partes.join("\n").trim()
-}
-
-function interpretarJson(texto) {
-  const limpo = String(texto || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim()
-  try {
-    const obj = JSON.parse(limpo)
-    return {
-      resposta: String(obj.resposta || "Não consegui formular a resposta.").trim(),
-      pontos: Array.isArray(obj.pontos) ? obj.pontos.map(String).slice(0, 12) : [],
-      recomendacao: String(obj.recomendacao || "").trim(),
-      fundamentos: Array.isArray(obj.fundamentos) ? obj.fundamentos.map(String).slice(0, 12) : [],
-    }
-  } catch {
-    return { resposta: limpo || "Não consegui formular a resposta.", pontos: [], recomendacao: "", fundamentos: [] }
-  }
-}
-
-async function gerarResposta({ mensagem, nomeUsuario, contexto, historico }) {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    const erro = new Error("A IA generativa ainda não foi configurada na API. Adicione OPENAI_API_KEY nas variáveis do Render.")
-    erro.statusCode = 503
-    throw erro
-  }
-
-  const entrada = [
-    ...limparHistorico(historico).map((item) => ({
-      role: item.autor === "usuario" ? "user" : "assistant",
-      content: item.texto,
-    })),
-    {
-      role: "user",
-      content: `PERGUNTA ATUAL:\n${mensagem}\n\nCONTEXTO NEXA (dados reais do sistema):\n${JSON.stringify(contexto)}`,
-    },
-  ]
-
-  const resposta = await fetch(OPENAI_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MODELO_PADRAO,
-      instructions: instrucoesNexa(nomeUsuario),
-      input: entrada,
-      max_output_tokens: 1200,
-      temperature: 0.35,
-    }),
-  })
-
-  const dados = await resposta.json().catch(() => ({}))
-  if (!resposta.ok) {
-    const detalhe = dados?.error?.message || `Falha do provedor de IA (${resposta.status})`
-    const erro = new Error(detalhe)
-    erro.statusCode = resposta.status === 429 ? 429 : 502
-    throw erro
-  }
-
-  return interpretarJson(extrairTextoResposta(dados))
-}
-
-async function conversar(req, res) {
+async function prepararContexto(req, res) {
   try {
     const mensagem = String(req.body?.mensagem || "").trim()
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
     const historico = req.body?.historico
 
-    if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
+    if (!mensagem) {
+      return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
+    }
 
     const usuarioBanco = await Usuario.findByPk(req.usuario.id)
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
@@ -310,21 +238,25 @@ async function conversar(req, res) {
     if (!contexto) return res.status(404).json({ message: "Cliente não encontrado" })
     if (contexto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
 
-    const resultado = await gerarResposta({ mensagem, nomeUsuario, contexto, historico })
-
     return res.json({
-      ...resultado,
-      modo: "generativo",
-      modelo: MODELO_PADRAO,
-      respondidoEm: new Date().toISOString(),
-      aviso: "A resposta utiliza os dados disponíveis na Nexa e apoia, mas não substitui, a decisão profissional do contador.",
+      nomeUsuario,
+      contexto,
+      historico: limparHistorico(historico),
+      instrucoes: instrucoesNexa(nomeUsuario),
+      preparadoEm: new Date().toISOString(),
     })
   } catch (error) {
-    console.error("ERRO NA CONVERSA GENERATIVA DA NEXA:", error)
-    return res.status(error.statusCode || 500).json({
-      message: error.message || "Erro ao conversar com a Nexa",
+    console.error("ERRO AO PREPARAR CONTEXTO DA NEXA:", error)
+    return res.status(500).json({
+      message: "Erro ao preparar o contexto da conversa",
     })
   }
 }
 
-module.exports = { conversar }
+async function conversar(req, res) {
+  return res.status(409).json({
+    message: "A conversa generativa agora é processada localmente pelo Ollama. Atualize o WEB da Etapa 4.1.1.",
+  })
+}
+
+module.exports = { conversar, prepararContexto }
