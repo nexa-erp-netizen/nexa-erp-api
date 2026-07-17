@@ -6,8 +6,10 @@ const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const Usuario = require("../models/Usuario")
 
-const OPENAI_URL = "https://api.openai.com/v1/responses"
-const MODELO_PADRAO = process.env.OPENAI_MODEL || "gpt-4.1-mini"
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
+const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
+const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 
 function normalizar(valor) {
   return String(valor || "")
@@ -247,7 +249,7 @@ function limparHistorico(historico) {
   return historico
     .slice(-14)
     .map((item) => ({
-      autor: item?.autor === "Você" ? "usuario" : "nexa",
+      autor: ["voce", "usuario", "user"].includes(normalizar(item?.autor)) ? "usuario" : "nexa",
       texto: String(item?.texto || "").slice(0, 2500),
     }))
     .filter((item) => item.texto)
@@ -268,15 +270,8 @@ Retorne SOMENTE JSON válido, sem markdown, no formato:
 {"resposta":"texto natural","pontos":["ponto opcional"],"recomendacao":"recomendação opcional","fundamentos":["fundamento opcional"]}`
 }
 
-function extrairTextoResposta(dados) {
-  if (typeof dados?.output_text === "string" && dados.output_text.trim()) return dados.output_text.trim()
-  const partes = []
-  for (const item of dados?.output || []) {
-    for (const conteudo of item?.content || []) {
-      if (conteudo?.type === "output_text" && conteudo?.text) partes.push(conteudo.text)
-    }
-  }
-  return partes.join("\n").trim()
+function extrairTextoGroq(dados) {
+  return String(dados?.choices?.[0]?.message?.content || "").trim()
 }
 
 function interpretarJson(texto) {
@@ -295,48 +290,144 @@ function interpretarJson(texto) {
 }
 
 async function gerarResposta({ mensagem, nomeUsuario, contexto, historico }) {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    const erro = new Error("A IA generativa ainda não foi configurada na API. Adicione OPENAI_API_KEY nas variáveis do Render.")
+  if (PROVEDOR_PADRAO !== "groq") {
+    const erro = new Error(`Provedor de IA não suportado: ${PROVEDOR_PADRAO}`)
     erro.statusCode = 503
+    erro.providerFailure = true
     throw erro
   }
 
-  const entrada = [
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    const erro = new Error("A Groq ainda não foi configurada na API. Adicione GROQ_API_KEY nas variáveis do Render.")
+    erro.statusCode = 503
+    erro.providerFailure = true
+    throw erro
+  }
+
+  const mensagens = [
+    { role: "system", content: instrucoesNexa(nomeUsuario) },
     ...limparHistorico(historico).map((item) => ({
       role: item.autor === "usuario" ? "user" : "assistant",
       content: item.texto,
     })),
     {
       role: "user",
-      content: `PERGUNTA ATUAL:\n${mensagem}\n\nCONTEXTO NEXA (dados reais do sistema):\n${JSON.stringify(contexto)}`,
+      content: `PERGUNTA ATUAL:
+${mensagem}
+
+CONTEXTO NEXA (dados reais do sistema):
+${JSON.stringify(contexto)}`,
     },
   ]
 
-  const resposta = await fetch(OPENAI_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: MODELO_PADRAO,
-      instructions: instrucoesNexa(nomeUsuario),
-      input: entrada,
-      max_output_tokens: 1200,
-      temperature: 0.35,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 45000)
 
-  const dados = await resposta.json().catch(() => ({}))
-  if (!resposta.ok) {
-    const detalhe = dados?.error?.message || `Falha do provedor de IA (${resposta.status})`
-    const erro = new Error(detalhe)
-    erro.statusCode = resposta.status === 429 ? 429 : 502
-    throw erro
+  try {
+    const resposta = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: MODELO_PADRAO,
+        messages: mensagens,
+        max_tokens: 1200,
+        temperature: 0.35,
+      }),
+    })
+
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) {
+      const detalhe = dados?.error?.message || `Falha da Groq (${resposta.status})`
+      const erro = new Error(detalhe)
+      erro.statusCode = resposta.status === 429 ? 429 : 502
+      erro.providerFailure = true
+      throw erro
+    }
+
+    const texto = extrairTextoGroq(dados)
+    if (!texto) {
+      const erro = new Error("A Groq não retornou uma resposta.")
+      erro.statusCode = 502
+      erro.providerFailure = true
+      throw erro
+    }
+
+    return interpretarJson(texto)
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("A Groq demorou mais de 45 segundos para responder.")
+      timeoutError.statusCode = 504
+      timeoutError.providerFailure = true
+      throw timeoutError
+    }
+
+    if (!error.statusCode) {
+      error.statusCode = 502
+      error.providerFailure = true
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function status(req, res) {
+  const apiKey = process.env.GROQ_API_KEY
+  const base = {
+    provedorPrincipal: PROVEDOR_PADRAO,
+    groq: {
+      configurada: Boolean(apiKey),
+      online: false,
+      modelo: MODELO_PADRAO,
+    },
+    ollama: {
+      tipo: "local",
+      verificadoNoNavegador: true,
+    },
   }
 
-  return interpretarJson(extrairTextoResposta(dados))
+  if (PROVEDOR_PADRAO !== "groq" || !apiKey) {
+    return res.json(base)
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 7000)
+
+  try {
+    const resposta = await fetch(GROQ_MODELOS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    })
+    const dados = await resposta.json().catch(() => ({}))
+    const modelos = Array.isArray(dados?.data) ? dados.data.map((item) => item.id) : []
+
+    return res.json({
+      ...base,
+      groq: {
+        ...base.groq,
+        online: resposta.ok,
+        modeloDisponivel: resposta.ok ? modelos.includes(MODELO_PADRAO) : false,
+        mensagem: resposta.ok ? "Groq conectada" : (dados?.error?.message || `Groq respondeu com status ${resposta.status}`),
+      },
+    })
+  } catch (error) {
+    return res.json({
+      ...base,
+      groq: {
+        ...base.groq,
+        online: false,
+        modeloDisponivel: false,
+        mensagem: error?.name === "AbortError" ? "Tempo esgotado ao verificar a Groq" : "Não foi possível verificar a Groq",
+      },
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 async function contexto(req, res) {
@@ -404,18 +495,20 @@ async function conversar(req, res) {
     const usuarioBanco = await Usuario.findByPk(req.usuario.id)
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
 
-    const contexto = clienteId
+    const contextoCompleto = clienteId
       ? await montarContextoCliente(clienteId, req.usuario)
       : await montarContextoEscritorio(req.usuario)
 
-    if (!contexto) return res.status(404).json({ message: "Cliente não encontrado" })
-    if (contexto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
+    if (!contextoCompleto) return res.status(404).json({ message: "Cliente não encontrado" })
+    if (contextoCompleto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
 
-    const resultado = await gerarResposta({ mensagem, nomeUsuario, contexto, historico })
+    const contextoNexa = selecionarContextoParaPergunta(contextoCompleto, mensagem)
+    const resultado = await gerarResposta({ mensagem, nomeUsuario, contexto: contextoNexa, historico })
 
     return res.json({
       ...resultado,
-      modo: "generativo",
+      modo: "groq-online",
+      provedor: "groq",
       modelo: MODELO_PADRAO,
       respondidoEm: new Date().toISOString(),
       aviso: "A resposta utiliza os dados disponíveis na Nexa e apoia, mas não substitui, a decisão profissional do contador.",
@@ -424,8 +517,10 @@ async function conversar(req, res) {
     console.error("ERRO NA CONVERSA GENERATIVA DA NEXA:", error)
     return res.status(error.statusCode || 500).json({
       message: error.message || "Erro ao conversar com a Nexa",
+      providerFailure: Boolean(error.providerFailure),
+      provedor: PROVEDOR_PADRAO,
     })
   }
 }
 
-module.exports = { conversar, contexto }
+module.exports = { conversar, contexto, status }
