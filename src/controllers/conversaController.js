@@ -11,12 +11,223 @@ const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
 const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 
+
+const PAGINAS_NAVEGACAO = [
+  { pagina: "Dashboard", aliases: ["dashboard", "painel inicial", "pagina inicial", "inicio"] },
+  { pagina: "Escritório Digital", aliases: ["escritorio digital"] },
+  { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes"] },
+  { pagina: "Serviços", aliases: ["servicos"] },
+  { pagina: "Plano de Contas", aliases: ["plano de contas"] },
+  { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamentos"] },
+  { pagina: "Movimentos Clientes", aliases: ["movimentos dos clientes", "movimentos clientes"] },
+  { pagina: "Pendências Clientes", aliases: ["pendencias dos clientes", "pendencias clientes", "pendencias"] },
+  { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
+  { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
+  { pagina: "WhatsApp Inteligente", aliases: ["whatsapp inteligente", "whatsapp"] },
+  { pagina: "Assistente do Dia", aliases: ["assistente do dia", "prioridades do dia"] },
+  { pagina: "Laboratório Tributário", aliases: ["laboratorio tributario", "laboratorio"] },
+  { pagina: "Certificados Digitais", aliases: ["certificados digitais", "certificados", "certificado digital"] },
+  { pagina: "Procurações e-CAC", aliases: ["procuracoes e-cac", "procuracoes ecac", "procuracoes"] },
+  { pagina: "Identidade Digital", aliases: ["identidade digital"] },
+  { pagina: "Central e-CAC", aliases: ["central e-cac", "central ecac", "e-cac", "ecac"] },
+  { pagina: "Memória da Nexa", aliases: ["memoria da nexa", "memoria nexa"] },
+  { pagina: "Segundo Contador", aliases: ["segundo contador"] },
+  { pagina: "Consultora Tributária", aliases: ["consultora tributaria", "consultora"] },
+  { pagina: "Conversa com a Nexa", aliases: ["conversa com a nexa", "nexa assist"] },
+  { pagina: "Radar Inteligente", aliases: ["radar inteligente", "radar"] },
+  { pagina: "Fiscal", aliases: ["modulo fiscal", "tela fiscal", "fiscal"] },
+  { pagina: "Financeiro", aliases: ["modulo financeiro", "tela financeira", "financeiro"] },
+  { pagina: "Relatórios", aliases: ["relatorios"] },
+  { pagina: "Usuários", aliases: ["usuarios"] },
+  { pagina: "Notificações", aliases: ["notificacoes"] },
+  { pagina: "Agenda", aliases: ["agenda"] },
+  { pagina: "Backup Sistema", aliases: ["backup do sistema", "backup sistema", "backup"] },
+  { pagina: "Sobre", aliases: ["sobre a nexa", "sobre"] },
+  { pagina: "Calculadora IRPF MEI", aliases: ["calculadora irpf mei", "calculadora irpf"] },
+  { pagina: "DRE Gerencial", aliases: ["dre gerencial", "dre"] },
+]
+
+const PAGINAS_POR_PERFIL = {
+  Administrador: new Set(PAGINAS_NAVEGACAO.map((item) => item.pagina)),
+  Funcionário: new Set([
+    "Dashboard", "Notificações", "Escritório Digital", "Clientes", "Lançamentos Contábeis",
+    "Fiscal", "Financeiro", "Movimentos Clientes", "Pendências Clientes", "Acesso Rápido Fiscal",
+    "Documentos Digitais", "WhatsApp Inteligente", "Assistente do Dia", "Laboratório Tributário",
+    "Certificados Digitais", "Procurações e-CAC", "Identidade Digital", "Central e-CAC",
+    "Memória da Nexa", "Segundo Contador", "Consultora Tributária", "Conversa com a Nexa",
+    "Radar Inteligente", "Relatórios", "Calculadora IRPF MEI", "Agenda", "Sobre",
+  ]),
+  Cliente: new Set(["Documentos Digitais"]),
+}
+PAGINAS_POR_PERFIL.Funcionario = PAGINAS_POR_PERFIL["Funcionário"]
+
+const PAGINAS_COM_FILTRO_CLIENTE = new Set([
+  "Fiscal",
+  "Documentos Digitais",
+  "Pendências Clientes",
+  "Movimentos Clientes",
+  "Certificados Digitais",
+  "Procurações e-CAC",
+  "Memória da Nexa",
+  "Segundo Contador",
+  "Consultora Tributária",
+])
+
+const PALAVRAS_IGNORADAS_CLIENTE = new Set([
+  "com", "das", "dos", "de", "da", "do", "e", "empresa", "mei", "ltda", "me",
+])
+
 function normalizar(valor) {
   return String(valor || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim()
+}
+
+
+function escaparRegex(valor) {
+  return String(valor || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function contemPalavra(texto, palavra) {
+  return new RegExp(`(^|\\s)${escaparRegex(palavra)}(?=\\s|$)`).test(texto)
+}
+
+function configuracaoPaginaNoTexto(texto) {
+  const candidatos = PAGINAS_NAVEGACAO
+    .flatMap((item) => item.aliases.map((alias) => ({ ...item, alias: normalizar(alias) })))
+    .sort((a, b) => b.alias.length - a.alias.length)
+
+  return candidatos.find((item) => texto.includes(item.alias)) || null
+}
+
+function pareceComandoNavegacao(texto) {
+  if (configuracaoPaginaNoTexto(texto)?.alias === texto) return true
+
+  return /(^|\s)(abra|abre|abrir|acesse|acessar|va|ir|navegue|navegar|mostre|mostrar|exiba|exibir|volte|retorne|quero ver|me leve|direcione)(\s|$)/.test(texto)
+}
+
+function pontuarClienteNoTexto(cliente, texto) {
+  const nome = normalizar(nomeCliente(cliente))
+  if (!nome) return 0
+  if (texto.includes(nome)) return 1000 + nome.length
+
+  const tokens = [...new Set(nome.split(/\s+/).filter((token) => token.length >= 3 && !PALAVRAS_IGNORADAS_CLIENTE.has(token)))]
+  return tokens.reduce((pontos, token) => pontos + (contemPalavra(texto, token) ? token.length : 0), 0)
+}
+
+function localizarClienteNoTexto(clientes, texto) {
+  const pontuados = clientes
+    .map((cliente) => ({ cliente, pontos: pontuarClienteNoTexto(cliente, texto) }))
+    .filter((item) => item.pontos > 0)
+    .sort((a, b) => b.pontos - a.pontos)
+
+  if (!pontuados.length) return { cliente: null, ambiguo: false }
+  if (pontuados.length > 1 && pontuados[0].pontos === pontuados[1].pontos) {
+    return { cliente: null, ambiguo: true }
+  }
+
+  return { cliente: pontuados[0].cliente, ambiguo: false }
+}
+
+function usuarioPodeAbrirPagina(usuario, pagina) {
+  const perfil = usuario?.perfil || ""
+  return Boolean(PAGINAS_POR_PERFIL[perfil]?.has(pagina))
+}
+
+function respostaDeComando({ resposta, acao = null }) {
+  return {
+    resposta,
+    pontos: [],
+    recomendacao: "",
+    fundamentos: [],
+    modo: "comando-navegacao",
+    provedor: "sistema",
+    modelo: "Nexa Actions 4.2",
+    acao,
+    respondidoEm: new Date().toISOString(),
+    aviso: "Comando seguro de navegação. Nenhum dado foi alterado.",
+  }
+}
+
+async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
+  const texto = normalizar(mensagem)
+  if (!texto || !pareceComandoNavegacao(texto)) return null
+
+  let clientes = await Cliente.findAll({
+    attributes: ["id", "nome", "regime", "situacaoEmpresa"],
+    order: [["nome", "ASC"]],
+  })
+
+  if (usuario?.perfil === "Cliente" && usuario?.clienteVinculado) {
+    clientes = clientes.filter((cliente) => normalizar(nomeCliente(cliente)) === normalizar(usuario.clienteVinculado))
+  }
+
+  const clienteAtual = clienteId
+    ? clientes.find((cliente) => String(cliente.id) === String(clienteId)) || null
+    : null
+  const localizado = localizarClienteNoTexto(clientes, texto)
+
+  if (localizado.ambiguo) {
+    return respostaDeComando({
+      resposta: "Encontrei mais de um cliente compatível. Informe o nome completo para eu abrir a tela correta.",
+    })
+  }
+
+  const referenciaContextual = /(esse cliente|esta empresa|desse cliente|deste cliente|cliente selecionado)/.test(texto)
+  const clienteReferencia = localizado.cliente || (referenciaContextual ? clienteAtual : null)
+  const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*cliente|dados.*cliente)/.test(texto)
+  const mencionaClienteSingular = contemPalavra(texto, "cliente")
+
+  let paginaEncontrada = configuracaoPaginaNoTexto(texto)
+  let pagina = paginaEncontrada?.pagina || null
+  let alvo = "pagina"
+
+  if (querCentralCliente || (!pagina && localizado.cliente && pareceComandoNavegacao(texto))) {
+    pagina = "Clientes"
+    alvo = "central-cliente"
+  } else if (pagina === "Clientes" && mencionaClienteSingular && (localizado.cliente || clienteAtual)) {
+    alvo = "central-cliente"
+  }
+
+  if (!pagina) return null
+
+  if (!usuarioPodeAbrirPagina(usuario, pagina)) {
+    return respostaDeComando({
+      resposta: `Seu perfil não possui permissão para abrir ${pagina}.`,
+    })
+  }
+
+  let clienteAcao = clienteReferencia
+  if (alvo === "central-cliente" && !clienteAcao) {
+    clienteAcao = clienteAtual
+  }
+
+  if (alvo === "central-cliente" && !clienteAcao) {
+    return respostaDeComando({
+      resposta: "Qual cliente você quer abrir? Selecione um cliente no campo de contexto ou informe o nome na mensagem.",
+    })
+  }
+
+  const acao = {
+    tipo: "navegar",
+    pagina,
+    alvo,
+    segura: true,
+    cliente: clienteAcao
+      ? { id: clienteAcao.id, nome: nomeCliente(clienteAcao) }
+      : null,
+  }
+
+  let resposta = pagina === "Dashboard" ? "Voltando ao Dashboard." : `Abrindo ${pagina}.`
+  if (alvo === "central-cliente" && clienteAcao) {
+    resposta = `Abrindo a Central do Cliente de ${nomeCliente(clienteAcao)}.`
+  } else if (clienteAcao && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
+    resposta = `Abrindo ${pagina} com ${nomeCliente(clienteAcao)} selecionado.`
+  }
+
+  return respostaDeComando({ resposta, acao })
 }
 
 function encerrado(status) {
@@ -494,6 +705,20 @@ async function conversar(req, res) {
 
     const usuarioBanco = await Usuario.findByPk(req.usuario.id)
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
+    const usuarioCompleto = {
+      ...(req.usuario || {}),
+      ...(usuarioBanco?.toJSON?.() || {}),
+    }
+
+    const comandoNavegacao = await detectarComandoNavegacao({
+      mensagem,
+      clienteId,
+      usuario: usuarioCompleto,
+    })
+
+    if (comandoNavegacao) {
+      return res.json(comandoNavegacao)
+    }
 
     const contextoCompleto = clienteId
       ? await montarContextoCliente(clienteId, req.usuario)
