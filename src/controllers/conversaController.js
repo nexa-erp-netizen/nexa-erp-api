@@ -195,6 +195,53 @@ async function montarContextoEscritorio(usuario) {
   }
 }
 
+
+function mensagemEhSaudacao(mensagem) {
+  const texto = normalizar(mensagem)
+  return [
+    "oi",
+    "ola",
+    "bom dia",
+    "boa tarde",
+    "boa noite",
+    "tudo bem",
+    "como vai",
+  ].includes(texto)
+}
+
+function selecionarContextoParaPergunta(contexto, mensagem) {
+  if (!contexto || typeof contexto !== "object") return contexto
+
+  const texto = normalizar(mensagem)
+  const querFiscal = /(fiscal|das|imposto|tribut|obrig|venc|pendenc)/.test(texto)
+  const querFinanceiro = /(financeir|honor|receber|pagar|valor|cobranc|inadimpl)/.test(texto)
+  const querDocumento = /(document|arquivo|anexo|certificado|procurac|ecac)/.test(texto)
+  const querCliente = /(cliente|empresa|carteira|atencao|prioridade)/.test(texto)
+  const perguntaGeral = !querFiscal && !querFinanceiro && !querDocumento && !querCliente
+
+  if (contexto.escopo === "cliente") {
+    return {
+      escopo: contexto.escopo,
+      cliente: contexto.cliente,
+      ...(querFiscal || perguntaGeral ? { obrigacoesFiscais: (contexto.obrigacoesFiscais || []).slice(0, 18) } : {}),
+      ...(querFinanceiro || perguntaGeral ? { financeiro: (contexto.financeiro || []).slice(0, 18) } : {}),
+      ...(querDocumento ? { documentos: (contexto.documentos || []).slice(0, 12) } : {}),
+      ...(querDocumento ? { certificados: (contexto.certificados || []).slice(0, 8) } : {}),
+      ...(querDocumento ? { procuracoes: (contexto.procuracoes || []).slice(0, 8) } : {}),
+    }
+  }
+
+  return {
+    escopo: contexto.escopo,
+    ...(querCliente || perguntaGeral ? { clientesAtivos: (contexto.clientesAtivos || []).slice(0, 30) } : {}),
+    ...(querFiscal || perguntaGeral ? { obrigacoesFiscais: (contexto.obrigacoesFiscais || []).slice(0, 24) } : {}),
+    ...(querFinanceiro || perguntaGeral ? { financeiroPendente: (contexto.financeiroPendente || []).slice(0, 24) } : {}),
+    ...(querDocumento ? { documentosRecentes: (contexto.documentosRecentes || []).slice(0, 12) } : {}),
+    ...(querDocumento ? { certificados: (contexto.certificados || []).slice(0, 12) } : {}),
+    ...(querDocumento ? { procuracoes: (contexto.procuracoes || []).slice(0, 12) } : {}),
+  }
+}
+
 function limparHistorico(historico) {
   if (!Array.isArray(historico)) return []
   return historico
@@ -305,17 +352,29 @@ async function contexto(req, res) {
     const usuarioBanco = await Usuario.findByPk(req.usuario.id)
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
 
-    const contextoNexa = clienteId
+    if (mensagemEhSaudacao(mensagem)) {
+      return res.json({
+        instrucoes: "Cumprimente o usuário naturalmente em português do Brasil. Seja breve e não analise dados do ERP nesta resposta.",
+        contexto: { escopo: "saudacao", usuario: { nome: nomeUsuario } },
+        historico,
+        usuario: { nome: nomeUsuario },
+        geradoEm: new Date().toISOString(),
+      })
+    }
+
+    const contextoCompleto = clienteId
       ? await montarContextoCliente(clienteId, req.usuario)
       : await montarContextoEscritorio(req.usuario)
 
-    if (!contextoNexa) {
+    if (!contextoCompleto) {
       return res.status(404).json({ message: "Cliente não encontrado" })
     }
 
-    if (contextoNexa.proibido) {
+    if (contextoCompleto.proibido) {
       return res.status(403).json({ message: "Acesso não autorizado" })
     }
+
+    const contextoNexa = selecionarContextoParaPergunta(contextoCompleto, mensagem)
 
     return res.json({
       instrucoes: instrucoesNexa(nomeUsuario)
