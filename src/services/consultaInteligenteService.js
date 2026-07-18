@@ -169,9 +169,31 @@ function localizarCliente(clientes, texto, clienteId) {
   return { ambiguo: false, cliente: candidatos[0]?.cliente || atual || null }
 }
 
-function consultaSolicitada(texto) {
-  return /(^|\s)(qual|quais|quanto|quantos|quantas|liste|listar|consulte|consultar|verifique|verificar|existe|existem|tem|ha|como esta|resuma|resumo|situacao)(\s|$)/.test(texto)
-    || /(precisam de atencao|precisa de atencao|vence hoje|vencem hoje|em atraso|vencid|proximos? vencimentos?)/.test(texto)
+function consultaSolicitada(texto, cliente = null, clienteId = null) {
+  // A consulta interna da Nexa só deve ocorrer quando o usuário pedir
+  // explicitamente dados já cadastrados no sistema. Perguntas gerais de
+  // orientação contábil/tributária seguem para a IA e, quando necessário,
+  // para a pesquisa web oficial.
+  const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
+
+  const referenciaSistema = /(na nexa|no sistema|cadastrad|registrad|lancad|meus? clientes?|minhas? pendencias?|do escritorio|da carteira|cliente selecionado|desse cliente|deste cliente)/.test(texto)
+  const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao)/.test(texto)
+  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|moviment|agenda|assistente do dia|venciment|das)/.test(texto)
+
+  const fraseEscritorio = /(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)
+  const fraseAtencao = /(clientes?).*(atencao|prioridade|critico|pendenc)|precisam de atencao|precisa de atencao/.test(texto)
+  const listaClientes = /(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes|meus? clientes?)/.test(texto)
+
+  const clienteIdentificado = Boolean(cliente || clienteId)
+  const dadoDoCliente = clienteIdentificado
+    && verboConsulta
+    && /(como esta|situacao|resumo|dados|regime|ramo|cnpj|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia)/.test(texto)
+
+  return fraseEscritorio
+    || fraseAtencao
+    || listaClientes
+    || dadoDoCliente
+    || (verboConsulta && objetoOperacional && (referenciaSistema || estadoOperacional))
 }
 
 function identificarIntencao(texto, cliente) {
@@ -518,10 +540,11 @@ async function consultaEscritorio(clientes) {
 
 async function detectarConsultaInteligente({ mensagem, clienteId, usuario }) {
   const texto = normalizar(mensagem)
-  if (!texto || !consultaSolicitada(texto)) return null
+  if (!texto) return null
 
   const clientes = await carregarClientes(usuario)
   const localizado = localizarCliente(clientes, texto, clienteId)
+  if (!consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
   if (localizado.ambiguo) {
     return respostaConsulta({
       resposta: "Encontrei mais de um cliente compatível. Informe o nome completo ou selecione o cliente no campo de contexto.",
