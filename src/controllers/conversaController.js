@@ -28,7 +28,7 @@ const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCa
 
 
 const PAGINAS_NAVEGACAO = [
-  { pagina: "Dashboard", aliases: ["dashboard", "painel inicial", "pagina inicial", "inicio"] },
+  { pagina: "Dashboard", aliases: ["dashboard", "dash board", "dasboard", "painel inicial", "tela inicial", "pagina inicial", "inicio", "home"] },
   { pagina: "Escritório Digital", aliases: ["escritorio digital"] },
   { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes"] },
   { pagina: "Serviços", aliases: ["servicos"] },
@@ -118,9 +118,11 @@ function configuracaoPaginaNoTexto(texto) {
 }
 
 function pareceComandoNavegacao(texto) {
-  if (configuracaoPaginaNoTexto(texto)?.alias === texto) return true
+  const paginaEncontrada = configuracaoPaginaNoTexto(texto)
+  if (!paginaEncontrada) return false
+  if (paginaEncontrada.alias === texto) return true
 
-  return /(^|\s)(abra|abre|abrir|acesse|acessar|entre|entrar|va|ir|navegue|navegar|mostre|mostrar|exiba|exibir|volte|retorne|quero ver|me leve|direcione)(\s|$)/.test(texto)
+  return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero ir|quero ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
 }
 
 function pontuarClienteNoTexto(cliente, texto) {
@@ -677,17 +679,35 @@ function extrairTextoGroq(dados) {
 
 function interpretarJson(texto) {
   const limpo = String(texto || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim()
-  try {
-    const obj = JSON.parse(limpo)
-    return {
-      resposta: String(obj.resposta || "Não consegui formular a resposta.").trim(),
-      pontos: Array.isArray(obj.pontos) ? obj.pontos.map(String).slice(0, 12) : [],
-      recomendacao: String(obj.recomendacao || "").trim(),
-      fundamentos: Array.isArray(obj.fundamentos) ? obj.fundamentos.map(String).slice(0, 12) : [],
-      confirmado: typeof obj.confirmado === "boolean" ? obj.confirmado : undefined,
+  const inicioJson = limpo.indexOf("{")
+  const fimJson = limpo.lastIndexOf("}")
+  const candidatos = [limpo]
+
+  if (inicioJson >= 0 && fimJson > inicioJson) {
+    candidatos.push(limpo.slice(inicioJson, fimJson + 1))
+  }
+
+  for (const candidato of candidatos) {
+    try {
+      const obj = JSON.parse(candidato)
+      return {
+        resposta: String(obj.resposta || "Não consegui formular a resposta.").trim(),
+        pontos: Array.isArray(obj.pontos) ? obj.pontos.map(String).slice(0, 12) : [],
+        recomendacao: String(obj.recomendacao || "").trim(),
+        fundamentos: Array.isArray(obj.fundamentos) ? obj.fundamentos.map(String).slice(0, 12) : [],
+        confirmado: typeof obj.confirmado === "boolean" ? obj.confirmado : undefined,
+      }
+    } catch {
+      // Tenta o próximo formato. Alguns modelos acrescentam uma frase antes do JSON.
     }
-  } catch {
-    return { resposta: limpo || "Não consegui formular a resposta.", pontos: [], recomendacao: "", fundamentos: [] }
+  }
+
+  const textoAntesDoJson = inicioJson > 0 ? limpo.slice(0, inicioJson).trim() : ""
+  return {
+    resposta: textoAntesDoJson || limpo || "Não consegui formular a resposta.",
+    pontos: [],
+    recomendacao: "",
+    fundamentos: [],
   }
 }
 
