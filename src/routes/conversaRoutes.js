@@ -22,8 +22,12 @@ const {
   excluir: excluirVocabularioVoz,
 } = require("../controllers/vocabularioVozController")
 
+const { statusVoz, sintetizarVoz } = require("../controllers/vozController")
+
 const router = express.Router()
 
+router.get("/voz/status", autenticar, statusVoz)
+router.post("/voz/sintetizar", autenticar, sintetizarVoz)
 router.get("/vocabulario-voz", autenticar, listarVocabularioVoz)
 router.post("/vocabulario-voz", autenticar, aprenderVocabularioVoz)
 router.patch("/vocabulario-voz/:id", autenticar, atualizarVocabularioVoz)

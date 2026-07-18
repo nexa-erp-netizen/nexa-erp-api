@@ -38,8 +38,8 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes", "cliente"] },
   { pagina: "Serviços", aliases: ["servicos"] },
   { pagina: "Plano de Contas", aliases: ["plano de contas"] },
-  { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamentos"] },
-  { pagina: "Movimentos Clientes", aliases: ["movimentacoes desta empresa", "movimentacoes da empresa", "movimentacoes do cliente", "movimentacoes dos clientes", "movimentacoes clientes", "movimentos desta empresa", "movimentos da empresa", "movimentos do cliente", "movimentos dos clientes", "movimentos clientes", "movimentacoes", "movimentos"] },
+  { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamento contabil", "lancamentos", "contabil", "contabeis", "contabilidade", "area contabil", "modulo contabil", "tela contabil", "parte contabil"] },
+  { pagina: "Movimentos Clientes", aliases: ["movimentacao desta mesma empresa", "movimentacao desta empresa", "movimentacao da mesma empresa", "movimentacao da empresa", "movimentacao deste cliente", "movimentacao desse cliente", "movimentacao do cliente", "movimentacao dela", "movimentacao dele", "movimentacoes desta empresa", "movimentacoes da empresa", "movimentacoes do cliente", "movimentacoes dos clientes", "movimentacoes clientes", "movimento desta mesma empresa", "movimento desta empresa", "movimento da mesma empresa", "movimento da empresa", "movimento deste cliente", "movimento desse cliente", "movimento do cliente", "movimento dela", "movimento dele", "movimentos desta empresa", "movimentos da empresa", "movimentos do cliente", "movimentos dos clientes", "movimentos clientes", "movimentacao", "movimentacoes", "movimento", "movimentos"] },
   { pagina: "Pendências Clientes", aliases: ["pendencias dos clientes", "pendencias clientes", "pendencias"] },
   { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
   { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
@@ -55,7 +55,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Consultora Tributária", aliases: ["consultora tributaria", "consultora"] },
   { pagina: "Conversa com a Nexa", aliases: ["conversa com a nexa", "nexa assist"] },
   { pagina: "Radar Inteligente", aliases: ["radar inteligente", "radar"] },
-  { pagina: "Fiscal", aliases: ["modulo fiscal", "tela fiscal", "fiscal"] },
+  { pagina: "Fiscal", aliases: ["modulo fiscal", "tela fiscal", "area fiscal", "parte fiscal", "fiscal"] },
   { pagina: "Financeiro", aliases: ["meu financeiro", "financeiro do escritorio", "modulo financeiro", "tela financeira", "financeiro"] },
   { pagina: "Relatórios", aliases: ["relatorios"] },
   { pagina: "Usuários", aliases: ["usuarios"] },
@@ -64,7 +64,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Backup Sistema", aliases: ["backup do sistema", "backup sistema", "backup"] },
   { pagina: "Sobre", aliases: ["sobre a nexa", "sobre"] },
   { pagina: "Calculadora IRPF MEI", aliases: ["calculadora irpf mei", "calculadora irpf"] },
-  { pagina: "DRE Gerencial", aliases: ["dre gerencial", "dre"] },
+  { pagina: "DRE Gerencial", aliases: ["dre gerencial", "dre da empresa", "dre do cliente", "demonstracao do resultado", "demonstracao de resultado", "dre"] },
 ]
 
 const PAGINAS_POR_PERFIL = {
@@ -86,6 +86,8 @@ const PAGINAS_COM_FILTRO_CLIENTE = new Set([
   "Documentos Digitais",
   "Pendências Clientes",
   "Movimentos Clientes",
+  "Lançamentos Contábeis",
+  "DRE Gerencial",
   "Certificados Digitais",
   "Procurações e-CAC",
   "Memória da Nexa",
@@ -145,7 +147,7 @@ function extrairNomeFaladoDaMensagem(texto) {
 
   const padroes = [
     /(?:cliente|empresa)\s+(.+?)$/,
-    /(?:fiscal|movimentacoes|movimentos|documentos|pendencias)\s+(?:da|do|de)\s+(.+?)$/,
+    /(?:fiscal|movimentacao|movimentacoes|movimento|movimentos|documentos|pendencias|contabil|contabilidade|lancamento|lancamentos|dre)\s+(?:da|do|de)\s+(.+?)$/,
   ]
 
   for (const padrao of padroes) {
@@ -207,8 +209,9 @@ function pareceComandoNavegacao(texto) {
   const paginaEncontrada = configuracaoPaginaNoTexto(texto)
   if (!paginaEncontrada) return false
   if (paginaEncontrada.alias === texto) return true
+  if (/^(agora|depois|em seguida)\b/.test(texto)) return true
 
-  return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero ir|quero ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
+  return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero|quero ir|quero ver|quero abrir|quero acessar|quero entrar|ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
 }
 
 function pontuarClienteNoTexto(cliente, texto) {
@@ -321,6 +324,14 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
   }
 
   let clienteAcao = clienteReferencia
+
+  // Durante uma conversa de voz, o cliente aberto anteriormente permanece como contexto.
+  // Assim, frases naturais como “quero a movimentação agora” usam o mesmo cliente,
+  // mesmo sem repetir “dela”, “dessa empresa” ou o nome completo.
+  if (!clienteAcao && clienteAtual && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
+    clienteAcao = clienteAtual
+  }
+
   if (alvo === "central-cliente" && !clienteAcao) {
     clienteAcao = clienteAtual
   }
