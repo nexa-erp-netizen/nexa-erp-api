@@ -19,7 +19,10 @@ const { tituloAutomatico } = require("./conversaHistoricoController")
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
 const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
-const MODELO_PESQUISA_WEB = process.env.GROQ_WEB_MODEL || "groq/compound-mini"
+const MODELO_PESQUISA_WEB_CONFIGURADO = process.env.GROQ_WEB_MODEL || "groq/compound"
+const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("groq/compound")
+  ? MODELO_PESQUISA_WEB_CONFIGURADO
+  : "groq/compound"
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 
@@ -463,6 +466,33 @@ function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
   return /(meus? clientes?|cliente cadastrado|escritorio|nexa|pendenc|venciment|financeir|honorario|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
 }
 
+function respostaObjetivaAntesDaPesquisa(mensagem) {
+  const texto = normalizar(mensagem)
+
+  const perguntaCalculoSimples = (
+    /(quanto|qual(?: e| o)? valor|calcule|calcular|estimativa).*(imposto|das).*(simples nacional|simples)/.test(texto)
+    || /(simples nacional|simples).*(quanto|qual(?: e| o)? valor|calcule|calcular|estimativa).*(imposto|das)/.test(texto)
+  )
+
+  if (perguntaCalculoSimples) {
+    const informouAtividade = /(atividade|cnae|anexo|comercio|comercial|industria|industrial|servico|servicos|profissao|fator r)/.test(texto)
+
+    if (!informouAtividade) {
+      return {
+        resposta: "Qual é a atividade da empresa?",
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        confirmado: true,
+        pesquisaWeb: false,
+        modeloUsado: "Nexa Consultoria Objetiva",
+      }
+    }
+  }
+
+  return null
+}
+
 function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias }) {
   return {
     escopo: tipoContexto === "interessado" ? "novo_atendimento" : "consultoria_livre",
@@ -846,9 +876,11 @@ Retorne SOMENTE JSON válido, sem markdown e sem links, no formato:
 
 Pergunta: ${pergunta}`
 
+  // Para pesquisa web, use apenas sistemas Compound. Modelos comuns não
+  // possuem pesquisa embutida e podem consumir o limite de tokens sem
+  // conseguir validar a informação.
   const modelos = [...new Set([
     MODELO_PESQUISA_WEB,
-    "groq/compound-mini",
     "groq/compound",
   ].filter(Boolean))]
 
@@ -925,6 +957,9 @@ Pergunta: ${pergunta}`
 }
 
 async function gerarResposta(parametros) {
+  const respostaObjetiva = respostaObjetivaAntesDaPesquisa(parametros.mensagem)
+  if (respostaObjetiva) return respostaObjetiva
+
   const usarPesquisa = perguntaExigePesquisaWeb(parametros.mensagem, parametros.historico)
   if (usarPesquisa) return gerarRespostaComPesquisa(parametros)
   return gerarRespostaPadrao(parametros)
