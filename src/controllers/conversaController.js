@@ -19,6 +19,8 @@ const { tituloAutomatico } = require("./conversaHistoricoController")
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
 const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
+const MODELO_PESQUISA_WEB = process.env.GROQ_WEB_MODEL || "groq/compound"
+const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 
 
@@ -424,6 +426,37 @@ function perguntaPedeDetalhes(mensagem) {
   return /(explique|detalhe|detalhes|por que|porque|como funciona|quais regras|aprofund|passo a passo|me fale mais|complete|fundament)/.test(texto)
 }
 
+const TEMA_PROFISSIONAL_ATUALIZAVEL = /(inss|previden|gps|carne|contribui|segurado|aposent|beneficio|salario minimo|mei|simples nacional|pgdas|das|defis|dctf|receita federal|imposto|tribut|aliquota|cnae|ncm|cfop|cst|csosn|iss|icms|ipi|irpf|irpj|csll|pis|cofins|folha|trabalh|empregad|admiss|demiss|ferias|decimo terceiro|fgts|esocial|e-social|seguro desemprego|licenca|afastamento|legisl|lei|decreto|portaria|instrucao normativa|obrigacao acessoria|prazo fiscal)/
+const PERGUNTA_FATUAL_OU_NORMATIVA = /(qual|quais|quanto|quantos|codigo|categoria|aliquota|valor|limite|prazo|vencimento|tabela|regra|requisito|quem tem direito|pode|precisa|deve|obrigatorio|como calcular|como recolher|como pagar|o que e|oque e|significa|vigente|atual)/
+const INDICIO_ATUALIDADE = /(hoje|agora|atual|atualmente|vigente|este ano|neste ano|202[0-9]|ultima atualizacao|mais recente|novo valor|nova regra)/
+const CONTINUACAO_CURTA = /^(e |e o |e a |qual |quais |quanto |quantos |esse |essa |isso |como |por que |porque )/
+
+function perguntaExigePesquisaWeb(mensagem, historico = []) {
+  if (!PESQUISA_WEB_ATIVA || mensagemEhConversaCasual(mensagem)) return false
+
+  const textoAtual = normalizar(mensagem)
+  const saudacaoSemAssuntoProfissional = /^(oi|ola|bom dia|boa tarde|boa noite)(\s|,|!|$)/.test(textoAtual)
+    && !TEMA_PROFISSIONAL_ATUALIZAVEL.test(textoAtual)
+  if (saudacaoSemAssuntoProfissional) return false
+
+  const historicoRecente = limparHistorico(historico)
+    .slice(-6)
+    .map((item) => normalizar(item.texto))
+    .join(" ")
+
+  const temaAtual = TEMA_PROFISSIONAL_ATUALIZAVEL.test(textoAtual)
+  const perguntaFactual = PERGUNTA_FATUAL_OU_NORMATIVA.test(textoAtual)
+  const temaNoHistorico = TEMA_PROFISSIONAL_ATUALIZAVEL.test(historicoRecente)
+  const continuacaoDoAssunto = CONTINUACAO_CURTA.test(textoAtual) && temaNoHistorico
+
+  return (temaAtual && perguntaFactual) || continuacaoDoAssunto || INDICIO_ATUALIDADE.test(textoAtual)
+}
+
+function pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico = []) {
+  const texto = `${normalizar(mensagem)} ${limparHistorico(historico).slice(-6).map((item) => normalizar(item.texto)).join(" ")}`
+  return TEMA_PROFISSIONAL_ATUALIZAVEL.test(texto)
+}
+
 function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
   if (clienteId || tipoContexto === "cliente") return true
   const texto = normalizar(mensagem)
@@ -621,13 +654,14 @@ function interpretarJson(texto) {
       pontos: Array.isArray(obj.pontos) ? obj.pontos.map(String).slice(0, 12) : [],
       recomendacao: String(obj.recomendacao || "").trim(),
       fundamentos: Array.isArray(obj.fundamentos) ? obj.fundamentos.map(String).slice(0, 12) : [],
+      confirmado: typeof obj.confirmado === "boolean" ? obj.confirmado : undefined,
     }
   } catch {
     return { resposta: limpo || "Não consegui formular a resposta.", pontos: [], recomendacao: "", fundamentos: [] }
   }
 }
 
-async function gerarResposta({ mensagem, nomeUsuario, contexto, historico, conversaCasual = false, respostaCurta = true }) {
+async function gerarRespostaPadrao({ mensagem, nomeUsuario, contexto, historico, conversaCasual = false, respostaCurta = true }) {
   if (PROVEDOR_PADRAO !== "groq") {
     const erro = new Error(`Provedor de IA não suportado: ${PROVEDOR_PADRAO}`)
     erro.statusCode = 503
@@ -714,6 +748,195 @@ ${JSON.stringify(contexto)}`,
   }
 }
 
+function dominioDaUrl(url) {
+  try {
+    return new URL(String(url || "")).hostname.toLowerCase().replace(/^www\./, "")
+  } catch {
+    return ""
+  }
+}
+
+function dominioEhOficialBrasileiro(url) {
+  const dominio = dominioDaUrl(url)
+  return dominio === "gov.br" || dominio.endsWith(".gov.br") || dominio.endsWith(".jus.br") || dominio.endsWith(".leg.br")
+}
+
+function extrairFontesDaPesquisa(dados, somenteOficiais = false) {
+  const ferramentas = dados?.choices?.[0]?.message?.executed_tools
+  if (!Array.isArray(ferramentas)) return []
+
+  const fontes = []
+  const urlsVistas = new Set()
+
+  for (const ferramenta of ferramentas) {
+    const resultados = ferramenta?.search_results?.results
+    if (!Array.isArray(resultados)) continue
+
+    for (const item of resultados) {
+      const url = String(item?.url || "").trim()
+      if (!url || urlsVistas.has(url)) continue
+      if (somenteOficiais && !dominioEhOficialBrasileiro(url)) continue
+
+      urlsVistas.add(url)
+      fontes.push({
+        titulo: String(item?.title || dominioDaUrl(url) || "Fonte consultada").trim(),
+        url,
+        dominio: dominioDaUrl(url),
+      })
+
+      if (fontes.length >= 5) return fontes
+    }
+  }
+
+  return fontes
+}
+
+function instrucoesPesquisaWeb(nomeUsuario, { respostaCurta = true, somenteOficiais = false } = {}) {
+  const fontes = somenteOficiais
+    ? `Pesquise obrigatoriamente em fontes oficiais brasileiras. Priorize gov.br, Receita Federal, INSS, Planalto, eSocial, Caixa/FGTS, órgãos estaduais e municipais, tribunais e casas legislativas. Não use blog, fórum ou site comercial como base da resposta.`
+    : `Pesquise obrigatoriamente na internet antes de responder. Priorize fontes primárias, oficiais e reconhecidas.`
+
+  const concisao = respostaCurta
+    ? `Responda somente o que foi perguntado. Se pedirem apenas a categoria, responda apenas a categoria. Se pedirem código e valor, responda apenas o código e o valor. Não dê aula, não acrescente alertas e não explique regras sem solicitação.`
+    : `O usuário pediu detalhes. Explique com clareza, apoiando cada afirmação relevante nas fontes encontradas.`
+
+  return `Você é a Nexa, assistente contábil de ${nomeUsuario}.
+${fontes}
+${concisao}
+Nunca chute código, alíquota, valor, prazo, categoria ou regra.
+Se a pesquisa não confirmar a resposta com segurança, use exatamente: “Não consegui confirmar essa informação com segurança.”
+Não inclua links, citações ou nomes de fontes dentro do texto da resposta; as fontes serão exibidas separadamente pelo sistema.
+Retorne SOMENTE JSON válido, sem markdown, no formato:
+{"resposta":"texto","pontos":[],"recomendacao":"","fundamentos":[],"confirmado":true}`
+}
+
+async function gerarRespostaComPesquisa({ mensagem, nomeUsuario, contexto, historico, respostaCurta = true }) {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    return {
+      resposta: "Não consegui confirmar essa informação com segurança.",
+      pontos: [],
+      recomendacao: "",
+      fundamentos: [],
+      confirmado: false,
+      pesquisaWeb: true,
+      fontes: [],
+      modeloUsado: MODELO_PESQUISA_WEB,
+    }
+  }
+
+  const somenteOficiais = pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico)
+  const mensagens = [
+    { role: "system", content: instrucoesPesquisaWeb(nomeUsuario, { respostaCurta, somenteOficiais }) },
+    ...limparHistorico(historico).slice(-8).map((item) => ({
+      role: item.autor === "usuario" ? "user" : "assistant",
+      content: item.texto,
+    })),
+    {
+      role: "user",
+      content: `DATA E HORA NO BRASIL: ${dataHoraBrasil()}
+PERGUNTA ATUAL: ${mensagem}
+CONTEXTO NEXA, use somente se for relevante: ${JSON.stringify(contexto)}`,
+    },
+  ]
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60000)
+
+  try {
+    const corpo = {
+      model: MODELO_PESQUISA_WEB,
+      messages: mensagens,
+      citation_options: "disabled",
+      max_completion_tokens: respostaCurta ? 420 : 1400,
+      compound_custom: {
+        tools: {
+          enabled_tools: ["web_search", "visit_website"],
+        },
+      },
+      search_settings: {
+        country: "brazil",
+        ...(somenteOficiais
+          ? { include_domains: ["gov.br", "*.gov.br", "*.jus.br", "*.leg.br"] }
+          : {}),
+      },
+    }
+
+    const resposta = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Groq-Model-Version": "latest",
+      },
+      signal: controller.signal,
+      body: JSON.stringify(corpo),
+    })
+
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) {
+      console.error("FALHA NA PESQUISA WEB DA NEXA:", dados?.error?.message || resposta.status)
+      return {
+        resposta: "Não consegui confirmar essa informação com segurança.",
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        confirmado: false,
+        pesquisaWeb: true,
+        fontes: [],
+        modeloUsado: MODELO_PESQUISA_WEB,
+      }
+    }
+
+    const fontes = extrairFontesDaPesquisa(dados, somenteOficiais)
+    const texto = extrairTextoGroq(dados)
+    const interpretado = interpretarJson(texto)
+    const confirmouComFonte = fontes.length > 0 && interpretado.confirmado !== false
+
+    if (!texto || !confirmouComFonte) {
+      return {
+        resposta: "Não consegui confirmar essa informação com segurança.",
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        confirmado: false,
+        pesquisaWeb: true,
+        fontes,
+        modeloUsado: MODELO_PESQUISA_WEB,
+      }
+    }
+
+    return {
+      ...interpretado,
+      confirmado: true,
+      pesquisaWeb: true,
+      fontes,
+      somenteFontesOficiais: somenteOficiais,
+      modeloUsado: MODELO_PESQUISA_WEB,
+    }
+  } catch (error) {
+    console.error("ERRO NA PESQUISA WEB DA NEXA:", error)
+    return {
+      resposta: "Não consegui confirmar essa informação com segurança.",
+      pontos: [],
+      recomendacao: "",
+      fundamentos: [],
+      confirmado: false,
+      pesquisaWeb: true,
+      fontes: [],
+      modeloUsado: MODELO_PESQUISA_WEB,
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function gerarResposta(parametros) {
+  const usarPesquisa = perguntaExigePesquisaWeb(parametros.mensagem, parametros.historico)
+  if (usarPesquisa) return gerarRespostaComPesquisa(parametros)
+  return gerarRespostaPadrao(parametros)
+}
+
 async function status(req, res) {
   const apiKey = process.env.GROQ_API_KEY
   const base = {
@@ -722,6 +945,8 @@ async function status(req, res) {
       configurada: Boolean(apiKey),
       online: false,
       modelo: MODELO_PADRAO,
+      pesquisaWebAtiva: PESQUISA_WEB_ATIVA,
+      modeloPesquisaWeb: MODELO_PESQUISA_WEB,
     },
     ollama: {
       tipo: "local",
@@ -1022,13 +1247,17 @@ async function conversar(req, res) {
 
     const respostaFinal = {
       ...resultado,
-      modo: "groq-online",
+      modo: resultado.pesquisaWeb ? "groq-pesquisa-web" : "groq-online",
       provedor: "groq",
-      modelo: MODELO_PADRAO,
+      modelo: resultado.modeloUsado || MODELO_PADRAO,
       respondidoEm: new Date().toISOString(),
       memoriaAtiva: true,
       memoriasUsadas: memorias.length,
-      aviso: "A Nexa responde de forma objetiva e aprofunda apenas quando solicitado.",
+      aviso: resultado.pesquisaWeb
+        ? (resultado.confirmado
+          ? "Resposta confirmada por pesquisa na internet."
+          : "A informação não foi respondida sem confirmação segura.")
+        : "A Nexa responde de forma objetiva e aprofunda apenas quando solicitado.",
     }
 
     await salvarMensagemConversa({
