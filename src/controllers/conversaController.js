@@ -769,7 +769,8 @@ function extrairFontesDaPesquisa(dados, somenteOficiais = false) {
   const urlsVistas = new Set()
 
   for (const ferramenta of ferramentas) {
-    const resultados = ferramenta?.search_results?.results
+    const pesquisa = ferramenta?.search_results
+    const resultados = Array.isArray(pesquisa) ? pesquisa : pesquisa?.results
     if (!Array.isArray(resultados)) continue
 
     for (const item of resultados) {
@@ -826,18 +827,24 @@ async function gerarRespostaComPesquisa({ mensagem, nomeUsuario, contexto, histo
   }
 
   const somenteOficiais = pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico)
+  const historicoCurto = limparHistorico(historico)
+    .slice(-4)
+    .map((item) => `${item.autor === "usuario" ? "Usuário" : "Nexa"}: ${String(item.texto || "").slice(0, 350)}`)
+    .join("\n")
+    .slice(0, 1200)
+
+  // A pesquisa recebe apenas a pergunta atual e um contexto recente bem curto.
+  // Dados completos da Nexa, listas de clientes, documentos e memórias não são enviados
+  // para evitar erro 413 / Request Entity Too Large.
+  const perguntaParaPesquisa = [
+    `DATA E HORA NO BRASIL: ${dataHoraBrasil()}`,
+    `PERGUNTA ATUAL: ${String(mensagem || "").slice(0, 1500)}`,
+    historicoCurto ? `CONTEXTO RECENTE, use somente se a pergunta for continuação:\n${historicoCurto}` : "",
+  ].filter(Boolean).join("\n\n")
+
   const mensagens = [
     { role: "system", content: instrucoesPesquisaWeb(nomeUsuario, { respostaCurta, somenteOficiais }) },
-    ...limparHistorico(historico).slice(-8).map((item) => ({
-      role: item.autor === "usuario" ? "user" : "assistant",
-      content: item.texto,
-    })),
-    {
-      role: "user",
-      content: `DATA E HORA NO BRASIL: ${dataHoraBrasil()}
-PERGUNTA ATUAL: ${mensagem}
-CONTEXTO NEXA, use somente se for relevante: ${JSON.stringify(contexto)}`,
-    },
+    { role: "user", content: perguntaParaPesquisa },
   ]
 
   const controller = new AbortController()
@@ -851,7 +858,7 @@ CONTEXTO NEXA, use somente se for relevante: ${JSON.stringify(contexto)}`,
       max_completion_tokens: respostaCurta ? 420 : 1400,
       compound_custom: {
         tools: {
-          enabled_tools: ["web_search", "visit_website"],
+          enabled_tools: ["web_search"],
         },
       },
       search_settings: {
