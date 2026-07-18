@@ -26,6 +26,7 @@ const Declaracao = require("./src/models/Declaracao")
 const CertificadoDigital = require("./src/models/CertificadoDigital")
 const ProcuracaoEcac = require("./src/models/ProcuracaoEcac")
 const HistoricoEcac = require("./src/models/HistoricoEcac")
+const VocabularioVozNexa = require("./src/models/VocabularioVozNexa")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")

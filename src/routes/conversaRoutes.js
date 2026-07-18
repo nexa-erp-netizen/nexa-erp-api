@@ -15,8 +15,19 @@ const {
   excluirMemoria,
 } = require("../controllers/conversaHistoricoController")
 
+const {
+  listar: listarVocabularioVoz,
+  aprender: aprenderVocabularioVoz,
+  atualizar: atualizarVocabularioVoz,
+  excluir: excluirVocabularioVoz,
+} = require("../controllers/vocabularioVozController")
+
 const router = express.Router()
 
+router.get("/vocabulario-voz", autenticar, listarVocabularioVoz)
+router.post("/vocabulario-voz", autenticar, aprenderVocabularioVoz)
+router.patch("/vocabulario-voz/:id", autenticar, atualizarVocabularioVoz)
+router.delete("/vocabulario-voz/:id", autenticar, excluirVocabularioVoz)
 router.get("/sessoes", autenticar, listarConversas)
 router.post("/sessoes", autenticar, criarConversa)
 router.get("/sessoes/:id/mensagens", autenticar, obterMensagens)

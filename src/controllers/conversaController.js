@@ -14,6 +14,11 @@ const {
   esquecerMemoria,
   obterMemoriasRelevantes,
 } = require("../services/memoriaEvolutivaService")
+const {
+  aplicarVocabulario,
+  aprenderTermo: aprenderTermoVoz,
+  detectarInstrucaoDeAprendizado,
+} = require("../services/vocabularioVozService")
 const { tituloAutomatico } = require("./conversaHistoricoController")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -30,7 +35,7 @@ const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCa
 const PAGINAS_NAVEGACAO = [
   { pagina: "Dashboard", aliases: ["dashboard", "dash board", "dasboard", "painel inicial", "tela inicial", "pagina inicial", "inicio", "home"] },
   { pagina: "Escritório Digital", aliases: ["escritorio digital"] },
-  { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes"] },
+  { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes", "cliente"] },
   { pagina: "Serviços", aliases: ["servicos"] },
   { pagina: "Plano de Contas", aliases: ["plano de contas"] },
   { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamentos"] },
@@ -100,6 +105,87 @@ function normalizar(valor) {
     .trim()
 }
 
+function distanciaLevenshtein(a, b) {
+  const origem = normalizar(a)
+  const destino = normalizar(b)
+  if (!origem) return destino.length
+  if (!destino) return origem.length
+
+  const linha = Array.from({ length: destino.length + 1 }, (_, indice) => indice)
+  for (let i = 1; i <= origem.length; i += 1) {
+    let diagonal = linha[0]
+    linha[0] = i
+    for (let j = 1; j <= destino.length; j += 1) {
+      const anterior = linha[j]
+      const custo = origem[i - 1] === destino[j - 1] ? 0 : 1
+      linha[j] = Math.min(
+        linha[j] + 1,
+        linha[j - 1] + 1,
+        diagonal + custo,
+      )
+      diagonal = anterior
+    }
+  }
+  return linha[destino.length]
+}
+
+function similaridade(a, b) {
+  const origem = normalizar(a)
+  const destino = normalizar(b)
+  const maior = Math.max(origem.length, destino.length)
+  if (!maior) return 1
+  return 1 - (distanciaLevenshtein(origem, destino) / maior)
+}
+
+function extrairNomeFaladoDaMensagem(texto) {
+  const limpo = normalizar(texto)
+    .replace(/\b(?:por favor|para mim|pra mim|agora)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const padroes = [
+    /(?:cliente|empresa)\s+(.+?)$/,
+    /(?:fiscal|movimentacoes|movimentos|documentos|pendencias)\s+(?:da|do|de)\s+(.+?)$/,
+  ]
+
+  for (const padrao of padroes) {
+    const correspondencia = limpo.match(padrao)
+    if (!correspondencia) continue
+    const candidato = String(correspondencia[1] || "")
+      .replace(/\b(?:abra|abre|abrir|acesse|entre|vai|va)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (candidato.length >= 3 && candidato.split(" ").length <= 8) return candidato
+  }
+
+  return ""
+}
+
+function sugerirClientePorSom(clientes, nomeFalado) {
+  const falado = normalizar(nomeFalado)
+  if (!falado || falado.length < 3) return null
+
+  const candidatos = clientes.map((cliente) => {
+    const nomeCompleto = normalizar(nomeCliente(cliente))
+    const tokens = nomeCompleto
+      .split(/\s+/)
+      .filter((token) => token.length >= 3 && !PALAVRAS_IGNORADAS_CLIENTE.has(token))
+    const opcoes = [nomeCompleto, ...tokens]
+    let melhor = 0
+    for (const opcao of opcoes) {
+      melhor = Math.max(melhor, similaridade(falado, opcao))
+      if (falado.includes(opcao) || opcao.includes(falado)) melhor = Math.max(melhor, 0.86)
+    }
+    return { cliente, pontos: melhor }
+  }).sort((a, b) => b.pontos - a.pontos)
+
+  const melhor = candidatos[0]
+  const segundo = candidatos[1]
+  if (!melhor || melhor.pontos < 0.68) return null
+  if (segundo && melhor.pontos - segundo.pontos < 0.07) return null
+  return melhor.cliente
+}
+
 
 function escaparRegex(valor) {
   return String(valor || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -153,7 +239,7 @@ function usuarioPodeAbrirPagina(usuario, pagina) {
   return Boolean(PAGINAS_POR_PERFIL[perfil]?.has(pagina))
 }
 
-function respostaDeComando({ resposta, acao = null }) {
+function respostaDeComando({ resposta, acao = null, ...extras }) {
   return {
     resposta,
     pontos: [],
@@ -165,6 +251,7 @@ function respostaDeComando({ resposta, acao = null }) {
     acao,
     respondidoEm: new Date().toISOString(),
     aviso: "Comando seguro de navegação. Nenhum dado foi alterado.",
+    ...extras,
   }
 }
 
@@ -185,6 +272,23 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
     ? clientes.find((cliente) => String(cliente.id) === String(clienteId)) || null
     : null
   const localizado = localizarClienteNoTexto(clientes, texto)
+  const nomeFalado = !localizado.cliente ? extrairNomeFaladoDaMensagem(texto) : ""
+  const clienteSugerido = nomeFalado ? sugerirClientePorSom(clientes, nomeFalado) : null
+
+  if (!localizado.cliente && !localizado.ambiguo && clienteSugerido) {
+    const nomeCorreto = nomeCliente(clienteSugerido)
+    const regexNome = new RegExp(escaparRegex(nomeFalado), "i")
+    const comandoCorrigido = String(mensagem || "").replace(regexNome, nomeCorreto)
+    return respostaDeComando({
+      resposta: `Você quis dizer ${nomeCorreto}?`,
+      vocabularioSugestao: {
+        termoOuvido: nomeFalado,
+        termoCorreto: nomeCorreto,
+        clienteId: clienteSugerido.id,
+        comandoCorrigido,
+      },
+    })
+  }
 
   if (localizado.ambiguo) {
     return respostaDeComando({
@@ -1043,8 +1147,14 @@ async function status(req, res) {
 
 async function contexto(req, res) {
   try {
-    const mensagem = String(req.body?.mensagem || "").trim()
+    const mensagemOriginal = String(req.body?.mensagem || "").trim()
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
+    const vocabulario = await aplicarVocabulario({
+      usuarioId: req.usuario.id,
+      clienteId,
+      texto: mensagemOriginal,
+    })
+    const mensagem = vocabulario.texto
     const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
     const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
       ? req.body.tipoContexto
@@ -1097,6 +1207,10 @@ async function contexto(req, res) {
       tipoContexto,
       interessadoNome,
       respostaCurta,
+      vocabularioAplicado: vocabulario.alterada,
+      substituicoesVocabulario: vocabulario.substituicoes,
+      transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
+      transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
       geradoEm: new Date().toISOString(),
     })
   } catch (error) {
@@ -1111,8 +1225,14 @@ async function conversar(req, res) {
   let conversa = null
 
   try {
-    const mensagem = String(req.body?.mensagem || "").trim()
+    const mensagemOriginal = String(req.body?.mensagem || "").trim()
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
+    const vocabulario = await aplicarVocabulario({
+      usuarioId: req.usuario.id,
+      clienteId,
+      texto: mensagemOriginal,
+    })
+    const mensagem = vocabulario.texto
     const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
     const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
       ? req.body.tipoContexto
@@ -1144,8 +1264,45 @@ async function conversar(req, res) {
       conversa,
       usuarioId: req.usuario.id,
       autor: "usuario",
-      texto: mensagem,
+      texto: mensagemOriginal,
+      dados: vocabulario.alterada
+        ? { transcricaoCorrigida: mensagem, substituicoesVocabulario: vocabulario.substituicoes }
+        : null,
     })
+
+    const instrucaoVocabulario = detectarInstrucaoDeAprendizado(mensagemOriginal)
+    if (instrucaoVocabulario) {
+      const aprendizado = await aprenderTermoVoz({
+        usuarioId: req.usuario.id,
+        clienteId,
+        termoOuvido: instrucaoVocabulario.termoOuvido,
+        termoCorreto: instrucaoVocabulario.termoCorreto,
+        origem: "ensino_direto",
+      })
+      const textoResposta = aprendizado.igual
+        ? "Essas duas formas já são iguais."
+        : `Entendido. Vou reconhecer “${instrucaoVocabulario.termoOuvido}” como “${instrucaoVocabulario.termoCorreto}”.`
+
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: textoResposta,
+        dados: { vocabularioAprendido: Boolean(aprendizado.registrada) },
+      })
+
+      return res.json(anexarMetadadosConversa({
+        resposta: textoResposta,
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        modo: "vocabulario-voz",
+        provedor: "sistema",
+        modelo: "Nexa Voice Vocabulary 1.0",
+        vocabularioAprendido: Boolean(aprendizado.registrada),
+        respondidoEm: new Date().toISOString(),
+      }, conversa))
+    }
 
     const pedidoMemoria = detectarPedidoMemoria(mensagem)
     if (pedidoMemoria?.tipo === "lembrar") {
@@ -1301,6 +1458,10 @@ async function conversar(req, res) {
       respondidoEm: new Date().toISOString(),
       memoriaAtiva: true,
       memoriasUsadas: memorias.length,
+      vocabularioAplicado: vocabulario.alterada,
+      substituicoesVocabulario: vocabulario.substituicoes,
+      transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
+      transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
       aviso: resultado.pesquisaWeb
         ? (resultado.confirmado
           ? "Resposta confirmada por pesquisa na internet."
