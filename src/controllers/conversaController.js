@@ -5,6 +5,7 @@ const DocumentoDigital = require("../models/DocumentoDigital")
 const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const Usuario = require("../models/Usuario")
+const { detectarConsultaInteligente } = require("../services/consultaInteligenteService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -476,7 +477,7 @@ Quando a pergunta pedir uma lista, cite os nomes, tipos de pendência e datas di
 Diferencie vencido, vence hoje, vence em até 3 dias e vencimento futuro.
 Quando os dados forem insuficientes, diga exatamente o que falta.
 Você pode emitir opinião técnica, mas sempre explique o fundamento e deixe claro que a decisão final pertence ao contador.
-Não afirme que enviou mensagem, alterou dados ou abriu uma tela; nesta etapa você apenas conversa e prepara a futura execução de comandos.
+Você pode consultar dados e orientar o usuário, mas nunca afirme que alterou, excluiu, enviou ou concluiu informações. A Nexa também possui comandos seguros de navegação e consultas estruturadas executados pelo sistema.
 Retorne SOMENTE JSON válido, sem markdown, no formato:
 {"resposta":"texto natural","pontos":["ponto opcional"],"recomendacao":"recomendação opcional","fundamentos":["fundamento opcional"]}`
 }
@@ -718,6 +719,16 @@ async function conversar(req, res) {
 
     if (comandoNavegacao) {
       return res.json(comandoNavegacao)
+    }
+
+    const consultaInteligente = await detectarConsultaInteligente({
+      mensagem,
+      clienteId,
+      usuario: usuarioCompleto,
+    })
+
+    if (consultaInteligente) {
+      return res.json(consultaInteligente)
     }
 
     const contextoCompleto = clienteId
