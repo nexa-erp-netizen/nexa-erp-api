@@ -258,6 +258,48 @@ function respostaDeComando({ resposta, acao = null, ...extras }) {
   }
 }
 
+function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual }) {
+  const clienteMudou = Boolean(
+    clienteAcao
+    && (!clienteAtual || String(clienteAcao.id) !== String(clienteAtual.id)),
+  )
+
+  if (alvo === "central-cliente") {
+    return {
+      resposta: clienteMudou
+        ? `Cliente ${nomeCliente(clienteAcao)} aberto.`
+        : "Cliente aberto.",
+      fala: "Certo.",
+    }
+  }
+
+  const porPagina = {
+    Dashboard: { resposta: "Dashboard aberto.", fala: "Pronto." },
+    Clientes: { resposta: "Clientes abertos.", fala: "Certo." },
+    Fiscal: { resposta: "Fiscal aberto.", fala: "Pronto." },
+    "Movimentos Clientes": { resposta: "Movimentações abertas.", fala: "Aqui está." },
+    "Lançamentos Contábeis": { resposta: "Lançamentos contábeis abertos.", fala: "Certo." },
+    "DRE Gerencial": { resposta: "DRE aberta.", fala: "Aqui está." },
+    Financeiro: { resposta: "Financeiro aberto.", fala: "Pronto." },
+    "Documentos Digitais": { resposta: "Documentos abertos.", fala: "Aqui está." },
+    "Pendências Clientes": { resposta: "Pendências abertas.", fala: "Certo." },
+  }
+
+  const natural = porPagina[pagina] || {
+    resposta: "Tela aberta.",
+    fala: "Pronto.",
+  }
+
+  if (clienteMudou && clienteAcao && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
+    return {
+      resposta: `${natural.resposta.replace(/\.$/, "")} para ${nomeCliente(clienteAcao)}.`,
+      fala: natural.fala,
+    }
+  }
+
+  return natural
+}
+
 async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
   const texto = normalizar(mensagem)
   if (!texto || !pareceComandoNavegacao(texto)) return null
@@ -352,14 +394,18 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
       : null,
   }
 
-  let resposta = pagina === "Dashboard" ? "Voltando ao Dashboard." : `Abrindo ${pagina}.`
-  if (alvo === "central-cliente" && clienteAcao) {
-    resposta = `Abrindo a Central do Cliente de ${nomeCliente(clienteAcao)}.`
-  } else if (clienteAcao && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
-    resposta = `Abrindo ${pagina} com ${nomeCliente(clienteAcao)} selecionado.`
-  }
+  const natural = respostaNaturalDeNavegacao({
+    pagina,
+    alvo,
+    clienteAcao,
+    clienteAtual,
+  })
 
-  return respostaDeComando({ resposta, acao })
+  return respostaDeComando({
+    resposta: natural.resposta,
+    fala: natural.fala,
+    acao,
+  })
 }
 
 function encerrado(status) {
