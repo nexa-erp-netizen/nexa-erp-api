@@ -34,7 +34,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Serviços", aliases: ["servicos"] },
   { pagina: "Plano de Contas", aliases: ["plano de contas"] },
   { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamentos"] },
-  { pagina: "Movimentos Clientes", aliases: ["movimentos dos clientes", "movimentos clientes"] },
+  { pagina: "Movimentos Clientes", aliases: ["movimentacoes desta empresa", "movimentacoes da empresa", "movimentacoes do cliente", "movimentacoes dos clientes", "movimentacoes clientes", "movimentos desta empresa", "movimentos da empresa", "movimentos do cliente", "movimentos dos clientes", "movimentos clientes", "movimentacoes", "movimentos"] },
   { pagina: "Pendências Clientes", aliases: ["pendencias dos clientes", "pendencias clientes", "pendencias"] },
   { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
   { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
@@ -51,7 +51,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Conversa com a Nexa", aliases: ["conversa com a nexa", "nexa assist"] },
   { pagina: "Radar Inteligente", aliases: ["radar inteligente", "radar"] },
   { pagina: "Fiscal", aliases: ["modulo fiscal", "tela fiscal", "fiscal"] },
-  { pagina: "Financeiro", aliases: ["modulo financeiro", "tela financeira", "financeiro"] },
+  { pagina: "Financeiro", aliases: ["meu financeiro", "financeiro do escritorio", "modulo financeiro", "tela financeira", "financeiro"] },
   { pagina: "Relatórios", aliases: ["relatorios"] },
   { pagina: "Usuários", aliases: ["usuarios"] },
   { pagina: "Notificações", aliases: ["notificacoes"] },
@@ -120,7 +120,7 @@ function configuracaoPaginaNoTexto(texto) {
 function pareceComandoNavegacao(texto) {
   if (configuracaoPaginaNoTexto(texto)?.alias === texto) return true
 
-  return /(^|\s)(abra|abre|abrir|acesse|acessar|va|ir|navegue|navegar|mostre|mostrar|exiba|exibir|volte|retorne|quero ver|me leve|direcione)(\s|$)/.test(texto)
+  return /(^|\s)(abra|abre|abrir|acesse|acessar|entre|entrar|va|ir|navegue|navegar|mostre|mostrar|exiba|exibir|volte|retorne|quero ver|me leve|direcione)(\s|$)/.test(texto)
 }
 
 function pontuarClienteNoTexto(cliente, texto) {
@@ -190,7 +190,7 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
     })
   }
 
-  const referenciaContextual = /(esse cliente|esta empresa|desse cliente|deste cliente|cliente selecionado)/.test(texto)
+  const referenciaContextual = /(esse cliente|este cliente|o mesmo cliente|do mesmo cliente|desse cliente|deste cliente|cliente selecionado|essa empresa|esta empresa|a mesma empresa|da mesma empresa|dessa empresa|desta empresa|desta mesma empresa|dela|dele)/.test(texto)
   const clienteReferencia = localizado.cliente || (referenciaContextual ? clienteAtual : null)
   const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*cliente|dados.*cliente)/.test(texto)
   const mencionaClienteSingular = contemPalavra(texto, "cliente")
