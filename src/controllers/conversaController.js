@@ -19,7 +19,7 @@ const { tituloAutomatico } = require("./conversaHistoricoController")
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
 const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
-const MODELO_PESQUISA_WEB = process.env.GROQ_WEB_MODEL || "groq/compound"
+const MODELO_PESQUISA_WEB = process.env.GROQ_WEB_MODEL || "groq/compound-mini"
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 
@@ -827,114 +827,100 @@ async function gerarRespostaComPesquisa({ mensagem, nomeUsuario, contexto, histo
   }
 
   const somenteOficiais = pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico)
-  const historicoCurto = limparHistorico(historico)
-    .slice(-4)
-    .map((item) => `${item.autor === "usuario" ? "Usuário" : "Nexa"}: ${String(item.texto || "").slice(0, 350)}`)
-    .join("\n")
-    .slice(0, 1200)
+  const pergunta = String(mensagem || "").trim().slice(0, 1000)
+  const regraFontes = somenteOficiais
+    ? "Pesquise exclusivamente em fontes oficiais brasileiras, principalmente gov.br, INSS, Receita Federal, Planalto, eSocial, Caixa, tribunais e casas legislativas."
+    : "Pesquise na internet e priorize fontes primárias, oficiais e reconhecidas."
+  const regraResposta = respostaCurta
+    ? "Responda somente o que foi perguntado, em uma frase curta. Não dê explicações adicionais."
+    : "Explique com clareza, mas sem informações desnecessárias."
 
-  // A pesquisa recebe apenas a pergunta atual e um contexto recente bem curto.
-  // Dados completos da Nexa, listas de clientes, documentos e memórias não são enviados
-  // para evitar erro 413 / Request Entity Too Large.
-  const perguntaParaPesquisa = [
-    `DATA E HORA NO BRASIL: ${dataHoraBrasil()}`,
-    `PERGUNTA ATUAL: ${String(mensagem || "").slice(0, 1500)}`,
-    historicoCurto ? `CONTEXTO RECENTE, use somente se a pergunta for continuação:\n${historicoCurto}` : "",
-  ].filter(Boolean).join("\n\n")
+  // Payload mínimo, seguindo o quickstart oficial do Groq Compound.
+  // Não envia histórico, dados de clientes, memórias, contexto interno nem opções extras.
+  const promptPesquisa = `${regraFontes}
+${regraResposta}
+Nunca chute códigos, valores, alíquotas, categorias, prazos ou regras.
+Se não encontrar confirmação segura, responda exatamente: Não consegui confirmar essa informação com segurança.
+Retorne SOMENTE JSON válido, sem markdown e sem links, no formato:
+{"resposta":"texto","pontos":[],"recomendacao":"","fundamentos":[],"confirmado":true}
 
-  const mensagens = [
-    { role: "system", content: instrucoesPesquisaWeb(nomeUsuario, { respostaCurta, somenteOficiais }) },
-    { role: "user", content: perguntaParaPesquisa },
-  ]
+Pergunta: ${pergunta}`
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
+  const modelos = [...new Set([
+    MODELO_PESQUISA_WEB,
+    "groq/compound-mini",
+    "groq/compound",
+  ].filter(Boolean))]
 
-  try {
+  for (const modelo of modelos) {
     const corpo = {
-      model: MODELO_PESQUISA_WEB,
-      messages: mensagens,
-      citation_options: "disabled",
-      max_completion_tokens: respostaCurta ? 420 : 1400,
-      compound_custom: {
-        tools: {
-          enabled_tools: ["web_search"],
+      model: modelo,
+      messages: [{ role: "user", content: promptPesquisa }],
+    }
+    const corpoSerializado = JSON.stringify(corpo)
+    const tamanhoBytes = Buffer.byteLength(corpoSerializado, "utf8")
+    console.log(`PESQUISA WEB DA NEXA: modelo=${modelo} payload=${tamanhoBytes} bytes`)
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 60000)
+
+    try {
+      const resposta = await fetch(GROQ_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
         },
-      },
-      search_settings: {
-        country: "brazil",
-        ...(somenteOficiais
-          ? { include_domains: ["gov.br", "*.gov.br", "*.jus.br", "*.leg.br"] }
-          : {}),
-      },
-    }
+        signal: controller.signal,
+        body: corpoSerializado,
+      })
 
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Groq-Model-Version": "latest",
-      },
-      signal: controller.signal,
-      body: JSON.stringify(corpo),
-    })
-
-    const dados = await resposta.json().catch(() => ({}))
-    if (!resposta.ok) {
-      console.error("FALHA NA PESQUISA WEB DA NEXA:", dados?.error?.message || resposta.status)
-      return {
-        resposta: "Não consegui confirmar essa informação com segurança.",
-        pontos: [],
-        recomendacao: "",
-        fundamentos: [],
-        confirmado: false,
-        pesquisaWeb: true,
-        fontes: [],
-        modeloUsado: MODELO_PESQUISA_WEB,
+      const dados = await resposta.json().catch(() => ({}))
+      if (!resposta.ok) {
+        console.error(
+          `FALHA NA PESQUISA WEB DA NEXA (${modelo}, ${resposta.status}, ${tamanhoBytes} bytes):`,
+          dados?.error?.message || resposta.status,
+        )
+        continue
       }
-    }
 
-    const fontes = extrairFontesDaPesquisa(dados, somenteOficiais)
-    const texto = extrairTextoGroq(dados)
-    const interpretado = interpretarJson(texto)
-    const confirmouComFonte = fontes.length > 0 && interpretado.confirmado !== false
+      const fontes = extrairFontesDaPesquisa(dados, somenteOficiais)
+      const texto = extrairTextoGroq(dados)
+      const interpretado = interpretarJson(texto)
+      const confirmouComFonte = fontes.length > 0 && interpretado.confirmado !== false
 
-    if (!texto || !confirmouComFonte) {
+      if (!texto || !confirmouComFonte) {
+        console.error(
+          `PESQUISA WEB SEM FONTE VÁLIDA (${modelo}):`,
+          `fontes=${fontes.length}, texto=${Boolean(texto)}`,
+        )
+        continue
+      }
+
       return {
-        resposta: "Não consegui confirmar essa informação com segurança.",
-        pontos: [],
-        recomendacao: "",
-        fundamentos: [],
-        confirmado: false,
+        ...interpretado,
+        confirmado: true,
         pesquisaWeb: true,
         fontes,
-        modeloUsado: MODELO_PESQUISA_WEB,
+        somenteFontesOficiais: somenteOficiais,
+        modeloUsado: modelo,
       }
+    } catch (error) {
+      console.error(`ERRO NA PESQUISA WEB DA NEXA (${modelo}):`, error?.message || error)
+    } finally {
+      clearTimeout(timeout)
     }
+  }
 
-    return {
-      ...interpretado,
-      confirmado: true,
-      pesquisaWeb: true,
-      fontes,
-      somenteFontesOficiais: somenteOficiais,
-      modeloUsado: MODELO_PESQUISA_WEB,
-    }
-  } catch (error) {
-    console.error("ERRO NA PESQUISA WEB DA NEXA:", error)
-    return {
-      resposta: "Não consegui confirmar essa informação com segurança.",
-      pontos: [],
-      recomendacao: "",
-      fundamentos: [],
-      confirmado: false,
-      pesquisaWeb: true,
-      fontes: [],
-      modeloUsado: MODELO_PESQUISA_WEB,
-    }
-  } finally {
-    clearTimeout(timeout)
+  return {
+    resposta: "Não consegui confirmar essa informação com segurança.",
+    pontos: [],
+    recomendacao: "",
+    fundamentos: [],
+    confirmado: false,
+    pesquisaWeb: true,
+    fontes: [],
+    modeloUsado: MODELO_PESQUISA_WEB,
   }
 }
 
