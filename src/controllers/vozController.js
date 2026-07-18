@@ -1,4 +1,9 @@
+const crypto = require("crypto")
+const fs = require("fs/promises")
 const https = require("https")
+const os = require("os")
+const path = require("path")
+const { EdgeTTS } = require("node-edge-tts")
 
 const VOZ_PADRAO = "pt-BR-FranciscaNeural"
 const LIMITE_TEXTO = 900
@@ -29,7 +34,29 @@ function limparTexto(valor) {
     .slice(0, LIMITE_TEXTO)
 }
 
-function solicitarAudio({ chave, regiao, ssml }) {
+async function solicitarAudioEdge({ texto, voz = VOZ_PADRAO }) {
+  const arquivo = path.join(os.tmpdir(), `nexa-edge-tts-${crypto.randomUUID()}.mp3`)
+  const tts = new EdgeTTS({
+    voice: voz,
+    lang: "pt-BR",
+    outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+    rate: "-2%",
+    pitch: "+0%",
+    volume: "+0%",
+    timeout: 20000,
+  })
+
+  try {
+    await tts.ttsPromise(texto, arquivo)
+    const audio = await fs.readFile(arquivo)
+    if (!audio.length) throw new Error("O Microsoft Edge não retornou áudio.")
+    return audio
+  } finally {
+    await fs.unlink(arquivo).catch(() => {})
+  }
+}
+
+function solicitarAudioAzure({ chave, regiao, ssml }) {
   const opcoes = {
     hostname: `${regiao}.tts.speech.microsoft.com`,
     port: 443,
@@ -73,37 +100,48 @@ function solicitarAudio({ chave, regiao, ssml }) {
 async function statusVoz(req, res) {
   const { chave, regiao, voz } = configuracaoAzure()
   return res.json({
-    neuralDisponivel: Boolean(chave && regiao),
-    provedor: chave && regiao ? "azure-speech" : "windows",
-    vozNeural: voz,
-    fallback: "Microsoft Maria (pt-BR)",
+    neuralDisponivel: true,
+    provedor: "microsoft-edge",
+    vozNeural: VOZ_PADRAO,
+    fallback: chave && regiao ? `Azure Speech — ${voz}` : "Microsoft Maria (pt-BR)",
+    azureConfigurado: Boolean(chave && regiao),
   })
 }
 
 async function sintetizarVoz(req, res) {
+  const texto = limparTexto(req.body?.texto)
+  if (!texto) return res.status(400).json({ message: "Texto não informado." })
+
+  const { chave, regiao, voz } = configuracaoAzure()
+
   try {
-    const { chave, regiao, voz } = configuracaoAzure()
-    if (!chave || !regiao) {
-      return res.status(503).json({
-        message: "A voz neural ainda não está configurada. A Nexa usará a Microsoft Maria do Windows.",
-        fallbackLocal: true,
-      })
-    }
-
-    const texto = limparTexto(req.body?.texto)
-    if (!texto) return res.status(400).json({ message: "Texto não informado." })
-
-    const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="pt-BR"><voice name="${escaparXml(voz)}"><prosody rate="-4%" pitch="+0%">${escaparXml(texto)}</prosody></voice></speak>`
-    const audio = await solicitarAudio({ chave, regiao, ssml })
-
+    const audio = await solicitarAudioEdge({ texto, voz: VOZ_PADRAO })
     res.setHeader("Content-Type", "audio/mpeg")
     res.setHeader("Content-Length", audio.length)
     res.setHeader("Cache-Control", "private, no-store")
-    res.setHeader("X-Nexa-Voice", voz)
+    res.setHeader("X-Nexa-Voice", VOZ_PADRAO)
+    res.setHeader("X-Nexa-Voice-Provider", "microsoft-edge")
     return res.send(audio)
-  } catch (error) {
-    console.error("ERRO NA VOZ NEURAL DA NEXA:", error.message)
-    return res.status(error.statusCode || 502).json({
+  } catch (edgeError) {
+    console.error("ERRO NA VOZ EDGE DA NEXA:", edgeError?.message || edgeError)
+
+    if (chave && regiao) {
+      try {
+        const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="pt-BR"><voice name="${escaparXml(voz)}"><prosody rate="-4%" pitch="+0%">${escaparXml(texto)}</prosody></voice></speak>`
+        const audio = await solicitarAudioAzure({ chave, regiao, ssml })
+
+        res.setHeader("Content-Type", "audio/mpeg")
+        res.setHeader("Content-Length", audio.length)
+        res.setHeader("Cache-Control", "private, no-store")
+        res.setHeader("X-Nexa-Voice", voz)
+        res.setHeader("X-Nexa-Voice-Provider", "azure-speech")
+        return res.send(audio)
+      } catch (azureError) {
+        console.error("ERRO NA VOZ AZURE DA NEXA:", azureError?.message || azureError)
+      }
+    }
+
+    return res.status(502).json({
       message: "A voz neural ficou indisponível. A Nexa usará a voz feminina do Windows.",
       fallbackLocal: true,
     })
