@@ -5,7 +5,16 @@ const DocumentoDigital = require("../models/DocumentoDigital")
 const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const Usuario = require("../models/Usuario")
+const ConversaNexa = require("../models/ConversaNexa")
+const MensagemNexa = require("../models/MensagemNexa")
 const { detectarConsultaInteligente } = require("../services/consultaInteligenteService")
+const {
+  detectarPedidoMemoria,
+  registrarMemoria,
+  esquecerMemoria,
+  obterMemoriasRelevantes,
+} = require("../services/memoriaEvolutivaService")
+const { tituloAutomatico } = require("./conversaHistoricoController")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -410,8 +419,97 @@ async function montarContextoEscritorio(usuario) {
 }
 
 
-function mensagemEhSaudacao(mensagem) {
+function perguntaPedeDetalhes(mensagem) {
   const texto = normalizar(mensagem)
+  return /(explique|detalhe|detalhes|por que|porque|como funciona|quais regras|aprofund|passo a passo|me fale mais|complete|fundament)/.test(texto)
+}
+
+function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
+  if (clienteId || tipoContexto === "cliente") return true
+  const texto = normalizar(mensagem)
+  return /(meus? clientes?|cliente cadastrado|escritorio|nexa|pendenc|venciment|financeir|honorario|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
+}
+
+function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias }) {
+  return {
+    escopo: tipoContexto === "interessado" ? "novo_atendimento" : "consultoria_livre",
+    usuario: { nome: nomeUsuario },
+    interessado: tipoContexto === "interessado"
+      ? { identificacao: interessadoNome || "Novo atendimento", cadastrado: false }
+      : null,
+    memorias,
+    dataHoraBrasil: dataHoraBrasil(),
+  }
+}
+
+async function obterOuCriarConversa({ usuarioId, conversaId, tipoContexto, clienteId, interessadoNome, primeiraMensagem }) {
+  let conversa = null
+  if (conversaId) {
+    conversa = await ConversaNexa.findOne({ where: { id: conversaId, usuarioId } })
+  }
+
+  if (!conversa) {
+    conversa = await ConversaNexa.create({
+      usuarioId,
+      titulo: tituloAutomatico(primeiraMensagem),
+      tipoContexto: ["geral", "cliente", "interessado"].includes(tipoContexto) ? tipoContexto : (clienteId ? "cliente" : "geral"),
+      clienteId: clienteId || null,
+      interessadoNome: tipoContexto === "interessado" ? String(interessadoNome || "Novo atendimento").trim() : null,
+      ultimaMensagemEm: new Date(),
+    })
+  } else {
+    const atualizacoes = { ultimaMensagemEm: new Date() }
+    if (conversa.titulo === "Nova conversa") atualizacoes.titulo = tituloAutomatico(primeiraMensagem)
+    if (["geral", "cliente", "interessado"].includes(tipoContexto)) atualizacoes.tipoContexto = tipoContexto
+    if (clienteId !== undefined) atualizacoes.clienteId = clienteId || null
+    if (tipoContexto === "interessado") atualizacoes.interessadoNome = String(interessadoNome || conversa.interessadoNome || "Novo atendimento").trim()
+    await conversa.update(atualizacoes)
+  }
+
+  return conversa
+}
+
+async function historicoPersistente(conversaId, usuarioId, limite = 18) {
+  if (!conversaId) return []
+  const mensagens = await MensagemNexa.findAll({
+    where: { conversaId, usuarioId },
+    order: [["createdAt", "DESC"]],
+    limit: Math.max(1, Math.min(Number(limite) || 18, 30)),
+  })
+  return mensagens.reverse().map((item) => ({
+    autor: item.autor === "usuario" ? "usuario" : "nexa",
+    texto: item.texto,
+  }))
+}
+
+async function salvarMensagemConversa({ conversa, usuarioId, autor, texto, dados = null }) {
+  if (!conversa || !texto) return null
+  const mensagem = await MensagemNexa.create({
+    conversaId: conversa.id,
+    usuarioId,
+    autor,
+    texto: String(texto),
+    dados,
+  })
+  await conversa.update({ ultimaMensagemEm: new Date() })
+  return mensagem
+}
+
+function anexarMetadadosConversa(resposta, conversa, extra = {}) {
+  return {
+    ...resposta,
+    conversaId: conversa?.id || null,
+    conversaTitulo: conversa?.titulo || "Nova conversa",
+    tipoContexto: conversa?.tipoContexto || "geral",
+    ...extra,
+  }
+}
+
+function mensagemEhConversaCasual(mensagem) {
+  const texto = normalizar(mensagem)
+    .replace(/[!?.,;:]+$/g, "")
+    .trim()
+
   return [
     "oi",
     "ola",
@@ -420,7 +518,22 @@ function mensagemEhSaudacao(mensagem) {
     "boa noite",
     "tudo bem",
     "como vai",
+    "como voce esta",
+    "como voce ta",
+    "quem e voce",
+    "obrigado",
+    "obrigada",
+    "valeu",
+    "ate logo",
   ].includes(texto)
+}
+
+function dataHoraBrasil() {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(new Date())
 }
 
 function selecionarContextoParaPergunta(contexto, mensagem) {
@@ -467,21 +580,34 @@ function limparHistorico(historico) {
     .filter((item) => item.texto)
 }
 
-function instrucoesNexa(nomeUsuario) {
-  return `Você é a Nexa, assistente operacional e tributária de um escritório contábil brasileiro.
-Converse em português do Brasil de forma natural, profissional, objetiva e espontânea.
-Use o nome do usuário quando isso tornar a conversa mais natural: ${nomeUsuario}.
-Nunca use frases prontas ou respostas genéricas quando os dados permitirem uma resposta específica.
-Responda estritamente com base no CONTEXTO NEXA fornecido. Não invente clientes, datas, valores, pendências ou regras.
-Quando a pergunta pedir uma lista, cite os nomes, tipos de pendência e datas disponíveis.
-Diferencie vencido, vence hoje, vence em até 3 dias e vencimento futuro.
-Quando os dados forem insuficientes, diga exatamente o que falta.
-Você pode emitir opinião técnica, mas sempre explique o fundamento e deixe claro que a decisão final pertence ao contador.
-Você pode consultar dados e orientar o usuário, mas nunca afirme que alterou, excluiu, enviou ou concluiu informações. A Nexa também possui comandos seguros de navegação e consultas estruturadas executados pelo sistema.
-Retorne SOMENTE JSON válido, sem markdown, no formato:
-{"resposta":"texto natural","pontos":["ponto opcional"],"recomendacao":"recomendação opcional","fundamentos":["fundamento opcional"]}`
-}
+function instrucoesNexa(nomeUsuario, { conversaCasual = false, respostaCurta = true } = {}) {
+  const personalidade = `Você é a Nexa, assistente e parceira de um escritório contábil brasileiro.
+Converse em português do Brasil com naturalidade, espontaneidade, segurança e profissionalismo.
+Use o nome do usuário somente quando soar natural: ${nomeUsuario}.
+Evite bordões, respostas engessadas, frases repetidas e apresentações desnecessárias.
+Você pode conversar sobre clientes cadastrados, novos interessados e dúvidas gerais, sem exigir que exista um cliente selecionado.`
 
+  const regraDeConcisao = respostaCurta
+    ? `REGRA PRINCIPAL: responda somente o que foi perguntado, da forma mais curta possível.
+Para pergunta objetiva, responda com poucas palavras ou uma única frase.
+Exemplo: “Qual a categoria do código 1163 do INSS?” Resposta: “Contribuinte individual.”
+Não acrescente alíquota, exceção, alerta, fundamento, recomendação ou explicação sem o usuário pedir.
+Deixe pontos, recomendacao e fundamentos vazios em respostas objetivas.`
+    : `O usuário pediu aprofundamento. Explique com clareza, mas sem enrolação. Organize apenas quando isso realmente ajudar.`
+
+  const regrasDoModo = conversaCasual
+    ? `Esta é uma conversa casual. Responda livre e naturalmente, sem transformar saudação em relatório e sem usar resposta pré-programada.`
+    : `Use o CONTEXTO NEXA quando ele for relevante. Não invente clientes, datas, valores, pendências ou informações.
+Em consulta livre, responda pela sua capacidade de orientação geral. Se não tiver segurança suficiente, diga apenas que precisa confirmar a informação.
+Quando houver memórias, use-as discretamente e sem anunciar que está consultando memória.
+Você pode orientar e preparar respostas, mas nunca afirme que alterou, excluiu, enviou ou concluiu dados.`
+
+  return `${personalidade}
+${regraDeConcisao}
+${regrasDoModo}
+Retorne SOMENTE JSON válido, sem markdown, no formato:
+{"resposta":"texto natural","pontos":[],"recomendacao":"","fundamentos":[]}`
+}
 function extrairTextoGroq(dados) {
   return String(dados?.choices?.[0]?.message?.content || "").trim()
 }
@@ -501,7 +627,7 @@ function interpretarJson(texto) {
   }
 }
 
-async function gerarResposta({ mensagem, nomeUsuario, contexto, historico }) {
+async function gerarResposta({ mensagem, nomeUsuario, contexto, historico, conversaCasual = false, respostaCurta = true }) {
   if (PROVEDOR_PADRAO !== "groq") {
     const erro = new Error(`Provedor de IA não suportado: ${PROVEDOR_PADRAO}`)
     erro.statusCode = 503
@@ -518,7 +644,7 @@ async function gerarResposta({ mensagem, nomeUsuario, contexto, historico }) {
   }
 
   const mensagens = [
-    { role: "system", content: instrucoesNexa(nomeUsuario) },
+    { role: "system", content: instrucoesNexa(nomeUsuario, { conversaCasual, respostaCurta }) },
     ...limparHistorico(historico).map((item) => ({
       role: item.autor === "usuario" ? "user" : "assistant",
       content: item.texto,
@@ -528,7 +654,7 @@ async function gerarResposta({ mensagem, nomeUsuario, contexto, historico }) {
       content: `PERGUNTA ATUAL:
 ${mensagem}
 
-CONTEXTO NEXA (dados reais do sistema):
+CONTEXTO DA CONVERSA:
 ${JSON.stringify(contexto)}`,
     },
   ]
@@ -547,8 +673,8 @@ ${JSON.stringify(contexto)}`,
       body: JSON.stringify({
         model: MODELO_PADRAO,
         messages: mensagens,
-        max_tokens: 1200,
-        temperature: 0.35,
+        max_tokens: respostaCurta ? 320 : 1200,
+        temperature: conversaCasual ? 0.9 : (respostaCurta ? 0.45 : 0.55),
       }),
     })
 
@@ -646,7 +772,12 @@ async function contexto(req, res) {
   try {
     const mensagem = String(req.body?.mensagem || "").trim()
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
-    const historico = limparHistorico(req.body?.historico)
+    const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
+    const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
+      ? req.body.tipoContexto
+      : (clienteId ? "cliente" : "geral")
+    const interessadoNome = String(req.body?.interessadoNome || "").trim()
+    const respostaCurta = !perguntaPedeDetalhes(mensagem)
 
     if (!mensagem) {
       return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
@@ -654,38 +785,45 @@ async function contexto(req, res) {
 
     const usuarioBanco = await Usuario.findByPk(req.usuario.id)
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
+    const persistido = conversaId ? await historicoPersistente(conversaId, req.usuario.id) : []
+    const historico = persistido.length ? persistido : limparHistorico(req.body?.historico)
+    const memorias = await obterMemoriasRelevantes({
+      usuarioId: req.usuario.id,
+      clienteId,
+      conversaId,
+      tipoContexto,
+    })
+    const conversaCasual = mensagemEhConversaCasual(mensagem)
 
-    if (mensagemEhSaudacao(mensagem)) {
-      return res.json({
-        instrucoes: "Cumprimente o usuário naturalmente em português do Brasil. Seja breve e não analise dados do ERP nesta resposta.",
-        contexto: { escopo: "saudacao", usuario: { nome: nomeUsuario } },
-        historico,
-        usuario: { nome: nomeUsuario },
-        geradoEm: new Date().toISOString(),
-      })
+    let contextoNexa
+    if (conversaCasual || tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto)) {
+      contextoNexa = contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias })
+      if (conversaCasual) contextoNexa.escopo = "conversa_casual"
+    } else {
+      const contextoCompleto = clienteId
+        ? await montarContextoCliente(clienteId, req.usuario)
+        : await montarContextoEscritorio(req.usuario)
+
+      if (!contextoCompleto) return res.status(404).json({ message: "Cliente não encontrado" })
+      if (contextoCompleto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
+
+      contextoNexa = {
+        ...selecionarContextoParaPergunta(contextoCompleto, mensagem),
+        memorias,
+      }
     }
-
-    const contextoCompleto = clienteId
-      ? await montarContextoCliente(clienteId, req.usuario)
-      : await montarContextoEscritorio(req.usuario)
-
-    if (!contextoCompleto) {
-      return res.status(404).json({ message: "Cliente não encontrado" })
-    }
-
-    if (contextoCompleto.proibido) {
-      return res.status(403).json({ message: "Acesso não autorizado" })
-    }
-
-    const contextoNexa = selecionarContextoParaPergunta(contextoCompleto, mensagem)
 
     return res.json({
-      instrucoes: instrucoesNexa(nomeUsuario)
+      instrucoes: instrucoesNexa(nomeUsuario, { conversaCasual, respostaCurta })
         .replace(/Retorne SOMENTE JSON válido[\s\S]*$/m, "")
         .trim(),
       contexto: contextoNexa,
       historico,
       usuario: { nome: nomeUsuario },
+      conversaId,
+      tipoContexto,
+      interessadoNome,
+      respostaCurta,
       geradoEm: new Date().toISOString(),
     })
   } catch (error) {
@@ -697,10 +835,16 @@ async function contexto(req, res) {
 }
 
 async function conversar(req, res) {
+  let conversa = null
+
   try {
     const mensagem = String(req.body?.mensagem || "").trim()
     const clienteId = req.body?.clienteId ? Number(req.body.clienteId) : null
-    const historico = req.body?.historico
+    const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
+    const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
+      ? req.body.tipoContexto
+      : (clienteId ? "cliente" : "geral")
+    const interessadoNome = String(req.body?.interessadoNome || "").trim()
 
     if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
 
@@ -711,6 +855,94 @@ async function conversar(req, res) {
       ...(usuarioBanco?.toJSON?.() || {}),
     }
 
+    conversa = await obterOuCriarConversa({
+      usuarioId: req.usuario.id,
+      conversaId,
+      tipoContexto,
+      clienteId,
+      interessadoNome,
+      primeiraMensagem: mensagem,
+    })
+
+    const historicoBanco = await historicoPersistente(conversa.id, req.usuario.id)
+    const historico = historicoBanco.length ? historicoBanco : limparHistorico(req.body?.historico)
+
+    await salvarMensagemConversa({
+      conversa,
+      usuarioId: req.usuario.id,
+      autor: "usuario",
+      texto: mensagem,
+    })
+
+    const pedidoMemoria = detectarPedidoMemoria(mensagem)
+    if (pedidoMemoria?.tipo === "lembrar") {
+      const resultadoMemoria = await registrarMemoria({
+        usuarioId: req.usuario.id,
+        clienteId,
+        conversaId: conversa.id,
+        tipoContexto: conversa.tipoContexto,
+        conteudo: pedidoMemoria.conteudo,
+      })
+
+      let textoResposta = "Certo. Vou lembrar disso."
+      if (!resultadoMemoria.registrada && resultadoMemoria.motivo === "sensivel") {
+        textoResposta = "Não vou guardar senhas, chaves ou credenciais."
+      } else if (resultadoMemoria.duplicada) {
+        textoResposta = "Isso já está na minha memória."
+      }
+
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: textoResposta,
+        dados: { memoriaRegistrada: Boolean(resultadoMemoria.registrada) },
+      })
+
+      return res.json(anexarMetadadosConversa({
+        resposta: textoResposta,
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        modo: "memoria-evolutiva",
+        provedor: "sistema",
+        modelo: "Nexa Memory 1.0",
+        respondidoEm: new Date().toISOString(),
+      }, conversa, {
+        memoriaRegistrada: Boolean(resultadoMemoria.registrada),
+      }))
+    }
+
+    if (pedidoMemoria?.tipo === "esquecer") {
+      const resultado = await esquecerMemoria({
+        usuarioId: req.usuario.id,
+        clienteId,
+        conversaId: conversa.id,
+        termo: pedidoMemoria.conteudo,
+      })
+      const textoResposta = resultado.removidas
+        ? "Certo. Esqueci essa informação."
+        : "Não encontrei essa informação na memória."
+
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: textoResposta,
+      })
+
+      return res.json(anexarMetadadosConversa({
+        resposta: textoResposta,
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        modo: "memoria-evolutiva",
+        provedor: "sistema",
+        modelo: "Nexa Memory 1.0",
+        respondidoEm: new Date().toISOString(),
+      }, conversa))
+    }
+
     const comandoNavegacao = await detectarComandoNavegacao({
       mensagem,
       clienteId,
@@ -718,45 +950,105 @@ async function conversar(req, res) {
     })
 
     if (comandoNavegacao) {
-      return res.json(comandoNavegacao)
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: comandoNavegacao.resposta,
+        dados: comandoNavegacao,
+      })
+      return res.json(anexarMetadadosConversa(comandoNavegacao, conversa))
     }
 
-    const consultaInteligente = await detectarConsultaInteligente({
-      mensagem,
+    if (conversa.tipoContexto !== "interessado") {
+      const consultaInteligente = await detectarConsultaInteligente({
+        mensagem,
+        clienteId,
+        usuario: usuarioCompleto,
+      })
+
+      if (consultaInteligente) {
+        await salvarMensagemConversa({
+          conversa,
+          usuarioId: req.usuario.id,
+          autor: "nexa",
+          texto: consultaInteligente.resposta,
+          dados: consultaInteligente,
+        })
+        return res.json(anexarMetadadosConversa(consultaInteligente, conversa))
+      }
+    }
+
+    const conversaCasual = mensagemEhConversaCasual(mensagem)
+    const respostaCurta = !perguntaPedeDetalhes(mensagem)
+    const memorias = await obterMemoriasRelevantes({
+      usuarioId: req.usuario.id,
       clienteId,
-      usuario: usuarioCompleto,
+      conversaId: conversa.id,
+      tipoContexto: conversa.tipoContexto,
     })
 
-    if (consultaInteligente) {
-      return res.json(consultaInteligente)
+    let contextoNexa
+    if (conversaCasual || conversa.tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, conversa.tipoContexto)) {
+      contextoNexa = contextoLivre({
+        nomeUsuario,
+        tipoContexto: conversa.tipoContexto,
+        interessadoNome: conversa.interessadoNome,
+        memorias,
+      })
+      if (conversaCasual) contextoNexa.escopo = "conversa_casual"
+    } else {
+      const contextoCompleto = clienteId
+        ? await montarContextoCliente(clienteId, req.usuario)
+        : await montarContextoEscritorio(req.usuario)
+
+      if (!contextoCompleto) return res.status(404).json({ message: "Cliente não encontrado" })
+      if (contextoCompleto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
+
+      contextoNexa = {
+        ...selecionarContextoParaPergunta(contextoCompleto, mensagem),
+        memorias,
+      }
     }
 
-    const contextoCompleto = clienteId
-      ? await montarContextoCliente(clienteId, req.usuario)
-      : await montarContextoEscritorio(req.usuario)
+    const resultado = await gerarResposta({
+      mensagem,
+      nomeUsuario,
+      contexto: contextoNexa,
+      historico,
+      conversaCasual,
+      respostaCurta,
+    })
 
-    if (!contextoCompleto) return res.status(404).json({ message: "Cliente não encontrado" })
-    if (contextoCompleto.proibido) return res.status(403).json({ message: "Acesso não autorizado" })
-
-    const contextoNexa = selecionarContextoParaPergunta(contextoCompleto, mensagem)
-    const resultado = await gerarResposta({ mensagem, nomeUsuario, contexto: contextoNexa, historico })
-
-    return res.json({
+    const respostaFinal = {
       ...resultado,
       modo: "groq-online",
       provedor: "groq",
       modelo: MODELO_PADRAO,
       respondidoEm: new Date().toISOString(),
-      aviso: "A resposta utiliza os dados disponíveis na Nexa e apoia, mas não substitui, a decisão profissional do contador.",
+      memoriaAtiva: true,
+      memoriasUsadas: memorias.length,
+      aviso: "A Nexa responde de forma objetiva e aprofunda apenas quando solicitado.",
+    }
+
+    await salvarMensagemConversa({
+      conversa,
+      usuarioId: req.usuario.id,
+      autor: "nexa",
+      texto: resultado.resposta,
+      dados: respostaFinal,
     })
+
+    return res.json(anexarMetadadosConversa(respostaFinal, conversa))
   } catch (error) {
     console.error("ERRO NA CONVERSA GENERATIVA DA NEXA:", error)
     return res.status(error.statusCode || 500).json({
       message: error.message || "Erro ao conversar com a Nexa",
       providerFailure: Boolean(error.providerFailure),
       provedor: PROVEDOR_PADRAO,
+      conversaId: conversa?.id || null,
+      conversaTitulo: conversa?.titulo || null,
     })
   }
 }
-
 module.exports = { conversar, contexto, status }
