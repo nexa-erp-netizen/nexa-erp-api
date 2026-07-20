@@ -20,6 +20,7 @@ const {
   detectarInstrucaoDeAprendizado,
 } = require("../services/vocabularioVozService")
 const { tituloAutomatico } = require("./conversaHistoricoController")
+const { detectarAcaoSegura, executarAcaoConfirmada } = require("../services/acaoSeguraService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1295,6 +1296,8 @@ async function conversar(req, res) {
       ? req.body.tipoContexto
       : (clienteId ? "cliente" : "geral")
     const interessadoNome = String(req.body?.interessadoNome || "").trim()
+    const confirmacaoAcaoToken = String(req.body?.confirmacaoAcaoToken || "").trim()
+    const decisaoAcao = String(req.body?.decisaoAcao || "").trim().toLowerCase()
 
     if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
 
@@ -1326,6 +1329,25 @@ async function conversar(req, res) {
         ? { transcricaoCorrigida: mensagem, substituicoesVocabulario: vocabulario.substituicoes }
         : null,
     })
+
+    if (confirmacaoAcaoToken) {
+      const resultadoConfirmacao = await executarAcaoConfirmada({
+        token: confirmacaoAcaoToken,
+        mensagem,
+        decisao: decisaoAcao,
+        usuario: usuarioCompleto,
+      })
+
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: resultadoConfirmacao.resposta,
+        dados: resultadoConfirmacao,
+      })
+
+      return res.json(anexarMetadadosConversa(resultadoConfirmacao, conversa))
+    }
 
     const instrucaoVocabulario = detectarInstrucaoDeAprendizado(mensagemOriginal)
     if (instrucaoVocabulario) {
@@ -1359,6 +1381,23 @@ async function conversar(req, res) {
         vocabularioAprendido: Boolean(aprendizado.registrada),
         respondidoEm: new Date().toISOString(),
       }, conversa))
+    }
+
+    const acaoSegura = await detectarAcaoSegura({
+      mensagem,
+      clienteId,
+      usuario: usuarioCompleto,
+    })
+
+    if (acaoSegura) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: acaoSegura.resposta,
+        dados: acaoSegura,
+      })
+      return res.json(anexarMetadadosConversa(acaoSegura, conversa))
     }
 
     const pedidoMemoria = detectarPedidoMemoria(mensagem)
