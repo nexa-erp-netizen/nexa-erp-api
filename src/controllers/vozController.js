@@ -6,13 +6,23 @@ const path = require("path")
 const { EdgeTTS } = require("node-edge-tts")
 
 const VOZ_PADRAO = "pt-BR-FranciscaNeural"
+const MODELO_WHISPER_PADRAO = "whisper-large-v3-turbo"
 const LIMITE_TEXTO = 900
+const LIMITE_PROMPT_WHISPER = 700
+const TEMPO_LIMITE_WHISPER_MS = 30000
 
 function configuracaoAzure() {
   return {
     chave: String(process.env.AZURE_SPEECH_KEY || "").trim(),
     regiao: String(process.env.AZURE_SPEECH_REGION || "").trim(),
     voz: String(process.env.AZURE_SPEECH_VOICE || VOZ_PADRAO).trim(),
+  }
+}
+
+function configuracaoGroqWhisper() {
+  return {
+    chave: String(process.env.GROQ_API_KEY || "").trim(),
+    modelo: String(process.env.GROQ_WHISPER_MODEL || MODELO_WHISPER_PADRAO).trim(),
   }
 }
 
@@ -32,6 +42,23 @@ function limparTexto(valor) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, LIMITE_TEXTO)
+}
+
+function limparPromptWhisper(valor) {
+  return String(valor || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LIMITE_PROMPT_WHISPER)
+}
+
+function extensaoPorMime(mime = "") {
+  const tipo = String(mime).toLowerCase()
+  if (tipo.includes("wav")) return "wav"
+  if (tipo.includes("ogg")) return "ogg"
+  if (tipo.includes("mpeg") || tipo.includes("mp3")) return "mp3"
+  if (tipo.includes("mp4") || tipo.includes("m4a")) return "m4a"
+  return "webm"
 }
 
 async function solicitarAudioEdge({ texto, voz = VOZ_PADRAO }) {
@@ -97,15 +124,102 @@ function solicitarAudioAzure({ chave, regiao, ssml }) {
   })
 }
 
+async function transcreverComGroq({ arquivo, prompt }) {
+  const { chave, modelo } = configuracaoGroqWhisper()
+  if (!chave) {
+    const erro = new Error("A chave da Groq não está configurada.")
+    erro.statusCode = 503
+    throw erro
+  }
+
+  const mime = String(arquivo.mimetype || "audio/webm").split(";")[0]
+  const extensao = extensaoPorMime(mime)
+  const formulario = new FormData()
+  formulario.append("file", new Blob([arquivo.buffer], { type: mime }), `nexa-voz.${extensao}`)
+  formulario.append("model", modelo)
+  formulario.append("language", "pt")
+  formulario.append("response_format", "json")
+  formulario.append("temperature", "0")
+  if (prompt) formulario.append("prompt", limparPromptWhisper(prompt))
+
+  const controlador = new AbortController()
+  const timeout = setTimeout(() => controlador.abort(), TEMPO_LIMITE_WHISPER_MS)
+
+  try {
+    const resposta = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${chave}` },
+      body: formulario,
+      signal: controlador.signal,
+    })
+
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) {
+      const detalhe = dados?.error?.message || dados?.message || `status ${resposta.status}`
+      const erro = new Error(`Groq Whisper: ${detalhe}`)
+      erro.statusCode = resposta.status
+      throw erro
+    }
+
+    return {
+      texto: String(dados?.text || "").trim(),
+      modelo,
+      requisicaoId: dados?.x_groq?.id || null,
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const erro = new Error("A transcrição demorou para responder.")
+      erro.statusCode = 504
+      throw erro
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function statusVoz(req, res) {
   const { chave, regiao, voz } = configuracaoAzure()
+  const whisper = configuracaoGroqWhisper()
   return res.json({
     neuralDisponivel: true,
     provedor: "microsoft-edge",
     vozNeural: VOZ_PADRAO,
     fallback: chave && regiao ? `Azure Speech — ${voz}` : "Microsoft Maria (pt-BR)",
     azureConfigurado: Boolean(chave && regiao),
+    transcricaoDisponivel: Boolean(whisper.chave),
+    transcricaoProvedor: "groq-whisper",
+    transcricaoModelo: whisper.modelo,
   })
+}
+
+async function transcreverVoz(req, res) {
+  const arquivo = req.file
+  if (!arquivo?.buffer?.length) {
+    return res.status(400).json({ message: "Áudio não informado." })
+  }
+
+  try {
+    const resultado = await transcreverComGroq({
+      arquivo,
+      prompt: req.body?.prompt,
+    })
+
+    return res.json({
+      texto: resultado.texto,
+      provedor: "groq-whisper",
+      modelo: resultado.modelo,
+      requisicaoId: resultado.requisicaoId,
+    })
+  } catch (error) {
+    console.error("ERRO NA TRANSCRIÇÃO DA NEXA:", error?.message || error)
+    const status = Number(error?.statusCode || 502)
+    return res.status(status).json({
+      message: status === 429
+        ? "O limite temporário da transcrição foi atingido. Tente novamente em instantes."
+        : error?.message || "Não foi possível transcrever a fala.",
+    })
+  }
 }
 
 async function sintetizarVoz(req, res) {
@@ -148,4 +262,4 @@ async function sintetizarVoz(req, res) {
   }
 }
 
-module.exports = { statusVoz, sintetizarVoz }
+module.exports = { statusVoz, transcreverVoz, sintetizarVoz }

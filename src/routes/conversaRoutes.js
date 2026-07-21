@@ -1,4 +1,5 @@
 const express = require("express")
+const multer = require("multer")
 const { autenticar } = require("../middlewares/authMiddleware")
 const {
   conversar,
@@ -22,12 +23,17 @@ const {
   excluir: excluirVocabularioVoz,
 } = require("../controllers/vocabularioVozController")
 
-const { statusVoz, sintetizarVoz } = require("../controllers/vozController")
+const { statusVoz, transcreverVoz, sintetizarVoz } = require("../controllers/vozController")
 
 const router = express.Router()
+const uploadAudio = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+})
 
 router.get("/voz/status", autenticar, statusVoz)
 router.post("/voz/sintetizar", autenticar, sintetizarVoz)
+router.post("/voz/transcrever", autenticar, uploadAudio.single("audio"), transcreverVoz)
 router.get("/vocabulario-voz", autenticar, listarVocabularioVoz)
 router.post("/vocabulario-voz", autenticar, aprenderVocabularioVoz)
 router.patch("/vocabulario-voz/:id", autenticar, atualizarVocabularioVoz)
