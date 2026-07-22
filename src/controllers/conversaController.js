@@ -205,13 +205,17 @@ function configuracaoPaginaNoTexto(texto) {
   return candidatos.find((item) => texto.includes(item.alias)) || null
 }
 
+function temVerboNavegacao(texto) {
+  return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero|quero ir|quero ver|quero abrir|quero acessar|quero entrar|ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
+}
+
 function pareceComandoNavegacao(texto) {
   const paginaEncontrada = configuracaoPaginaNoTexto(texto)
   if (!paginaEncontrada) return false
   if (paginaEncontrada.alias === texto) return true
   if (/^(agora|depois|em seguida)\b/.test(texto)) return true
 
-  return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero|quero ir|quero ver|quero abrir|quero acessar|quero entrar|ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
+  return temVerboNavegacao(texto)
 }
 
 function pontuarClienteNoTexto(cliente, texto) {
@@ -302,7 +306,16 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
 
 async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
   const texto = normalizar(mensagem)
-  if (!texto || !pareceComandoNavegacao(texto)) return null
+  if (!texto) return null
+
+  const paginaEncontradaInicial = configuracaoPaginaNoTexto(texto)
+  const temVerbo = temVerboNavegacao(texto)
+
+  // Comandos como “abrir Multicópias Maracanã” não citam a palavra
+  // “cliente”, mas devem abrir diretamente a Central desse cliente.
+  // Antes, o roteador exigia o nome de uma página e a IA apenas respondia
+  // que havia aberto, sem entregar uma ação executável para a Web.
+  if (!paginaEncontradaInicial && !temVerbo) return null
 
   let clientes = await Cliente.findAll({
     attributes: ["id", "nome", "regime", "situacaoEmpresa"],
@@ -346,11 +359,11 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
   const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*cliente|dados.*cliente)/.test(texto)
   const mencionaClienteSingular = contemPalavra(texto, "cliente")
 
-  let paginaEncontrada = configuracaoPaginaNoTexto(texto)
+  const paginaEncontrada = paginaEncontradaInicial
   let pagina = paginaEncontrada?.pagina || null
   let alvo = "pagina"
 
-  if (querCentralCliente || (!pagina && localizado.cliente && pareceComandoNavegacao(texto))) {
+  if (querCentralCliente || (!pagina && localizado.cliente && temVerbo)) {
     pagina = "Clientes"
     alvo = "central-cliente"
   } else if (pagina === "Clientes" && mencionaClienteSingular && (localizado.cliente || clienteAtual)) {
