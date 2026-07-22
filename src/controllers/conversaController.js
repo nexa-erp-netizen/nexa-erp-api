@@ -67,6 +67,50 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "DRE Gerencial", aliases: ["dre gerencial", "dre da empresa", "dre do cliente", "demonstracao do resultado", "demonstracao de resultado", "dre"] },
 ]
 
+const GRUPOS_NAVEGACAO = [
+  { grupo: "Contábil", aliases: ["contabil", "area contabil", "menu contabil"] },
+  { grupo: "Fiscal", aliases: ["menu fiscal", "grupo fiscal"] },
+  { grupo: "Financeiro", aliases: ["menu financeiro", "grupo financeiro"] },
+  { grupo: "Atendimento", aliases: ["atendimento", "menu atendimento", "grupo atendimento"] },
+  { grupo: "Ferramentas", aliases: ["ferramentas", "menu ferramentas", "grupo ferramentas"] },
+  { grupo: "Configurações", aliases: ["configuracoes", "menu configuracoes", "grupo configuracoes"] },
+]
+
+const DESCRICOES_PAGINAS_NAVEGACAO = {
+  Dashboard: "visão geral, prioridades e indicadores do escritório",
+  Notificações: "central de notificações e interações recentes",
+  "Escritório Digital": "atalhos e serviços digitais do escritório",
+  Clientes: "lista, cadastro e Central individual de cada cliente",
+  Serviços: "cadastro e controle de serviços",
+  "Plano de Contas": "plano contábil",
+  "Lançamentos Contábeis": "lançamentos, contabilidade e escrituração",
+  "Movimentos Clientes": "movimentações financeiras e operacionais dos clientes",
+  "DRE Gerencial": "demonstrativo de resultados",
+  Fiscal: "obrigações e rotinas fiscais",
+  Financeiro: "financeiro do escritório",
+  "Pendências Clientes": "pendências e guias dos clientes",
+  "Acesso Rápido Fiscal": "atalhos fiscais",
+  "Documentos Digitais": "documentos e arquivos dos clientes",
+  "WhatsApp Inteligente": "mensagens e atendimento por WhatsApp",
+  "Assistente do Dia": "prioridades e rotina diária",
+  "Laboratório Tributário": "simulações e análises tributárias",
+  "Certificados Digitais": "certificados digitais A1",
+  "Procurações e-CAC": "procurações eletrônicas",
+  "Identidade Digital": "identidade e acessos digitais",
+  "Central e-CAC": "atalhos e histórico do e-CAC",
+  "Memória da Nexa": "memórias registradas pela assistente",
+  "Segundo Contador": "análise e apoio contábil inteligente",
+  "Consultora Tributária": "consultoria tributária",
+  "Conversa com a Nexa": "chat geral com a Nexa",
+  "Radar Inteligente": "riscos, alertas e oportunidades",
+  Relatórios: "relatórios do escritório",
+  Usuários: "usuários e permissões",
+  Agenda: "agenda e compromissos",
+  "Backup Sistema": "backup do sistema",
+  Sobre: "versão e informações da Nexa",
+  "Calculadora IRPF MEI": "calculadora de IRPF e MEI",
+}
+
 const PAGINAS_POR_PERFIL = {
   Administrador: new Set(PAGINAS_NAVEGACAO.map((item) => item.pagina)),
   Funcionário: new Set([
@@ -205,6 +249,13 @@ function configuracaoPaginaNoTexto(texto) {
   return candidatos.find((item) => texto.includes(item.alias)) || null
 }
 
+function configuracaoGrupoNoTexto(texto) {
+  const candidatos = GRUPOS_NAVEGACAO
+    .flatMap((item) => item.aliases.map((alias) => ({ ...item, alias: normalizar(alias) })))
+    .sort((a, b) => b.alias.length - a.alias.length)
+  return candidatos.find((item) => texto === item.alias || texto.includes(item.alias)) || null
+}
+
 function temVerboNavegacao(texto) {
   return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero|quero ir|quero ver|quero abrir|quero acessar|quero entrar|ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
 }
@@ -304,12 +355,43 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
   return natural
 }
 
-async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
+async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usuario, origem = "texto" }) {
   const texto = normalizar(mensagem)
   if (!texto) return null
 
   const paginaEncontradaInicial = configuracaoPaginaNoTexto(texto)
+  const grupoEncontrado = configuracaoGrupoNoTexto(texto)
   const temVerbo = temVerboNavegacao(texto)
+  const pareceNavegacao = pareceComandoNavegacao(texto)
+
+  if (grupoEncontrado && (texto === grupoEncontrado.alias || temVerbo) && (!paginaEncontradaInicial || /\b(menu|grupo)\b/.test(texto))) {
+    return respostaDeComando({
+      resposta: `Menu ${grupoEncontrado.grupo} aberto.`,
+      fala: "",
+      acao: { tipo: "abrir-grupo", grupo: grupoEncontrado.grupo, segura: true },
+    })
+  }
+
+  if (paginaEncontradaInicial && !pareceNavegacao) return null
+
+  if (paginaEncontradaInicial
+    && paginaEncontradaInicial.pagina !== "Clientes"
+    && !PAGINAS_COM_FILTRO_CLIENTE.has(paginaEncontradaInicial.pagina)) {
+    if (!usuarioPodeAbrirPagina(usuario, paginaEncontradaInicial.pagina)) {
+      return respostaDeComando({ resposta: `Seu perfil não possui permissão para abrir ${paginaEncontradaInicial.pagina}.` })
+    }
+    const natural = respostaNaturalDeNavegacao({
+      pagina: paginaEncontradaInicial.pagina,
+      alvo: "pagina",
+      clienteAcao: null,
+      clienteAtual: null,
+    })
+    return respostaDeComando({
+      resposta: natural.resposta,
+      fala: natural.fala,
+      acao: { tipo: "navegar", pagina: paginaEncontradaInicial.pagina, alvo: "pagina", segura: true, cliente: null },
+    })
+  }
 
   // Comandos como “abrir Multicópias Maracanã” não citam a palavra
   // “cliente”, mas devem abrir diretamente a Central desse cliente.
@@ -334,18 +416,22 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
   const clienteSugerido = nomeFalado ? sugerirClientePorSom(clientes, nomeFalado) : null
 
   if (!localizado.cliente && !localizado.ambiguo && clienteSugerido) {
-    const nomeCorreto = nomeCliente(clienteSugerido)
-    const regexNome = new RegExp(escaparRegex(nomeFalado), "i")
-    const comandoCorrigido = String(mensagem || "").replace(regexNome, nomeCorreto)
-    return respostaDeComando({
-      resposta: `Você quis dizer ${nomeCorreto}?`,
-      vocabularioSugestao: {
-        termoOuvido: nomeFalado,
-        termoCorreto: nomeCorreto,
-        clienteId: clienteSugerido.id,
-        comandoCorrigido,
-      },
-    })
+    if (normalizar(origem) === "voz") {
+      localizado.cliente = clienteSugerido
+    } else {
+      const nomeCorreto = nomeCliente(clienteSugerido)
+      const regexNome = new RegExp(escaparRegex(nomeFalado), "i")
+      const comandoCorrigido = String(mensagem || "").replace(regexNome, nomeCorreto)
+      return respostaDeComando({
+        resposta: `Você quis dizer ${nomeCorreto}?`,
+        vocabularioSugestao: {
+          termoOuvido: nomeFalado,
+          termoCorreto: nomeCorreto,
+          clienteId: clienteSugerido.id,
+          comandoCorrigido,
+        },
+      })
+    }
   }
 
   if (localizado.ambiguo) {
@@ -419,6 +505,192 @@ async function detectarComandoNavegacao({ mensagem, clienteId, usuario }) {
     fala: natural.fala,
     acao,
   })
+}
+
+function normalizarNomeCanonico(valor, opcoes) {
+  const alvo = normalizar(valor)
+  if (!alvo) return ""
+  return opcoes.find((item) => normalizar(item) === alvo) || ""
+}
+
+function extrairObjetoJsonLivre(texto) {
+  const limpo = String(texto || "").trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim()
+  const inicio = limpo.indexOf("{")
+  const fim = limpo.lastIndexOf("}")
+  if (inicio < 0 || fim <= inicio) return null
+  try {
+    return JSON.parse(limpo.slice(inicio, fim + 1))
+  } catch {
+    return null
+  }
+}
+
+function resolverClienteDaInterpretacao(clientes, resultado, clienteAtual) {
+  const idInformado = resultado?.clienteId
+  if (idInformado !== null && idInformado !== undefined && idInformado !== "") {
+    const porId = clientes.find((cliente) => String(cliente.id) === String(idInformado))
+    if (porId) return porId
+  }
+
+  const nomeInformado = normalizar(resultado?.clienteNome)
+  if (nomeInformado) {
+    const localizado = localizarClienteNoTexto(clientes, nomeInformado)
+    if (localizado.cliente && !localizado.ambiguo) return localizado.cliente
+    const sugerido = sugerirClientePorSom(clientes, nomeInformado)
+    if (sugerido) return sugerido
+  }
+
+  if (resultado?.usarClienteAtual && clienteAtual) return clienteAtual
+  return null
+}
+
+async function detectarComandoNavegacaoSemantico({ mensagem, clienteId, usuario, paginaAtual = "" }) {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) return null
+
+  let clientes = await Cliente.findAll({
+    attributes: ["id", "nome", "regime", "situacaoEmpresa"],
+    order: [["nome", "ASC"]],
+    limit: 180,
+  })
+
+  if (usuario?.perfil === "Cliente" && usuario?.clienteVinculado) {
+    clientes = clientes.filter((cliente) => normalizar(nomeCliente(cliente)) === normalizar(usuario.clienteVinculado))
+  }
+
+  const clienteAtual = clienteId
+    ? clientes.find((cliente) => String(cliente.id) === String(clienteId)) || null
+    : null
+  const paginasPermitidas = PAGINAS_NAVEGACAO
+    .map((item) => item.pagina)
+    .filter((pagina, indice, lista) => lista.indexOf(pagina) === indice)
+    .filter((pagina) => usuarioPodeAbrirPagina(usuario, pagina))
+  const gruposPermitidos = usuario?.perfil === "Cliente" ? [] : GRUPOS_NAVEGACAO.map((item) => item.grupo)
+
+  const catalogoPaginas = paginasPermitidas.map((pagina) => ({
+    pagina,
+    finalidade: DESCRICOES_PAGINAS_NAVEGACAO[pagina] || pagina,
+    aceitaCliente: PAGINAS_COM_FILTRO_CLIENTE.has(pagina) || pagina === "Clientes",
+  }))
+  const catalogoClientes = clientes.map((cliente) => ({ id: cliente.id, nome: nomeCliente(cliente) }))
+
+  const prompt = `Você é o roteador de navegação da Nexa ERP. Interprete português brasileiro natural, inclusive frases incompletas, sinônimos, pronomes e continuação de contexto.
+Seu trabalho é decidir se o usuário quer NAVEGAR no sistema, ABRIR um grupo do menu ou apenas CONVERSAR.
+Nunca invente páginas ou clientes. Use somente os nomes canônicos fornecidos.
+
+REGRAS IMPORTANTES:
+- "abra o fiscal Multicópias" => navegar para "Fiscal" com o cliente Multicópias.
+- "agora vá para o cliente Maurício" => abrir a Central desse cliente: página "Clientes", alvo "central-cliente".
+- "quero ver a movimentação do Maurício" => página "Movimentos Clientes" com Maurício.
+- "entre em ferramentas" => abrir o grupo "Ferramentas".
+- "abra o dashboard" => página "Dashboard".
+- "como está a Multicópias?" é conversa, não navegação.
+- Quando disser "dele", "dela", "desse cliente", "agora no fiscal" ou algo equivalente, use o cliente atual se existir.
+- Se o pedido for claramente de navegação, não faça pergunta desnecessária. Só marque ambíguo quando houver realmente dois clientes possíveis ou faltar um cliente indispensável.
+
+PÁGINA ATUAL: ${paginaAtual || "não informada"}
+CLIENTE ATUAL: ${clienteAtual ? `${clienteAtual.id} - ${nomeCliente(clienteAtual)}` : "nenhum"}
+PÁGINAS DISPONÍVEIS: ${JSON.stringify(catalogoPaginas)}
+GRUPOS DISPONÍVEIS: ${JSON.stringify(gruposPermitidos)}
+CLIENTES CADASTRADOS: ${JSON.stringify(catalogoClientes)}
+
+FRASE DO USUÁRIO: ${String(mensagem || "").slice(0, 500)}
+
+Retorne SOMENTE JSON válido, sem markdown:
+{"intencao":"navegar|abrir-grupo|conversar|ambiguo","pagina":"nome canônico ou vazio","grupo":"nome canônico ou vazio","alvo":"pagina|central-cliente","clienteId":null,"clienteNome":"","usarClienteAtual":false,"resposta":""}`
+
+  const controlador = new AbortController()
+  const timeout = setTimeout(() => controlador.abort(), 14000)
+
+  try {
+    const resposta = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: controlador.signal,
+      body: JSON.stringify({
+        model: MODELO_PADRAO,
+        messages: [
+          { role: "system", content: "Classifique comandos de navegação da Nexa ERP e devolva somente JSON válido." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 180,
+        temperature: 0,
+      }),
+    })
+
+    if (!resposta.ok) return null
+    const dados = await resposta.json().catch(() => ({}))
+    const interpretado = extrairObjetoJsonLivre(extrairTextoGroq(dados))
+    if (!interpretado) return null
+
+    const intencao = normalizar(interpretado.intencao).replace(/\s+/g, "-")
+    if (intencao === "conversar" || intencao === "conversa") return null
+
+    if (intencao === "ambiguo") {
+      return respostaDeComando({
+        resposta: String(interpretado.resposta || "Preciso que você informe a tela ou o cliente com mais clareza.").trim(),
+        fala: "",
+      })
+    }
+
+    if (intencao === "abrir-grupo") {
+      const grupo = normalizarNomeCanonico(interpretado.grupo, gruposPermitidos)
+      if (!grupo) return null
+      return respostaDeComando({
+        resposta: `Menu ${grupo} aberto.`,
+        fala: "",
+        acao: { tipo: "abrir-grupo", grupo, segura: true },
+      })
+    }
+
+    if (intencao !== "navegar") return null
+
+    const pagina = normalizarNomeCanonico(interpretado.pagina, paginasPermitidas)
+    if (!pagina) return null
+    const clienteAcao = resolverClienteDaInterpretacao(clientes, interpretado, clienteAtual)
+    let alvo = normalizar(interpretado.alvo) === "central-cliente" ? "central-cliente" : "pagina"
+    if (pagina === "Clientes" && clienteAcao && (alvo === "central-cliente" || interpretado.clienteId || interpretado.clienteNome)) {
+      alvo = "central-cliente"
+    }
+
+    if (alvo === "central-cliente" && !clienteAcao) {
+      return respostaDeComando({
+        resposta: "Qual cliente você quer abrir?",
+        fala: "",
+      })
+    }
+
+    const acao = {
+      tipo: "navegar",
+      pagina,
+      alvo,
+      segura: true,
+      cliente: clienteAcao ? { id: clienteAcao.id, nome: nomeCliente(clienteAcao) } : null,
+    }
+    const natural = respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
+    return respostaDeComando({ resposta: natural.resposta, fala: "", acao })
+  } catch (error) {
+    console.warn("NAVEGAÇÃO SEMÂNTICA DA NEXA INDISPONÍVEL:", error?.message || error)
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function detectarComandoNavegacao(parametros) {
+  const deterministico = await detectarComandoNavegacaoDeterministico(parametros)
+  if (deterministico) {
+    if (normalizar(parametros?.origem) === "voz" && deterministico.acao) {
+      return { ...deterministico, fala: "" }
+    }
+    return deterministico
+  }
+
+  if (normalizar(parametros?.origem) !== "voz") return null
+  return detectarComandoNavegacaoSemantico(parametros)
 }
 
 function encerrado(status) {
@@ -1308,6 +1580,8 @@ async function conversar(req, res) {
       ? req.body.tipoContexto
       : (clienteId ? "cliente" : "geral")
     const interessadoNome = String(req.body?.interessadoNome || "").trim()
+    const origem = normalizar(req.body?.origem) || "texto"
+    const paginaAtual = String(req.body?.paginaAtual || "").trim()
 
     if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
 
@@ -1316,6 +1590,20 @@ async function conversar(req, res) {
     const usuarioCompleto = {
       ...(req.usuario || {}),
       ...(usuarioBanco?.toJSON?.() || {}),
+    }
+
+    // Comandos falados são roteados antes de criar conversa ou consultar dados.
+    // Isso reduz a latência e impede que a IA apenas diga que abriu uma tela sem
+    // devolver uma ação executável para a Web.
+    if (origem === "voz") {
+      const comandoVoz = await detectarComandoNavegacao({
+        mensagem,
+        clienteId,
+        usuario: usuarioCompleto,
+        origem,
+        paginaAtual,
+      })
+      if (comandoVoz) return res.json(comandoVoz)
     }
 
     conversa = await obterOuCriarConversa({
@@ -1447,6 +1735,8 @@ async function conversar(req, res) {
       mensagem,
       clienteId,
       usuario: usuarioCompleto,
+      origem: origem === "voz" ? "texto" : origem,
+      paginaAtual,
     })
 
     if (comandoNavegacao) {
