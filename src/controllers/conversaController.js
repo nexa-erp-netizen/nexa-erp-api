@@ -246,7 +246,11 @@ function configuracaoPaginaNoTexto(texto) {
     .flatMap((item) => item.aliases.map((alias) => ({ ...item, alias: normalizar(alias) })))
     .sort((a, b) => b.alias.length - a.alias.length)
 
-  return candidatos.find((item) => texto.includes(item.alias)) || null
+  const encontrados = candidatos.filter((item) => texto.includes(item.alias))
+  const paginaEspecifica = encontrados.find(
+    (item) => !(item.pagina === "Clientes" && ["cliente", "clientes"].includes(item.alias)),
+  )
+  return paginaEspecifica || encontrados[0] || null
 }
 
 function configuracaoGrupoNoTexto(texto) {
@@ -283,18 +287,55 @@ function pontuarClienteNoTexto(cliente, texto) {
   return tokens.reduce((pontos, token) => pontos + (contemPalavra(texto, token) ? token.length : 0), 0)
 }
 
+function formatarCodigoCliente(clienteOuId) {
+  const id = typeof clienteOuId === "object" ? clienteOuId?.id : clienteOuId
+  const numero = Number(id)
+  if (!Number.isInteger(numero) || numero <= 0) return ""
+  return `CLI-${String(numero).padStart(4, "0")}`
+}
+
+function localizarClientePorCodigo(clientes, texto) {
+  const valor = normalizar(texto)
+  const padroes = [
+    /\bcli\s*[-#]?\s*0*(\d+)\b/,
+    /\b(?:codigo|id)\s+(?:do\s+)?(?:cliente\s+)?#?\s*0*(\d+)\b/,
+    /\bcliente\s+(?:numero\s+|n[ºo°]\s*)?#?\s*0*(\d+)\b/,
+  ]
+
+  for (const padrao of padroes) {
+    const correspondencia = valor.match(padrao)
+    if (!correspondencia) continue
+    const id = Number(correspondencia[1])
+    const cliente = clientes.find((item) => Number(item.id) === id)
+    if (cliente) return cliente
+  }
+
+  return null
+}
+
 function localizarClienteNoTexto(clientes, texto) {
+  const textoNormalizado = normalizar(texto)
+  const porCodigo = localizarClientePorCodigo(clientes, textoNormalizado)
+  if (porCodigo) return { cliente: porCodigo, ambiguo: false, candidatos: [porCodigo] }
+
   const pontuados = clientes
-    .map((cliente) => ({ cliente, pontos: pontuarClienteNoTexto(cliente, texto) }))
+    .map((cliente) => ({ cliente, pontos: pontuarClienteNoTexto(cliente, textoNormalizado) }))
     .filter((item) => item.pontos > 0)
     .sort((a, b) => b.pontos - a.pontos)
 
-  if (!pontuados.length) return { cliente: null, ambiguo: false }
-  if (pontuados.length > 1 && pontuados[0].pontos === pontuados[1].pontos) {
-    return { cliente: null, ambiguo: true }
+  if (!pontuados.length) return { cliente: null, ambiguo: false, candidatos: [] }
+
+  const melhorPontuacao = pontuados[0].pontos
+  const melhores = pontuados.filter((item) => item.pontos === melhorPontuacao)
+  if (melhores.length > 1) {
+    return {
+      cliente: null,
+      ambiguo: true,
+      candidatos: melhores.map((item) => item.cliente).slice(0, 8),
+    }
   }
 
-  return { cliente: pontuados[0].cliente, ambiguo: false }
+  return { cliente: pontuados[0].cliente, ambiguo: false, candidatos: [pontuados[0].cliente] }
 }
 
 function usuarioPodeAbrirPagina(usuario, pagina) {
@@ -442,8 +483,27 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
   }
 
   if (localizado.ambiguo) {
+    const paginaAmbigua = paginaEncontradaInicial?.pagina || "Clientes"
+    const alvoAmbiguo = paginaAmbigua === "Clientes" ? "central-cliente" : "pagina"
+    const candidatos = (localizado.candidatos || []).map((cliente) => ({
+      id: cliente.id,
+      nome: nomeCliente(cliente),
+      codigo: formatarCodigoCliente(cliente),
+    }))
+    const opcoes = candidatos
+      .slice(0, 4)
+      .map((cliente) => `${cliente.codigo}, ${cliente.nome}`)
+      .join("; ")
+    const resposta = `Encontrei mais de um cliente compatível: ${opcoes}. Diga o código do cliente correto.`
+
     return respostaDeComando({
-      resposta: "Encontrei mais de um cliente compatível. Informe o nome completo para eu abrir a tela correta.",
+      resposta,
+      fala: resposta,
+      selecaoClientePendente: {
+        pagina: paginaAmbigua,
+        alvo: alvoAmbiguo,
+        candidatos,
+      },
     })
   }
 
@@ -511,6 +571,92 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
     resposta: natural.resposta,
     fala: natural.fala,
     acao,
+  })
+}
+
+async function resolverSelecaoClientePendente({ selecao, clienteSelecionadoId, cancelar, clienteIdAtual, usuario }) {
+  if (!selecao || typeof selecao !== "object") return null
+
+  const pagina = normalizarNomeCanonico(
+    selecao.pagina,
+    PAGINAS_NAVEGACAO.map((item) => item.pagina),
+  )
+  const alvo = normalizar(selecao.alvo) === "central-cliente" ? "central-cliente" : "pagina"
+  const idsPermitidos = new Set(
+    (Array.isArray(selecao.candidatos) ? selecao.candidatos : [])
+      .map((item) => Number(item?.id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )
+
+  if (!pagina || !idsPermitidos.size) return null
+
+  if (cancelar) {
+    return respostaDeComando({
+      resposta: "Seleção de cliente cancelada.",
+      fala: "Certo, cancelei.",
+      selecaoClienteCancelada: true,
+    })
+  }
+
+  if (!usuarioPodeAbrirPagina(usuario, pagina)) {
+    return respostaDeComando({
+      resposta: `Seu perfil não possui permissão para abrir ${pagina}.`,
+      selecaoClienteCancelada: true,
+    })
+  }
+
+  const candidatos = await Cliente.findAll({
+    where: { id: [...idsPermitidos] },
+    attributes: ["id", "nome", "regime", "situacaoEmpresa"],
+    order: [["nome", "ASC"]],
+  })
+
+  const candidatosPermitidos = usuario?.perfil === "Cliente" && usuario?.clienteVinculado
+    ? candidatos.filter((cliente) => normalizar(nomeCliente(cliente)) === normalizar(usuario.clienteVinculado))
+    : candidatos
+
+  const idSelecionado = Number(clienteSelecionadoId)
+  const clienteAcao = candidatosPermitidos.find((cliente) => Number(cliente.id) === idSelecionado) || null
+
+  if (!clienteAcao) {
+    const opcoes = candidatosPermitidos
+      .slice(0, 4)
+      .map((cliente) => `${formatarCodigoCliente(cliente)}, ${nomeCliente(cliente)}`)
+      .join("; ")
+    const resposta = `Não identifiquei o código. As opções são: ${opcoes}. Diga somente o código do cliente.`
+    return respostaDeComando({
+      resposta,
+      fala: resposta,
+      selecaoClientePendente: {
+        pagina,
+        alvo,
+        candidatos: candidatosPermitidos.map((cliente) => ({
+          id: cliente.id,
+          nome: nomeCliente(cliente),
+          codigo: formatarCodigoCliente(cliente),
+        })),
+      },
+    })
+  }
+
+  const clienteAtual = clienteIdAtual
+    ? await Cliente.findByPk(clienteIdAtual, { attributes: ["id", "nome"] })
+    : null
+  const acao = {
+    tipo: "navegar",
+    pagina,
+    alvo,
+    segura: true,
+    cliente: { id: clienteAcao.id, nome: nomeCliente(clienteAcao) },
+  }
+  const natural = respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
+  const codigo = formatarCodigoCliente(clienteAcao)
+
+  return respostaDeComando({
+    resposta: `${natural.resposta.replace(/\.$/, "")} — ${codigo}.`,
+    fala: natural.fala,
+    acao,
+    selecaoClienteConcluida: true,
   })
 }
 
@@ -1588,6 +1734,9 @@ async function conversar(req, res) {
     const interessadoNome = String(req.body?.interessadoNome || "").trim()
     const origem = normalizar(req.body?.origem) || "texto"
     const paginaAtual = String(req.body?.paginaAtual || "").trim()
+    const selecaoClientePendente = req.body?.selecaoClientePendente || null
+    const selecaoClienteId = req.body?.selecaoClienteId ? Number(req.body.selecaoClienteId) : null
+    const cancelarSelecaoCliente = Boolean(req.body?.cancelarSelecaoCliente)
 
     if (!mensagem) return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
 
@@ -1725,6 +1874,25 @@ async function conversar(req, res) {
         modelo: "Nexa Memory 1.0",
         respondidoEm: new Date().toISOString(),
       }, conversa))
+    }
+
+    const selecaoResolvida = await resolverSelecaoClientePendente({
+      selecao: selecaoClientePendente,
+      clienteSelecionadoId: selecaoClienteId,
+      cancelar: cancelarSelecaoCliente,
+      clienteIdAtual: clienteId,
+      usuario: usuarioCompleto,
+    })
+
+    if (selecaoResolvida) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: selecaoResolvida.resposta,
+        dados: selecaoResolvida,
+      })
+      return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
     }
 
     const comandoNavegacao = await detectarComandoNavegacao({
