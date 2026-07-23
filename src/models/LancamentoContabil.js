@@ -32,6 +32,17 @@ const LancamentoContabil = sequelize.define("LancamentoContabil", {
     allowNull: false,
   },
 
+  quantidade: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 1,
+  },
+
+  valorUnitario: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
   valor: {
     type: DataTypes.STRING,
     allowNull: false,
