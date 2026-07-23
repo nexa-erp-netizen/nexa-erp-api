@@ -44,7 +44,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
   { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
   { pagina: "WhatsApp Inteligente", aliases: ["whatsapp inteligente", "whatsapp"] },
-  { pagina: "Assistente do Dia", aliases: ["assistente do dia", "prioridades do dia"] },
+  { pagina: "Assistente do Dia", aliases: ["assistente do dia", "prioridades do dia", "iniciar meu dia", "comecar meu dia", "começar meu dia"] },
   { pagina: "Laboratório Tributário", aliases: ["laboratorio tributario", "laboratorio"] },
   { pagina: "Certificados Digitais", aliases: ["certificados digitais", "certificados", "certificado digital"] },
   { pagina: "Procurações e-CAC", aliases: ["procuracoes e-cac", "procuracoes ecac", "procuracoes"] },
