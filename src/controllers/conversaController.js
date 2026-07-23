@@ -269,6 +269,11 @@ function pareceComandoNavegacao(texto) {
   return temVerboNavegacao(texto)
 }
 
+function perguntaLivreSemDestinoDeTela(texto) {
+  if (configuracaoPaginaNoTexto(texto) || configuracaoGrupoNoTexto(texto)) return false
+  return /^(por que|porque|qual|quais|como|o que|oque|quem|quando|quanto|quantos|quantas|posso|pode|devo|preciso|sera que)\b/.test(texto)
+}
+
 function pontuarClienteNoTexto(cliente, texto) {
   const nome = normalizar(nomeCliente(cliente))
   if (!nome) return 0
@@ -320,11 +325,12 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
   )
 
   if (alvo === "central-cliente") {
+    const texto = clienteMudou
+      ? `Cliente ${nomeCliente(clienteAcao)} aberto.`
+      : "Cliente aberto."
     return {
-      resposta: clienteMudou
-        ? `Cliente ${nomeCliente(clienteAcao)} aberto.`
-        : "Cliente aberto.",
-      fala: "Certo.",
+      resposta: texto,
+      fala: clienteAcao ? `Certo, abri ${nomeCliente(clienteAcao)}.` : "Cliente aberto.",
     }
   }
 
@@ -346,9 +352,10 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
   }
 
   if (clienteMudou && clienteAcao && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
+    const texto = `${natural.resposta.replace(/\.$/, "")} para ${nomeCliente(clienteAcao)}.`
     return {
-      resposta: `${natural.resposta.replace(/\.$/, "")} para ${nomeCliente(clienteAcao)}.`,
-      fala: natural.fala,
+      resposta: texto,
+      fala: `Certo, abri ${pagina} para ${nomeCliente(clienteAcao)}.`,
     }
   }
 
@@ -367,7 +374,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
   if (grupoEncontrado && (texto === grupoEncontrado.alias || temVerbo) && (!paginaEncontradaInicial || /\b(menu|grupo)\b/.test(texto))) {
     return respostaDeComando({
       resposta: `Menu ${grupoEncontrado.grupo} aberto.`,
-      fala: "",
+      fala: `Certo, menu ${grupoEncontrado.grupo} aberto.`,
       acao: { tipo: "abrir-grupo", grupo: grupoEncontrado.grupo, segura: true },
     })
   }
@@ -630,9 +637,10 @@ Retorne SOMENTE JSON válido, sem markdown:
     if (intencao === "conversar" || intencao === "conversa") return null
 
     if (intencao === "ambiguo") {
+      const textoResposta = String(interpretado.resposta || "Preciso que você informe a tela ou o cliente com mais clareza.").trim()
       return respostaDeComando({
-        resposta: String(interpretado.resposta || "Preciso que você informe a tela ou o cliente com mais clareza.").trim(),
-        fala: "",
+        resposta: textoResposta,
+        fala: textoResposta,
       })
     }
 
@@ -641,7 +649,7 @@ Retorne SOMENTE JSON válido, sem markdown:
       if (!grupo) return null
       return respostaDeComando({
         resposta: `Menu ${grupo} aberto.`,
-        fala: "",
+        fala: `Certo, menu ${grupo} aberto.`,
         acao: { tipo: "abrir-grupo", grupo, segura: true },
       })
     }
@@ -659,7 +667,7 @@ Retorne SOMENTE JSON válido, sem markdown:
     if (alvo === "central-cliente" && !clienteAcao) {
       return respostaDeComando({
         resposta: "Qual cliente você quer abrir?",
-        fala: "",
+        fala: "Qual cliente você quer abrir?",
       })
     }
 
@@ -671,7 +679,7 @@ Retorne SOMENTE JSON válido, sem markdown:
       cliente: clienteAcao ? { id: clienteAcao.id, nome: nomeCliente(clienteAcao) } : null,
     }
     const natural = respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
-    return respostaDeComando({ resposta: natural.resposta, fala: "", acao })
+    return respostaDeComando({ resposta: natural.resposta, fala: natural.fala, acao })
   } catch (error) {
     console.warn("NAVEGAÇÃO SEMÂNTICA DA NEXA INDISPONÍVEL:", error?.message || error)
     return null
@@ -682,14 +690,11 @@ Retorne SOMENTE JSON válido, sem markdown:
 
 async function detectarComandoNavegacao(parametros) {
   const deterministico = await detectarComandoNavegacaoDeterministico(parametros)
-  if (deterministico) {
-    if (normalizar(parametros?.origem) === "voz" && deterministico.acao) {
-      return { ...deterministico, fala: "" }
-    }
-    return deterministico
-  }
+  if (deterministico) return deterministico
 
   if (normalizar(parametros?.origem) !== "voz") return null
+  const texto = normalizar(parametros?.mensagem)
+  if (perguntaLivreSemDestinoDeTela(texto)) return null
   return detectarComandoNavegacaoSemantico(parametros)
 }
 
@@ -1012,6 +1017,7 @@ function anexarMetadadosConversa(resposta, conversa, extra = {}) {
     conversaId: conversa?.id || null,
     conversaTitulo: conversa?.titulo || "Nova conversa",
     tipoContexto: conversa?.tipoContexto || "geral",
+    historicoSalvo: Boolean(conversa?.id),
     ...extra,
   }
 }
@@ -1592,20 +1598,6 @@ async function conversar(req, res) {
       ...(usuarioBanco?.toJSON?.() || {}),
     }
 
-    // Comandos falados são roteados antes de criar conversa ou consultar dados.
-    // Isso reduz a latência e impede que a IA apenas diga que abriu uma tela sem
-    // devolver uma ação executável para a Web.
-    if (origem === "voz") {
-      const comandoVoz = await detectarComandoNavegacao({
-        mensagem,
-        clienteId,
-        usuario: usuarioCompleto,
-        origem,
-        paginaAtual,
-      })
-      if (comandoVoz) return res.json(comandoVoz)
-    }
-
     conversa = await obterOuCriarConversa({
       usuarioId: req.usuario.id,
       conversaId,
@@ -1623,9 +1615,13 @@ async function conversar(req, res) {
       usuarioId: req.usuario.id,
       autor: "usuario",
       texto: mensagemOriginal,
-      dados: vocabulario.alterada
-        ? { transcricaoCorrigida: mensagem, substituicoesVocabulario: vocabulario.substituicoes }
-        : null,
+      dados: {
+        origem,
+        paginaAtual: paginaAtual || null,
+        ...(vocabulario.alterada
+          ? { transcricaoCorrigida: mensagem, substituicoesVocabulario: vocabulario.substituicoes }
+          : {}),
+      },
     })
 
     const instrucaoVocabulario = detectarInstrucaoDeAprendizado(mensagemOriginal)
@@ -1735,7 +1731,7 @@ async function conversar(req, res) {
       mensagem,
       clienteId,
       usuario: usuarioCompleto,
-      origem: origem === "voz" ? "texto" : origem,
+      origem,
       paginaAtual,
     })
 
@@ -1812,6 +1808,7 @@ async function conversar(req, res) {
 
     const respostaFinal = {
       ...resultado,
+      ...(origem === "voz" ? { fala: resultado.resposta } : {}),
       modo: resultado.pesquisaWeb ? "groq-pesquisa-web" : "groq-online",
       provedor: "groq",
       modelo: resultado.modeloUsado || MODELO_PADRAO,
