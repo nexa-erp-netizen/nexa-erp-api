@@ -51,10 +51,20 @@ const ServicoAvulso = sequelize.define("ServicoAvulso", {
     allowNull: false,
   },
 
+  vencimento: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
+  dataRecebimento: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  },
+
   status: {
     type: DataTypes.STRING,
     allowNull: false,
-    defaultValue: "Recebido",
+    defaultValue: "Pendente",
   },
 
   formaPagamento: {

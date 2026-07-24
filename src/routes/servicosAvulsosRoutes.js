@@ -56,6 +56,19 @@ function formatarMoeda(valor) {
   })
 }
 
+function formatarData(valor) {
+  if (!valor) return "não informado"
+  const [ano, mes, dia] = String(valor).slice(0, 10).split("-")
+  return ano && mes && dia ? `${dia}/${mes}/${ano}` : String(valor)
+}
+
+function statusSeguro(valor, padrao = "Pendente") {
+  const status = String(valor || padrao).trim().toLowerCase()
+  if (status === "recebido" || status === "pago") return "Recebido"
+  if (status === "cancelado" || status === "cancelada") return "Cancelado"
+  return "Pendente"
+}
+
 function referenciaFinanceiro(servicoId) {
   return `servico-avulso:${servicoId}`
 }
@@ -73,7 +86,7 @@ function textoHistorico(servico) {
   const desconto = numeroSeguro(servico.desconto)
   const partes = [
     `${quantidade}x ${servico.descricao}`,
-    `valor cobrado: ${formatarMoeda(servico.valorTotal)}`,
+    `valor: ${formatarMoeda(servico.valorTotal)}`,
     `status: ${servico.status}`,
   ]
 
@@ -81,7 +94,11 @@ function textoHistorico(servico) {
     partes.splice(1, 0, `subtotal: ${formatarMoeda(subtotal)}`, `desconto: ${formatarMoeda(desconto)}`)
   }
 
-  return `Serviço avulso realizado — ${partes.join(" • ")}.`
+  if (servico.vencimento) {
+    partes.push(`vencimento: ${formatarData(servico.vencimento)}`)
+  }
+
+  return `Serviço e cobrança — ${partes.join(" • ")}.`
 }
 
 function dadosCalculados(body, atual = {}) {
@@ -115,11 +132,24 @@ function whereEmpresa(req) {
 }
 
 async function obterClienteValido(clienteId, req, transaction) {
-  return Cliente.findOne({
-    where: { id: clienteId },
+  if (!Number.isInteger(Number(clienteId)) || Number(clienteId) <= 0) return null
+
+  const cliente = await Cliente.findByPk(Number(clienteId), {
     transaction,
     lock: transaction ? transaction.LOCK.UPDATE : undefined,
   })
+
+  if (!cliente) return null
+
+  if (
+    req.usuario?.empresaId &&
+    cliente.empresaId &&
+    Number(cliente.empresaId) !== Number(req.usuario.empresaId)
+  ) {
+    return null
+  }
+
+  return cliente
 }
 
 async function removerHistorico(cliente, historicoId, transaction) {
@@ -140,6 +170,9 @@ async function registrarHistorico(cliente, servico, transaction) {
 
   const historicoId = servico.historicoId || `servico-avulso-${servico.id}`
   const anotacoes = Array.isArray(cliente.anotacoes) ? cliente.anotacoes : []
+  const registroAnterior = anotacoes.find(
+    (item) => String(item?.id || "") === String(historicoId)
+  )
   const semRegistroAnterior = anotacoes.filter(
     (item) => String(item?.id || "") !== String(historicoId)
   )
@@ -147,62 +180,108 @@ async function registrarHistorico(cliente, servico, transaction) {
   const anotacao = {
     id: historicoId,
     data: servico.data ? `${servico.data}T12:00:00.000Z` : new Date().toISOString(),
-    tipo: "Serviço avulso",
+    tipo: "Serviço e cobrança",
     texto: textoHistorico(servico),
     servicoAvulsoId: servico.id,
   }
 
-  await cliente.update(
-    { anotacoes: [anotacao, ...semRegistroAnterior] },
-    { transaction }
-  )
+  const historicoMudou = !registroAnterior
+    || registroAnterior.data !== anotacao.data
+    || registroAnterior.tipo !== anotacao.tipo
+    || registroAnterior.texto !== anotacao.texto
+    || Number(registroAnterior.servicoAvulsoId) !== Number(anotacao.servicoAvulsoId)
+
+  if (historicoMudou) {
+    await cliente.update(
+      { anotacoes: [anotacao, ...semRegistroAnterior] },
+      { transaction }
+    )
+  }
 
   if (servico.historicoId !== historicoId) {
     await servico.update({ historicoId }, { transaction })
   }
 }
 
-async function sincronizarFinanceiro(servico, req, transaction) {
-  const referenciaOrigem = referenciaFinanceiro(servico.id)
+async function localizarFinanceiro(servico, req, transaction) {
   let financeiro = null
 
   if (servico.financeiroId) {
-    financeiro = await Financeiro.findOne({
-      where: {
-        id: servico.financeiroId,
-        ...whereEmpresa(req),
-      },
+    financeiro = await Financeiro.findByPk(servico.financeiroId, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction ? transaction.LOCK.UPDATE : undefined,
     })
+
+    if (
+      financeiro &&
+      req.usuario?.empresaId &&
+      financeiro.empresaId &&
+      Number(financeiro.empresaId) !== Number(req.usuario.empresaId)
+    ) {
+      financeiro = null
+    }
   }
 
   if (!financeiro) {
     financeiro = await Financeiro.findOne({
-      where: {
-        referenciaOrigem,
-        ...whereEmpresa(req),
-      },
+      where: { referenciaOrigem: referenciaFinanceiro(servico.id) },
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: transaction ? transaction.LOCK.UPDATE : undefined,
     })
   }
 
-  const recebido = String(servico.status || "").toLowerCase() === "recebido"
+  return financeiro
+}
+
+async function removerFinanceiroVinculado(servico, req, transaction) {
+  const financeiro = await localizarFinanceiro(servico, req, transaction)
+
+  if (financeiro) {
+    await financeiro.destroy({ transaction })
+  }
+
+  await Financeiro.destroy({
+    where: {
+      referenciaOrigem: referenciaFinanceiro(servico.id),
+      ...whereEmpresa(req),
+    },
+    transaction,
+  })
+
+  if (servico.financeiroId) {
+    await servico.update({ financeiroId: null }, { transaction })
+  }
+}
+
+async function sincronizarFinanceiro(servico, req, transaction) {
+  if (statusSeguro(servico.status) === "Cancelado") {
+    await removerFinanceiroVinculado(servico, req, transaction)
+    return null
+  }
+
+  let financeiro = await localizarFinanceiro(servico, req, transaction)
+  const recebido = statusSeguro(servico.status) === "Recebido"
+  const empresaId = servico.empresaId || req.usuario?.empresaId || null
+  const vencimento = servico.vencimento || servico.data
+  const dataRecebimento = recebido
+    ? (servico.dataRecebimento || servico.data || new Date().toISOString().slice(0, 10))
+    : ""
+
   const dadosFinanceiro = {
+    clienteId: servico.clienteId,
     descricao: descricaoFinanceiro(servico),
     cliente: servico.cliente,
     tipo: "Receber",
-    centroCusto: "Serviços Avulsos",
+    centroCusto: "Serviços e Cobranças",
     formaPagamento: servico.formaPagamento || "",
     valor: moedaBanco(servico.valorTotal),
-    vencimento: servico.data,
+    vencimento,
     status: recebido ? "Recebido" : "Pendente",
-    dataRecebimento: recebido ? servico.data : "",
-    origem: "Serviço Avulso",
-    referenciaOrigem,
+    dataRecebimento,
+    origem: "Serviço do Cliente",
+    referenciaOrigem: referenciaFinanceiro(servico.id),
     anexos: [],
-    empresaId: servico.empresaId || req.usuario?.empresaId || null,
+    empresaId,
   }
 
   if (financeiro) {
@@ -229,15 +308,71 @@ router.get("/", async (req, res) => {
       where.clienteId = Number(req.query.clienteId)
     }
 
+    if (req.query.status) {
+      where.status = statusSeguro(req.query.status)
+    }
+
     const registros = await ServicoAvulso.findAll({
       where,
-      order: [["data", "DESC"], ["createdAt", "DESC"]],
+      order: [["vencimento", "ASC"], ["data", "DESC"], ["createdAt", "DESC"]],
     })
 
     res.json(registros)
   } catch (error) {
-    console.error("ERRO AO LISTAR SERVIÇOS AVULSOS:", error)
-    res.status(500).json({ message: "Erro ao listar serviços avulsos" })
+    console.error("ERRO AO LISTAR SERVIÇOS E COBRANÇAS:", error)
+    res.status(500).json({ message: "Erro ao listar serviços e cobranças" })
+  }
+})
+
+router.post("/sincronizar-financeiro", async (req, res) => {
+  const transaction = await sequelize.transaction()
+
+  try {
+    const where = { ...whereEmpresa(req) }
+    if (req.body?.clienteId) where.clienteId = Number(req.body.clienteId)
+
+    const registros = await ServicoAvulso.findAll({
+      where,
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+
+    let criadosOuAtualizados = 0
+    let cancelados = 0
+
+    for (const servico of registros) {
+      const cliente = await obterClienteValido(servico.clienteId, req, transaction)
+      if (!cliente) continue
+
+      const atualizacoes = {}
+      if (!servico.vencimento) atualizacoes.vencimento = servico.data
+      if (statusSeguro(servico.status) === "Recebido" && !servico.dataRecebimento) {
+        atualizacoes.dataRecebimento = servico.data
+      }
+      if (servico.cliente !== cliente.nome) atualizacoes.cliente = cliente.nome
+      if (Object.keys(atualizacoes).length) await servico.update(atualizacoes, { transaction })
+
+      const financeiro = await sincronizarFinanceiro(servico, req, transaction)
+      if (financeiro) criadosOuAtualizados += 1
+      else cancelados += 1
+
+      await registrarHistorico(cliente, servico, transaction)
+    }
+
+    await transaction.commit()
+    res.json({
+      message: "Serviços e cobranças sincronizados com o Financeiro do Escritório",
+      total: registros.length,
+      criadosOuAtualizados,
+      cancelados,
+    })
+  } catch (error) {
+    await transaction.rollback()
+    console.error("ERRO AO SINCRONIZAR SERVIÇOS E COBRANÇAS:", error)
+    res.status(500).json({
+      message: "Erro ao sincronizar serviços e cobranças",
+      detalhe: error.message,
+    })
   }
 })
 
@@ -266,9 +401,11 @@ router.post("/", async (req, res) => {
     }
 
     const data = req.body.data || new Date().toISOString().slice(0, 10)
-    const status = String(req.body.status || "Recebido") === "Pendente"
-      ? "Pendente"
-      : "Recebido"
+    const vencimento = req.body.vencimento || data
+    const status = statusSeguro(req.body.status, "Pendente")
+    const dataRecebimento = status === "Recebido"
+      ? (req.body.dataRecebimento || data)
+      : null
 
     const servico = await ServicoAvulso.create({
       clienteId: cliente.id,
@@ -277,6 +414,8 @@ router.post("/", async (req, res) => {
       descricao,
       ...calculados,
       data,
+      vencimento,
+      dataRecebimento,
       status,
       formaPagamento: req.body.formaPagamento || "",
       observacao: req.body.observacao || "",
@@ -294,9 +433,9 @@ router.post("/", async (req, res) => {
     })
   } catch (error) {
     await transaction.rollback()
-    console.error("ERRO AO CRIAR SERVIÇO AVULSO:", error)
+    console.error("ERRO AO CRIAR SERVIÇO E COBRANÇA:", error)
     res.status(500).json({
-      message: "Erro ao registrar serviço avulso",
+      message: "Erro ao registrar serviço e cobrança",
       detalhe: error.message,
     })
   }
@@ -317,7 +456,7 @@ router.put("/:id", async (req, res) => {
 
     if (!servico) {
       await transaction.rollback()
-      return res.status(404).json({ message: "Serviço avulso não encontrado" })
+      return res.status(404).json({ message: "Serviço e cobrança não encontrado" })
     }
 
     const clienteAnterior = await obterClienteValido(servico.clienteId, req, transaction)
@@ -347,8 +486,13 @@ router.put("/:id", async (req, res) => {
     }
 
     const status = req.body.status !== undefined
-      ? (String(req.body.status) === "Pendente" ? "Pendente" : "Recebido")
-      : servico.status
+      ? statusSeguro(req.body.status)
+      : statusSeguro(servico.status)
+    const data = req.body.data || servico.data
+    const vencimento = req.body.vencimento || servico.vencimento || data
+    const dataRecebimento = status === "Recebido"
+      ? (req.body.dataRecebimento || servico.dataRecebimento || new Date().toISOString().slice(0, 10))
+      : null
 
     await servico.update({
       clienteId: clienteAtual.id,
@@ -358,7 +502,9 @@ router.put("/:id", async (req, res) => {
         : servico.servicoId,
       descricao,
       ...calculados,
-      data: req.body.data || servico.data,
+      data,
+      vencimento,
+      dataRecebimento,
       status,
       formaPagamento: req.body.formaPagamento !== undefined
         ? req.body.formaPagamento
@@ -368,7 +514,7 @@ router.put("/:id", async (req, res) => {
         : servico.observacao,
     }, { transaction })
 
-    await sincronizarFinanceiro(servico, req, transaction)
+    const financeiro = await sincronizarFinanceiro(servico, req, transaction)
 
     if (clienteAnterior && Number(clienteAnterior.id) !== Number(clienteAtual.id)) {
       await removerHistorico(clienteAnterior, servico.historicoId, transaction)
@@ -377,12 +523,15 @@ router.put("/:id", async (req, res) => {
     await registrarHistorico(clienteAtual, servico, transaction)
     await transaction.commit()
 
-    res.json(servico)
+    res.json({
+      ...servico.toJSON(),
+      financeiro,
+    })
   } catch (error) {
     await transaction.rollback()
-    console.error("ERRO AO ATUALIZAR SERVIÇO AVULSO:", error)
+    console.error("ERRO AO ATUALIZAR SERVIÇO E COBRANÇA:", error)
     res.status(500).json({
-      message: "Erro ao atualizar serviço avulso",
+      message: "Erro ao atualizar serviço e cobrança",
       detalhe: error.message,
     })
   }
@@ -403,39 +552,22 @@ router.delete("/:id", async (req, res) => {
 
     if (!servico) {
       await transaction.rollback()
-      return res.status(404).json({ message: "Serviço avulso não encontrado" })
+      return res.status(404).json({ message: "Serviço e cobrança não encontrado" })
     }
 
     const cliente = await obterClienteValido(servico.clienteId, req, transaction)
 
-    if (servico.financeiroId) {
-      await Financeiro.destroy({
-        where: {
-          id: servico.financeiroId,
-          ...whereEmpresa(req),
-        },
-        transaction,
-      })
-    }
-
-    await Financeiro.destroy({
-      where: {
-        referenciaOrigem: referenciaFinanceiro(servico.id),
-        ...whereEmpresa(req),
-      },
-      transaction,
-    })
-
+    await removerFinanceiroVinculado(servico, req, transaction)
     await removerHistorico(cliente, servico.historicoId, transaction)
     await servico.destroy({ transaction })
     await transaction.commit()
 
-    res.json({ message: "Serviço avulso excluído com sucesso" })
+    res.json({ message: "Serviço e cobrança excluído com sucesso" })
   } catch (error) {
     await transaction.rollback()
-    console.error("ERRO AO EXCLUIR SERVIÇO AVULSO:", error)
+    console.error("ERRO AO EXCLUIR SERVIÇO E COBRANÇA:", error)
     res.status(500).json({
-      message: "Erro ao excluir serviço avulso",
+      message: "Erro ao excluir serviço e cobrança",
       detalhe: error.message,
     })
   }

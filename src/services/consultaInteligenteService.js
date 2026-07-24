@@ -24,7 +24,7 @@ function encerrado(status) {
 
 function clienteAtivo(cliente) {
   const situacao = normalizar(cliente?.situacaoEmpresa || cliente?.situacao)
-  return !["baixada", "inapta", "suspensa", "encerrada", "pausada"].includes(situacao) && normalizar(cliente?.regime) !== "avulso"
+  return !["baixada", "inapta", "suspensa", "encerrada", "pausada"].includes(situacao)
 }
 
 function converterData(valor) {

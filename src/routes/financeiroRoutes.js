@@ -27,7 +27,7 @@ router.get("/", autenticar, async (req, res) => {
       if (req.usuario.clienteVinculado) {
         where.cliente = req.usuario.clienteVinculado
         where[Op.or] = [
-          { origem: { [Op.ne]: "Serviço Avulso" } },
+          { origem: { [Op.notIn]: ["Serviço Avulso", "Serviço do Cliente"] } },
           { origem: { [Op.is]: null } },
         ]
       } else {
@@ -143,11 +143,11 @@ router.put("/:id", autenticar, async (req, res) => {
     }
 
     if (
-      lancamento.origem === "Serviço Avulso" ||
+      ["Serviço Avulso", "Serviço do Cliente"].includes(lancamento.origem) ||
       String(lancamento.referenciaOrigem || "").startsWith("servico-avulso:")
     ) {
       return res.status(409).json({
-        message: "Corrija este lançamento pela tela Serviços Avulsos",
+        message: "Corrija este lançamento na Central do Cliente, em Serviços e cobranças",
       })
     }
 
@@ -187,11 +187,11 @@ router.delete("/:id", autenticar, async (req, res) => {
     }
 
     if (
-      lancamento.origem === "Serviço Avulso" ||
+      ["Serviço Avulso", "Serviço do Cliente"].includes(lancamento.origem) ||
       String(lancamento.referenciaOrigem || "").startsWith("servico-avulso:")
     ) {
       return res.status(409).json({
-        message: "Exclua este lançamento pela tela Serviços Avulsos",
+        message: "Exclua este lançamento na Central do Cliente, em Serviços e cobranças",
       })
     }
 
