@@ -4,12 +4,20 @@ const upload = require("../middlewares/upload")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const Cliente = require("../models/Cliente")
-const { Op } = require("sequelize")
 const supabase = require("../config/supabaseClient")
 
 const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
+
+function normalizarNomeCliente(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
 
 function valorParaNumero(valor) {
   if (typeof valor === "number") return valor
@@ -102,39 +110,60 @@ async function removerLancamentoContabilDoMovimento(movimento) {
 
 router.get("/", autenticar, async (req, res) => {
   try {
-    const where = {}
-
     if (req.usuario.perfil === "Cliente") {
       if (!req.usuario.clienteVinculado) {
         return res.json([])
       }
 
-      where.cliente = req.usuario.clienteVinculado
+      const nomeVinculado = normalizarNomeCliente(req.usuario.clienteVinculado)
+      const movimentos = await MovimentoCliente.findAll({
+        order: [["data", "DESC"], ["createdAt", "DESC"]],
+      })
+
+      return res.json(
+        movimentos.filter(
+          (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
+        )
+      )
     }
 
-    if (req.usuario.perfil !== "Cliente") {
-      let nomeCliente = String(req.query.cliente || "").trim()
+    const nomesConsultados = []
 
-      if (req.query.clienteId) {
-        const clienteEncontrado = await Cliente.findByPk(req.query.clienteId)
-        if (clienteEncontrado?.nome) {
-          nomeCliente = String(clienteEncontrado.nome).trim()
-        }
+    if (req.query.clienteId) {
+      const clienteEncontrado = await Cliente.findByPk(req.query.clienteId)
+
+      if (!clienteEncontrado) {
+        return res.status(404).json({
+          message: "Cliente não encontrado",
+        })
       }
 
-      if (nomeCliente) {
-        where.cliente = {
-          [Op.iLike]: nomeCliente,
-        }
-      }
+      nomesConsultados.push(clienteEncontrado.nome)
+    }
+
+    if (req.query.cliente) {
+      nomesConsultados.push(req.query.cliente)
     }
 
     const movimentos = await MovimentoCliente.findAll({
-      where,
       order: [["data", "DESC"], ["createdAt", "DESC"]],
     })
 
-    res.json(movimentos)
+    if (!nomesConsultados.length) {
+      return res.json(movimentos)
+    }
+
+    const nomesNormalizados = new Set(
+      nomesConsultados
+        .map(normalizarNomeCliente)
+        .filter(Boolean)
+    )
+
+    const movimentosDoCliente = movimentos.filter((movimento) =>
+      nomesNormalizados.has(normalizarNomeCliente(movimento.cliente))
+    )
+
+    res.json(movimentosDoCliente)
   } catch (error) {
     console.error("ERRO AO LISTAR MOVIMENTOS:", error)
 
