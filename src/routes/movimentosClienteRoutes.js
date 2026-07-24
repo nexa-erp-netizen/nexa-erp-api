@@ -3,6 +3,8 @@ const fs = require("fs")
 const upload = require("../middlewares/upload")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const Cliente = require("../models/Cliente")
+const { Op } = require("sequelize")
 const supabase = require("../config/supabaseClient")
 
 const router = express.Router()
@@ -110,8 +112,21 @@ router.get("/", autenticar, async (req, res) => {
       where.cliente = req.usuario.clienteVinculado
     }
 
-    if (req.query.cliente && req.usuario.perfil !== "Cliente") {
-      where.cliente = req.query.cliente
+    if (req.usuario.perfil !== "Cliente") {
+      let nomeCliente = String(req.query.cliente || "").trim()
+
+      if (req.query.clienteId) {
+        const clienteEncontrado = await Cliente.findByPk(req.query.clienteId)
+        if (clienteEncontrado?.nome) {
+          nomeCliente = String(clienteEncontrado.nome).trim()
+        }
+      }
+
+      if (nomeCliente) {
+        where.cliente = {
+          [Op.iLike]: nomeCliente,
+        }
+      }
     }
 
     const movimentos = await MovimentoCliente.findAll({
