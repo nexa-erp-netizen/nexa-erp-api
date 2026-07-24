@@ -1,4 +1,5 @@
 const express = require("express")
+const { Op } = require("sequelize")
 const Financeiro = require("../models/Financeiro")
 const upload = require("../middlewares/upload")
 
@@ -25,6 +26,10 @@ router.get("/", autenticar, async (req, res) => {
     if (req.usuario.perfil === "Cliente") {
       if (req.usuario.clienteVinculado) {
         where.cliente = req.usuario.clienteVinculado
+        where[Op.or] = [
+          { origem: { [Op.ne]: "Serviço Avulso" } },
+          { origem: { [Op.is]: null } },
+        ]
       } else {
         return res.json([])
       }
@@ -137,6 +142,15 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    if (
+      lancamento.origem === "Serviço Avulso" ||
+      String(lancamento.referenciaOrigem || "").startsWith("servico-avulso:")
+    ) {
+      return res.status(409).json({
+        message: "Corrija este lançamento pela tela Serviços Avulsos",
+      })
+    }
+
     await lancamento.update(req.body)
 
     res.json(lancamento)
@@ -169,6 +183,15 @@ router.delete("/:id", autenticar, async (req, res) => {
     ) {
       return res.status(403).json({
         message: "Acesso não autorizado",
+      })
+    }
+
+    if (
+      lancamento.origem === "Serviço Avulso" ||
+      String(lancamento.referenciaOrigem || "").startsWith("servico-avulso:")
+    ) {
+      return res.status(409).json({
+        message: "Exclua este lançamento pela tela Serviços Avulsos",
       })
     }
 

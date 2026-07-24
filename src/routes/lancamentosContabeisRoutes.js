@@ -1,7 +1,6 @@
 const express = require("express")
 
 const LancamentoContabil = require("../models/LancamentoContabil")
-const Financeiro = require("../models/Financeiro")
 const upload = require("../middlewares/upload")
 
 const {
@@ -83,6 +82,12 @@ router.get("/", autenticar, async (req, res) => {
 
 router.post("/", autenticar, somenteEquipe, async (req, res) => {
   try {
+    if (String(req.body.origem || "").toLowerCase() === "servico") {
+      return res.status(400).json({
+        message: "Serviços do escritório devem ser registrados em Serviços Avulsos",
+      })
+    }
+
     const data =
       req.body.data ||
       new Date().toISOString().slice(0, 10)
@@ -146,21 +151,6 @@ router.post("/", autenticar, somenteEquipe, async (req, res) => {
           req.usuario?.empresaId || null,
       })
 
-    if (req.body.origem === "servico") {
-      await Financeiro.create({
-        descricao:
-          req.body.descricao || "Serviço",
-        cliente:
-          req.body.cliente,
-        tipo: "Receber",
-        valor,
-        vencimento: data,
-        status: "Pendente",
-        anexos: [],
-        empresaId:
-          req.usuario?.empresaId || null,
-      })
-    }
 
     res.status(201).json(novoLancamento)
   } catch (error) {

@@ -15,6 +15,7 @@ const Financeiro = require("../models/Financeiro")
 const DocumentoDigital = require("../models/DocumentoDigital")
 const Notificacao = require("../models/Notificacao")
 const Servico = require("../models/Servico")
+const ServicoAvulso = require("../models/ServicoAvulso")
 const FormaPagamento = require("../models/FormaPagamento")
 const Declaracao = require("../models/Declaracao")
 const Agenda = require("../models/Agenda")
@@ -37,6 +38,7 @@ const tabelasBackup = [
   ["documentosDigitais", DocumentoDigital],
   ["notificacoes", Notificacao],
   ["servicos", Servico],
+  ["servicosAvulsos", ServicoAvulso],
   ["formasPagamento", FormaPagamento],
   ["declaracoes", Declaracao],
   ["agenda", Agenda],

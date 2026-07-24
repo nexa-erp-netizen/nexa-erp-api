@@ -1,3 +1,4 @@
+const { Op } = require("sequelize")
 const Cliente = require("../models/Cliente")
 const Fiscal = require("../models/Fiscal")
 const Financeiro = require("../models/Financeiro")
@@ -37,6 +38,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Escritório Digital", aliases: ["escritorio digital"] },
   { pagina: "Clientes", aliases: ["cadastro de clientes", "carteira de clientes", "lista de clientes", "clientes", "cliente"] },
   { pagina: "Serviços", aliases: ["servicos"] },
+  { pagina: "Serviços Avulsos", aliases: ["servicos avulsos", "servico avulso", "lancamento de servico avulso", "lancar servico avulso"] },
   { pagina: "Plano de Contas", aliases: ["plano de contas"] },
   { pagina: "Lançamentos Contábeis", aliases: ["lancamentos contabeis", "lancamento contabil", "lancamentos", "contabil", "contabeis", "contabilidade", "area contabil", "modulo contabil", "tela contabil", "parte contabil"] },
   { pagina: "Movimentos Clientes", aliases: ["movimentacao desta mesma empresa", "movimentacao desta empresa", "movimentacao da mesma empresa", "movimentacao da empresa", "movimentacao deste cliente", "movimentacao desse cliente", "movimentacao do cliente", "movimentacao dela", "movimentacao dele", "movimentacoes desta empresa", "movimentacoes da empresa", "movimentacoes do cliente", "movimentacoes dos clientes", "movimentacoes clientes", "movimento desta mesma empresa", "movimento desta empresa", "movimento da mesma empresa", "movimento da empresa", "movimento deste cliente", "movimento desse cliente", "movimento do cliente", "movimento dela", "movimento dele", "movimentos desta empresa", "movimentos da empresa", "movimentos do cliente", "movimentos dos clientes", "movimentos clientes", "movimentacao", "movimentacoes", "movimento", "movimentos"] },
@@ -82,6 +84,7 @@ const DESCRICOES_PAGINAS_NAVEGACAO = {
   "Escritório Digital": "atalhos e serviços digitais do escritório",
   Clientes: "lista, cadastro e Central individual de cada cliente",
   Serviços: "cadastro e controle de serviços",
+  "Serviços Avulsos": "serviços prestados pelo escritório com lançamento automático no financeiro",
   "Plano de Contas": "plano contábil",
   "Lançamentos Contábeis": "lançamentos, contabilidade e escrituração",
   "Movimentos Clientes": "movimentações financeiras e operacionais dos clientes",
@@ -114,7 +117,7 @@ const DESCRICOES_PAGINAS_NAVEGACAO = {
 const PAGINAS_POR_PERFIL = {
   Administrador: new Set(PAGINAS_NAVEGACAO.map((item) => item.pagina)),
   Funcionário: new Set([
-    "Dashboard", "Notificações", "Escritório Digital", "Clientes", "Lançamentos Contábeis",
+    "Dashboard", "Notificações", "Escritório Digital", "Clientes", "Serviços Avulsos", "Lançamentos Contábeis",
     "Fiscal", "Financeiro", "Movimentos Clientes", "Pendências Clientes", "Acesso Rápido Fiscal",
     "Documentos Digitais", "WhatsApp Inteligente", "Assistente do Dia", "Laboratório Tributário",
     "Certificados Digitais", "Procurações e-CAC", "Identidade Digital", "Central e-CAC",
@@ -131,6 +134,7 @@ const PAGINAS_COM_FILTRO_CLIENTE = new Set([
   "Pendências Clientes",
   "Movimentos Clientes",
   "Lançamentos Contábeis",
+  "Serviços Avulsos",
   "DRE Gerencial",
   "Certificados Digitais",
   "Procurações e-CAC",
@@ -381,6 +385,7 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual })
     Fiscal: { resposta: "Fiscal aberto.", fala: "Pronto." },
     "Movimentos Clientes": { resposta: "Movimentações abertas.", fala: "Aqui está." },
     "Lançamentos Contábeis": { resposta: "Lançamentos contábeis abertos.", fala: "Certo." },
+    "Serviços Avulsos": { resposta: "Serviços avulsos abertos.", fala: "Pronto." },
     "DRE Gerencial": { resposta: "DRE aberta.", fala: "Aqui está." },
     Financeiro: { resposta: "Financeiro aberto.", fala: "Pronto." },
     "Documentos Digitais": { resposta: "Documentos abertos.", fala: "Aqui está." },
@@ -946,7 +951,7 @@ async function montarContextoCliente(clienteId, usuario) {
   const nome = nomeCliente(cliente)
   const [fiscais, financeiros, documentos, certificados, procuracoes] = await Promise.all([
     Fiscal.findAll({ where: { cliente: nome }, order: [["createdAt", "DESC"]], limit: 120 }),
-    Financeiro.findAll({ where: { cliente: nome }, order: [["createdAt", "DESC"]], limit: 120 }),
+    Financeiro.findAll({ where: { cliente: nome, [Op.or]: [{ origem: { [Op.ne]: "Serviço Avulso" } }, { origem: { [Op.is]: null } }] }, order: [["createdAt", "DESC"]], limit: 120 }),
     DocumentoDigital.findAll({ where: { cliente: nome }, order: [["createdAt", "DESC"]], limit: 80 }),
     CertificadoDigital.findAll({ where: { clienteId }, order: [["dataValidade", "DESC"]], limit: 10 }),
     ProcuracaoEcac.findAll({ where: { clienteId }, order: [["dataValidade", "DESC"]], limit: 10 }),
