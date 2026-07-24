@@ -1,4 +1,5 @@
 const express = require("express")
+const { Op } = require("sequelize")
 
 const sequelize = require("../config/database")
 const Cliente = require("../models/Cliente")
@@ -205,6 +206,7 @@ async function registrarHistorico(cliente, servico, transaction) {
 
 async function localizarFinanceiro(servico, req, transaction) {
   let financeiro = null
+  const empresaIdAtual = req.usuario?.empresaId || servico.empresaId || null
 
   if (servico.financeiroId) {
     financeiro = await Financeiro.findByPk(servico.financeiroId, {
@@ -214,17 +216,37 @@ async function localizarFinanceiro(servico, req, transaction) {
 
     if (
       financeiro &&
-      req.usuario?.empresaId &&
+      empresaIdAtual &&
       financeiro.empresaId &&
-      Number(financeiro.empresaId) !== Number(req.usuario.empresaId)
+      Number(financeiro.empresaId) !== Number(empresaIdAtual)
     ) {
       financeiro = null
     }
   }
 
-  if (!financeiro) {
+  if (!financeiro && empresaIdAtual) {
     financeiro = await Financeiro.findOne({
-      where: { referenciaOrigem: referenciaFinanceiro(servico.id) },
+      where: {
+        referenciaOrigem: referenciaFinanceiro(servico.id),
+        empresaId: empresaIdAtual,
+      },
+      transaction,
+      lock: transaction ? transaction.LOCK.UPDATE : undefined,
+    })
+  }
+
+  if (!financeiro) {
+    const where = {
+      referenciaOrigem: referenciaFinanceiro(servico.id),
+    }
+
+    if (empresaIdAtual) {
+      where.empresaId = { [Op.is]: null }
+    }
+
+    financeiro = await Financeiro.findOne({
+      where,
+      order: [["updatedAt", "DESC"]],
       transaction,
       lock: transaction ? transaction.LOCK.UPDATE : undefined,
     })
@@ -261,7 +283,11 @@ async function sincronizarFinanceiro(servico, req, transaction) {
 
   let financeiro = await localizarFinanceiro(servico, req, transaction)
   const recebido = statusSeguro(servico.status) === "Recebido"
-  const empresaId = servico.empresaId || req.usuario?.empresaId || null
+  const empresaId = req.usuario?.empresaId || servico.empresaId || null
+
+  if (empresaId && Number(servico.empresaId) !== Number(empresaId)) {
+    await servico.update({ empresaId }, { transaction })
+  }
   const vencimento = servico.vencimento || servico.data
   const dataRecebimento = recebido
     ? (servico.dataRecebimento || servico.data || new Date().toISOString().slice(0, 10))
@@ -294,7 +320,12 @@ async function sincronizarFinanceiro(servico, req, transaction) {
     await servico.update({ financeiroId: financeiro.id }, { transaction })
   }
 
-  return financeiro
+  const confirmado = await Financeiro.findByPk(financeiro.id, { transaction })
+  if (!confirmado) {
+    throw new Error(`Falha ao confirmar o lançamento financeiro do serviço ${servico.id}`)
+  }
+
+  return confirmado
 }
 
 router.use(autenticar)
