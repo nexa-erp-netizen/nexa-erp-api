@@ -5,6 +5,8 @@ const DocumentoDigital = require("../models/DocumentoDigital")
 const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
+const ServicoAvulso = require("../models/ServicoAvulso")
+const Agenda = require("../models/Agenda")
 
 function normalizar(valor) {
   return String(valor || "")
@@ -19,11 +21,27 @@ function nomeCliente(cliente) {
 }
 
 function encerrado(status) {
-  return ["pago", "recebido", "concluido", "entregue", "quitado", "conferido", "finalizado"].includes(normalizar(status))
+  const texto = normalizar(status)
+  return ["pago", "recebido", "concluido", "entregue", "quitado", "conferido", "finalizado", "cancelado", "arquivado"].includes(texto)
+    || /(concluid|finalizad|cancelad|arquivad|atendid|resolvid)/.test(texto)
+}
+
+function recebido(status) {
+  return /(recebid|pago|quitad)/.test(normalizar(status))
+}
+
+function concluido(status) {
+  return /(concluid|finalizad|entregue|conferid|resolvid)/.test(normalizar(status))
+}
+
+function documentoConcluido(status) {
+  const texto = normalizar(status)
+  if (texto.includes("entregue pelo cliente")) return false
+  return /(concluid|finalizad|conferid|arquivad|entregue ao cliente|recebido pelo cliente)/.test(texto)
 }
 
 function clienteAtivo(cliente) {
-  const situacao = normalizar(cliente?.situacaoEmpresa || cliente?.situacao)
+  const situacao = normalizar(cliente?.statusOperacional || cliente?.situacaoEmpresa || cliente?.situacao)
   return !["baixada", "inapta", "suspensa", "encerrada", "pausada"].includes(situacao)
 }
 
@@ -59,6 +77,31 @@ function diasAte(valor) {
 function formatarData(valor) {
   const data = converterData(valor)
   return data ? data.toLocaleDateString("pt-BR") : "Data não informada"
+}
+
+function partesDataBrasil(valor) {
+  if (!valor) return null
+  const data = valor instanceof Date ? valor : new Date(valor)
+  if (Number.isNaN(data.getTime())) return null
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(data)
+  const mapa = Object.fromEntries(partes.map((parte) => [parte.type, parte.value]))
+  return `${mapa.year}-${mapa.month}-${mapa.day}`
+}
+
+function hojeBrasil() {
+  return partesDataBrasil(new Date())
+}
+
+function dataEhHoje(valor) {
+  if (!valor) return false
+  const texto = String(valor).slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(texto)) return texto === hojeBrasil()
+  return partesDataBrasil(valor) === hojeBrasil()
 }
 
 function textoPrazo(dias) {
@@ -172,39 +215,61 @@ function localizarCliente(clientes, texto, clienteId) {
 }
 
 function pedidoPrioridadesHoje(texto) {
-  return /(qual(?: e)?(?: a)? prioridade(?: principal)?(?: para| de)? hoje|quais(?: sao)?(?: as)? prioridades?(?: para| de)? hoje|prioridades? do dia|o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje|o que e mais urgente hoje|por onde (?:eu )?comeco hoje|como esta meu dia|organize meu dia|(?:faca |me (?:de|passe|mostre|fale) )?(?:um )?(?:relatorio|resumo|panorama)(?: operacional)? (?:de|do|para|pra) (?:hoje|dia)|(?:relatorio|resumo) de hoje)/.test(texto)
+  return /(qual(?: e)?(?: a)? prioridade(?: principal| mais urgente)?(?: para| de)? hoje|qual(?: e)?(?: a)? prioridade mais urgente|quais(?: sao)?(?: as)? prioridades?(?: para| de)? hoje|prioridades? do dia|o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje|o que e mais urgente hoje|por onde (?:eu )?comeco hoje|como esta meu dia|organize meu dia|(?:faca |me (?:de|passe|mostre|fale) )?(?:um )?(?:relatorio|resumo|panorama)(?: operacional| completo)? (?:de|do|para|pra) (?:hoje|dia)|(?:relatorio|resumo) de hoje)/.test(texto)
+}
+
+function pedidoTodasPendencias(texto) {
+  return /(todas?(?: as)? pendencias|quais(?: sao)?(?: as)? pendencias|liste(?: todas)?(?: as)? pendencias|mostre(?: todas)?(?: as)? pendencias|tem alguma pendencia|ha alguma pendencia|o que esta pendente|quem esta pendente|clientes? com pendencia|pendencias? do escritorio|resumo das pendencias)/.test(texto)
+    && !/(somente|apenas).*(fiscal|das|financeir|cobranc|document|mensag)/.test(texto)
+}
+
+function pedidoPagamentosHoje(texto) {
+  return /(quem pagou(?: hoje)?|algum cliente pagou|clientes? que pagaram|pagamentos? recebidos?(?: hoje)?|recebimentos? de hoje|quanto entrou(?: de servicos?)? hoje|quem quitou|quitou alguma pendencia|algum cliente quitou)/.test(texto)
+}
+
+function pedidoResolvidasHoje(texto) {
+  return /(pendencias? resolvidas?(?: hoje)?|o que foi (?:resolvido|concluido|finalizado) hoje|quais(?: as)? pendencias? (?:foram )?(?:concluidas|resolvidas)|atualizacoes? concluidas? de hoje)/.test(texto)
+}
+
+function pedidoMensagensAbertas(texto) {
+  return /(mensagens? (?:dos?|de) clientes?|clientes? pedindo ajuda|pedidos? de ajuda|solicitacoes? (?:dos?|de) clientes?|quem pediu ajuda|mensagens? sem resposta|novas? interacoes?)/.test(texto)
+}
+
+function pedidoDocumentosPendentes(texto) {
+  return /(documentos? (?:pendentes?|aguardando|recebidos?|enviados?|no escritorio)|arquivos? (?:pendentes?|aguardando|recebidos?)|o que chegou de documento|documentos? para analisar|documentos? sem conferir)/.test(texto)
 }
 
 function consultaSolicitada(texto, cliente = null, clienteId = null) {
-  // A consulta interna da Nexa só deve ocorrer quando o usuário pedir
-  // explicitamente dados já cadastrados no sistema. Perguntas gerais de
-  // orientação contábil/tributária seguem para a IA e, quando necessário,
-  // para a pesquisa web oficial.
-  const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
+  const pedidoOperacionalDireto = pedidoPrioridadesHoje(texto)
+    || pedidoTodasPendencias(texto)
+    || pedidoPagamentosHoje(texto)
+    || pedidoResolvidasHoje(texto)
+    || pedidoMensagensAbertas(texto)
+    || pedidoDocumentosPendentes(texto)
+  if (pedidoOperacionalDireto) return true
 
+  const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
   const referenciaSistema = /(na nexa|no sistema|cadastrad|registrad|lancad|meus? clientes?|minhas? pendencias?|do escritorio|da carteira|cliente selecionado|desse cliente|deste cliente)/.test(texto)
   const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao|devendo|\bdeve\b|quanto deve)/.test(texto)
-  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das)/.test(texto)
-
+  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das|mensag|solicitac)/.test(texto)
   const fraseEscritorio = /(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)
-  const frasePrioridadesHoje = pedidoPrioridadesHoje(texto)
   const fraseAtencao = /(clientes?).*(atencao|prioridade|critico|pendenc)|precisam de atencao|precisa de atencao/.test(texto)
   const listaClientes = /(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes|meus? clientes?)/.test(texto)
-
   const clienteIdentificado = Boolean(cliente || clienteId)
   const dadoDoCliente = clienteIdentificado
     && verboConsulta
-    && /(como esta|situacao|resumo|dados|regime|ramo|cnpj|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia)/.test(texto)
+    && /(como esta|situacao|resumo|dados|regime|ramo|cnpj|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia|mensag|solicitac)/.test(texto)
 
-  return frasePrioridadesHoje
-    || fraseEscritorio
-    || fraseAtencao
-    || listaClientes
-    || dadoDoCliente
+  return fraseEscritorio || fraseAtencao || listaClientes || dadoDoCliente
     || (verboConsulta && objetoOperacional && (referenciaSistema || estadoOperacional))
 }
 
 function identificarIntencao(texto, cliente) {
+  if (pedidoPagamentosHoje(texto)) return "pagamentos-hoje"
+  if (pedidoResolvidasHoje(texto)) return "resolvidas-hoje"
+  if (pedidoMensagensAbertas(texto)) return "mensagens-pendentes"
+  if (pedidoDocumentosPendentes(texto)) return "documentos-pendentes"
+  if (pedidoTodasPendencias(texto)) return "pendencias-gerais"
   if (pedidoPrioridadesHoje(texto)) return "prioridades-hoje"
   if (/(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)) return "escritorio"
   if (/(clientes?).*(atencao|prioridade|critico|pendenc)|precisam de atencao|precisa de atencao/.test(texto)) return "atencao"
@@ -212,7 +277,7 @@ function identificarIntencao(texto, cliente) {
   if (/procurac/.test(texto)) return "procuracoes"
   if (/(document|arquivo|anexo)/.test(texto)) return "documentos"
   if (/(financeir|honor|cobranc|receber|pagar|inadimpl|valor pendente|pagament|devendo|\bdeve\b|quanto deve|o que deve|ainda deve)/.test(texto)) return "financeiro"
-  if (/(fiscal|obrig|pendenc|das|imposto|tribut|vencimento)/.test(texto)) return "fiscal"
+  if (/(fiscal|obrig|das|imposto|tribut|vencimento)/.test(texto)) return "fiscal"
   if (/(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes)/.test(texto)) return "clientes"
   if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cnpj)/.test(texto)) return "cliente"
   return null
@@ -292,37 +357,85 @@ async function consultaFiscal(clientes, cliente, texto) {
 }
 
 async function consultaFinanceiro(clientes, cliente, texto) {
-  let itens = await Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 1000 })
-  itens = filtrarEscopo(itens, clientes, cliente).filter((item) => !encerrado(item.status))
-  if (/(receber|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|ainda deve)/.test(texto)) itens = itens.filter((item) => !/(despesa|pagar|saida)/.test(normalizar(item.tipo)))
-  if (/(pagar|despesa|contas a pagar)/.test(texto)) itens = itens.filter((item) => /(despesa|pagar|saida)/.test(normalizar(item.tipo)))
+  const [financeirosBanco, servicosBanco] = await Promise.all([
+    Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 1200 }),
+    ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 1200 }),
+  ])
+
+  const nomes = nomesPermitidos(clientes)
+  const ids = new Set(clientes.map((item) => Number(item.id)))
+  const apenasReceber = /(receber|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|ainda deve)/.test(texto)
+  const apenasPagar = /(pagar|despesa|contas a pagar)/.test(texto)
+
+  let financeiros = financeirosBanco
+    .filter((item) => nomes.has(normalizar(item.cliente)) && (!cliente || normalizar(item.cliente) === normalizar(nomeCliente(cliente))))
+    .filter((item) => !encerrado(item.status))
+    .filter((item) => !normalizar(item.origem).includes("servico"))
+
+  if (apenasReceber) financeiros = financeiros.filter((item) => !/(despesa|pagar|saida)/.test(normalizar(item.tipo)))
+  if (apenasPagar) financeiros = financeiros.filter((item) => /(despesa|pagar|saida)/.test(normalizar(item.tipo)))
+
+  let servicos = servicosBanco
+    .filter((item) => ids.has(Number(item.clienteId)) && (!cliente || Number(item.clienteId) === Number(cliente.id)))
+    .filter((item) => !encerrado(item.status))
+  if (apenasPagar) servicos = []
+
+  const itens = [
+    ...financeiros.map((item) => ({
+      id: `financeiro-${item.id}`,
+      cliente: item.cliente,
+      titulo: item.descricao || item.tipo || "Lançamento financeiro",
+      detalhe: item.tipo || "Tipo não informado",
+      vencimento: item.vencimento,
+      valorNumero: numeroMoeda(item.valor),
+      statusOriginal: item.status,
+      origem: item.origem || "Financeiro",
+      pagina: "Financeiro",
+    })),
+    ...servicos.map((item) => ({
+      id: `servico-${item.id}`,
+      cliente: item.cliente,
+      clienteId: item.clienteId,
+      titulo: item.descricao || "Serviço do cliente",
+      detalhe: `${Number(item.quantidade || 1)}x • Serviço e cobrança`,
+      vencimento: item.vencimento,
+      valorNumero: numeroMoeda(item.valorTotal),
+      statusOriginal: item.status,
+      origem: "Serviço do Cliente",
+      pagina: "Clientes",
+    })),
+  ]
+
   const filtro = periodo(texto)
-  itens = ordenarData(filtrarPeriodo(itens, filtro, "vencimento"), "vencimento")
-  const total = itens.reduce((soma, item) => soma + numeroMoeda(item.valor), 0)
-  const exibidos = itens.slice(0, 30).map((item) => ({
+  const filtrados = ordenarData(filtrarPeriodo(itens, filtro, "vencimento"), "vencimento")
+  const total = filtrados.reduce((soma, item) => soma + item.valorNumero, 0)
+  const exibidos = filtrados.slice(0, 40).map((item) => ({
     id: item.id,
     cliente: item.cliente,
-    titulo: item.descricao || item.tipo || "Lançamento financeiro",
-    detalhe: item.tipo || "Tipo não informado",
+    clienteId: item.clienteId || null,
+    titulo: item.titulo,
+    detalhe: item.detalhe,
     data: item.vencimento,
     dataFormatada: formatarData(item.vencimento),
-    status: textoPrazo(diasAte(item.vencimento)),
-    valor: formatarMoeda(numeroMoeda(item.valor)),
+    status: item.vencimento ? textoPrazo(diasAte(item.vencimento)) : (item.statusOriginal || "Pendente"),
+    valor: formatarMoeda(item.valorNumero),
+    origem: item.origem,
+    paginaSugerida: item.pagina,
   }))
   const nome = cliente ? ` de ${nomeCliente(cliente)}` : ""
   return respostaConsulta({
-    resposta: itens.length ? `O financeiro${nome} possui ${itens.length} lançamento${itens.length === 1 ? "" : "s"} pendente${itens.length === 1 ? "" : "s"}, totalizando ${formatarMoeda(total)}.` : `Não encontrei lançamentos financeiros pendentes${nome}.`,
-    pontos: exibidos.slice(0, 8).map((item) => `${item.cliente}: ${item.titulo} — ${item.valor} — ${item.status}`),
+    resposta: filtrados.length ? `O financeiro${nome} possui ${filtrados.length} cobrança${filtrados.length === 1 ? "" : "s"} pendente${filtrados.length === 1 ? "" : "s"}, totalizando ${formatarMoeda(total)}.` : `Não encontrei cobranças financeiras pendentes${nome}.`,
+    pontos: exibidos.slice(0, 10).map((item) => `${item.cliente}: ${item.titulo} — ${item.valor} — ${item.status}`),
     consulta: {
       tipo: "financeiro",
       titulo: cliente ? `Financeiro — ${nomeCliente(cliente)}` : "Financeiro pendente",
-      resumo: `${itens.length} lançamento${itens.length === 1 ? "" : "s"} • ${formatarMoeda(total)}.`,
-      total: itens.length,
+      resumo: `${filtrados.length} cobrança${filtrados.length === 1 ? "" : "s"} • ${formatarMoeda(total)}.`,
+      total: filtrados.length,
       valorTotalFormatado: formatarMoeda(total),
       itens: exibidos,
-      paginaSugerida: "Financeiro",
+      paginaSugerida: cliente && servicos.length ? "Clientes" : "Financeiro",
       cliente: cliente ? { id: cliente.id, nome: nomeCliente(cliente) } : null,
-      acaoSugerida: acaoPagina("Financeiro", cliente),
+      acaoSugerida: acaoPagina(cliente && servicos.length ? "Clientes" : "Financeiro", cliente, cliente && servicos.length ? "central-cliente" : "pagina"),
     },
   })
 }
@@ -445,8 +558,10 @@ async function consultaCliente(cliente) {
 function documentoExigeAtencao(item) {
   const origem = normalizar(item?.origem)
   const status = normalizar(item?.status)
+  if (/(cancelad|arquivad|concluid|conferid|finalizad)/.test(status)) return false
   const veioDoCliente = origem.includes("cliente") && origem.includes("escritorio")
-  return veioDoCliente && ["recebido", "em analise", "entregue pelo cliente"].some((valor) => status.includes(valor))
+  const aguardandoEntrega = origem.includes("escritorio") && origem.includes("cliente") && !/(entregue|recebido pelo cliente)/.test(status)
+  return veioDoCliente || aguardandoEntrega || /(recebid|em analise|aguard|penden|entregue pelo cliente)/.test(status)
 }
 
 function solicitacaoAberta(item) {
@@ -456,76 +571,73 @@ function solicitacaoAberta(item) {
 
 function fiscalAbertoParaPrioridade(item) {
   const status = normalizar(item?.status)
-  return !/(concluid|cancelad|pago pelo escritorio|pago pelo escritório)/.test(status)
+  return !encerrado(status) && !/(pago pelo escritorio|pago pelo escritório)/.test(status)
 }
 
 function financeiroAbertoParaPrioridade(item) {
-  const status = normalizar(item?.status)
-  return !/(pago|recebido|concluid|quitado|cancelad|finalizad)/.test(status)
+  return !encerrado(item?.status)
 }
 
-function fraseListaPrioridades(itens) {
-  if (!itens.length) {
-    return "Hoje não encontrei pendências vencidas, vencimentos próximos ou novas interações nos dados atuais da Nexa."
-  }
-
-  const principais = itens.slice(0, 5)
-  const partes = principais.map((item) => {
-    const vencimento = item.data ? `, com vencimento em ${item.dataFormatada}` : ""
-    const status = item.status ? `, ${String(item.status).toLowerCase()}` : ""
-    const valor = item.valorFormatado ? ` no valor de ${item.valorFormatado}` : ""
-
-    if (item.modulo === "financeiro") {
-      return `${item.cliente} tem uma cobrança${valor} referente a ${item.titulo}${vencimento}${status}`
-    }
-
-    if (item.modulo === "fiscal") {
-      return `${item.cliente} tem ${item.titulo}${valor}${vencimento}${status}`
-    }
-
-    return `${item.cliente}: ${item.titulo}${vencimento}${status}`
-  })
-  const restante = itens.length - principais.length
-  const complemento = restante > 0
-    ? ` Além dessas, existem mais ${restante} ${restante === 1 ? "prioridade" : "prioridades"}.`
-    : ""
-
-  return `Hoje você tem ${itens.length} ${itens.length === 1 ? "prioridade" : "prioridades"}. ${partes.join("; ")}.${complemento}`
+function prioridadePorPrazo(dias, { vencido = 110, hoje = 100, futuro = 80, semData = 65 } = {}) {
+  if (dias === null) return semData
+  if (dias < 0) return vencido + Math.min(Math.abs(dias), 20)
+  if (dias === 0) return hoje
+  return Math.max(35, futuro - Math.min(dias, 45))
 }
 
-async function consultaPrioridadesHoje(clientes) {
-  const ativos = clientes.filter(clienteAtivo)
-  const nomes = nomesPermitidos(ativos)
-  const ids = new Set(ativos.map((item) => Number(item.id)))
-  const clientesPorId = new Map(ativos.map((item) => [Number(item.id), nomeCliente(item)]))
-  const clientesPorNome = new Map(ativos.map((item) => [normalizar(nomeCliente(item)), item]))
-  const [fiscais, financeiros, documentos, solicitacoes, certificados, procuracoes] = await Promise.all([
-    Fiscal.findAll({ limit: 1200 }),
-    Financeiro.findAll({ limit: 1200 }),
-    DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 500 }),
-    SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 500 }),
-    CertificadoDigital.findAll({ limit: 500 }),
-    ProcuracaoEcac.findAll({ limit: 500 }),
+function tipoFinanceiroRecebivel(item) {
+  const texto = `${normalizar(item?.tipo)} ${normalizar(item?.descricao)} ${normalizar(item?.origem)}`
+  return !/(despesa|saida|conta a pagar)/.test(texto)
+}
+
+function origemEhServico(item) {
+  const texto = `${normalizar(item?.origem)} ${normalizar(item?.referenciaOrigem)}`
+  return texto.includes("servico")
+}
+
+async function carregarPendenciasOperacionais(clientes, cliente = null) {
+  const permitidos = clientes.filter(clienteAtivo)
+  const nomes = nomesPermitidos(permitidos)
+  const ids = new Set(permitidos.map((item) => Number(item.id)))
+  const porId = new Map(permitidos.map((item) => [Number(item.id), item]))
+  const porNome = new Map(permitidos.map((item) => [normalizar(nomeCliente(item)), item]))
+  const clienteEscolhidoId = cliente ? Number(cliente.id) : null
+  const clienteEscolhidoNome = cliente ? normalizar(nomeCliente(cliente)) : null
+
+  const [fiscais, financeiros, servicos, documentos, solicitacoes, certificados, procuracoes, agenda] = await Promise.all([
+    Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
+    Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
+    ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
+    DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1000 }),
+    SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1000 }),
+    CertificadoDigital.findAll({ order: [["dataValidade", "ASC"]], limit: 800 }),
+    ProcuracaoEcac.findAll({ order: [["dataValidade", "ASC"]], limit: 800 }),
+    Agenda.findAll({ order: [["data", "ASC"]], limit: 800 }),
   ])
 
-  const prioridades = []
-  const adicionar = ({ prioridade, cliente, clienteId = null, titulo, detalhe, status, data = null, pagina, referenciaId = null, modulo, valor = null }) => {
-    prioridades.push({
-      id: `${modulo}-${referenciaId || prioridades.length + 1}`,
+  const itens = []
+  const adicionar = ({ modulo, categoria, clienteNome, clienteId = null, titulo, detalhe = "", status = "Pendente", data = null, valor = null, prioridade = 60, pagina = "Clientes", referenciaId = null }) => {
+    const cadastro = clienteId ? porId.get(Number(clienteId)) : porNome.get(normalizar(clienteNome))
+    const idResolvido = Number(clienteId || cadastro?.id || 0) || null
+    const nomeResolvido = clienteNome || (cadastro ? nomeCliente(cadastro) : "Cliente")
+    if (clienteEscolhidoId && idResolvido && idResolvido !== clienteEscolhidoId) return
+    if (clienteEscolhidoNome && !idResolvido && normalizar(nomeResolvido) !== clienteEscolhidoNome) return
+    const valorNumero = valor === null || valor === undefined ? 0 : numeroMoeda(valor)
+    itens.push({
+      id: `${modulo}-${referenciaId || itens.length + 1}`,
       referenciaId,
-      cliente,
-      clienteId: clienteId || clientesPorNome.get(normalizar(cliente))?.id || null,
+      cliente: nomeResolvido,
+      clienteId: idResolvido,
       titulo,
       detalhe,
       status,
       data,
       dataFormatada: data ? formatarData(data) : "Sem data definida",
-      valor: valor === null || valor === undefined ? null : numeroMoeda(valor),
-      valorFormatado: valor === null || valor === undefined || numeroMoeda(valor) <= 0
-        ? ""
-        : formatarMoeda(numeroMoeda(valor)),
+      valor: valorNumero > 0 ? formatarMoeda(valorNumero) : "",
+      valorNumero,
       prioridade,
       modulo,
+      categoria,
       paginaSugerida: pagina,
     })
   }
@@ -534,54 +646,93 @@ async function consultaPrioridadesHoje(clientes) {
     .filter((item) => nomes.has(normalizar(item.cliente)) && fiscalAbertoParaPrioridade(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
-      if (dias === null || dias > 7) return
-      const titulo = item.obrigacao || "Obrigação fiscal"
-      const valor = numeroMoeda(item.valor)
-      const detalhe = [
-        `Competência ${item.competencia || "não informada"}`,
-        valor > 0 ? formatarMoeda(valor) : "",
-      ].filter(Boolean).join(" • ")
-      if (dias < 0) {
-        adicionar({ prioridade: 110 + Math.min(Math.abs(dias) * 2, 20), cliente: item.cliente, titulo, detalhe, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
-      } else if (dias === 0) {
-        adicionar({ prioridade: 105, cliente: item.cliente, titulo, detalhe, status: "Vence hoje", data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
-      } else {
-        adicionar({ prioridade: 88 - dias, cliente: item.cliente, titulo, detalhe, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
-      }
+      adicionar({
+        modulo: "fiscal",
+        categoria: "Obrigação fiscal",
+        clienteNome: item.cliente,
+        titulo: item.obrigacao || "Obrigação fiscal",
+        detalhe: `Competência ${item.competencia || "não informada"}${item.observacao ? ` • ${item.observacao}` : ""}`,
+        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
+        data: item.vencimento,
+        valor: item.valor,
+        prioridade: prioridadePorPrazo(dias, { vencido: 132, hoje: 126, futuro: 101, semData: 78 }),
+        pagina: "Fiscal",
+        referenciaId: item.id,
+      })
+    })
+
+  servicos
+    .filter((item) => ids.has(Number(item.clienteId)) && financeiroAbertoParaPrioridade(item))
+    .forEach((item) => {
+      const dias = diasAte(item.vencimento)
+      adicionar({
+        modulo: "servico-cobranca",
+        categoria: "Cobrança do escritório",
+        clienteNome: item.cliente,
+        clienteId: item.clienteId,
+        titulo: item.descricao || "Serviço realizado",
+        detalhe: `${Number(item.quantidade || 1)}x • Serviço e cobrança`,
+        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
+        data: item.vencimento,
+        valor: item.valorTotal,
+        prioridade: prioridadePorPrazo(dias, { vencido: 116, hoje: 106, futuro: 83, semData: 73 }),
+        pagina: "Clientes",
+        referenciaId: item.id,
+      })
     })
 
   financeiros
-    .filter((item) => nomes.has(normalizar(item.cliente)) && financeiroAbertoParaPrioridade(item))
+    .filter((item) => nomes.has(normalizar(item.cliente)) && financeiroAbertoParaPrioridade(item) && tipoFinanceiroRecebivel(item) && !origemEhServico(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
-      if (dias === null || dias > 3) return
-      const titulo = item.descricao || item.tipo || "Lançamento financeiro"
-      const prioridade = dias < 0 ? 100 + Math.min(Math.abs(dias), 12) : dias === 0 ? 92 : 78 - dias
       adicionar({
-        prioridade,
-        cliente: item.cliente,
-        clienteId: item.clienteId,
-        titulo,
-        detalhe: `${item.origem || item.tipo || "Financeiro"} • ${formatarMoeda(numeroMoeda(item.valor))}`,
-        status: textoPrazo(dias),
-        data: item.vencimento,
-        pagina: item.origem === "Serviço do Cliente" ? "Clientes" : "Financeiro",
-        referenciaId: item.id,
         modulo: "financeiro",
+        categoria: /honor/.test(normalizar(item.descricao)) ? "Honorário" : "Cobrança financeira",
+        clienteNome: item.cliente,
+        clienteId: item.clienteId,
+        titulo: item.descricao || item.tipo || "Cobrança financeira",
+        detalhe: item.origem || item.tipo || "Financeiro do escritório",
+        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
+        data: item.vencimento,
         valor: item.valor,
+        prioridade: prioridadePorPrazo(dias, { vencido: 114, hoje: 104, futuro: 81, semData: 71 }),
+        pagina: "Financeiro",
+        referenciaId: item.id,
+      })
+    })
+
+  solicitacoes
+    .filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAberta(item))
+    .forEach((item) => {
+      adicionar({
+        modulo: "solicitacao",
+        categoria: "Mensagem ou pedido de ajuda",
+        clienteNome: item.cliente,
+        titulo: item.titulo || "Solicitação do cliente",
+        detalhe: item.mensagem || item.categoria || "Solicitação pendente",
+        status: item.novaInteracao ? "Nova interação" : (item.status || "Pendente"),
+        data: item.dataResposta || item.createdAt,
+        prioridade: item.novaInteracao ? 122 : 98,
+        pagina: "Pendências Clientes",
+        referenciaId: item.id,
       })
     })
 
   documentos
     .filter((item) => nomes.has(normalizar(item.cliente)) && documentoExigeAtencao(item))
     .forEach((item) => {
-      adicionar({ prioridade: 86, cliente: item.cliente, titulo: item.tipo || "Documento recebido", detalhe: item.observacao || item.origem || "Documento enviado pelo cliente", status: item.status || "Aguardando análise", data: item.dataEnvio || item.createdAt, pagina: "Documentos Digitais", referenciaId: item.id, modulo: "documento" })
-    })
-
-  solicitacoes
-    .filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAberta(item))
-    .forEach((item) => {
-      adicionar({ prioridade: item.novaInteracao ? 94 : 74, cliente: item.cliente, titulo: item.titulo || "Solicitação do cliente", detalhe: item.mensagem || item.categoria || "Solicitação pendente", status: item.novaInteracao ? "Nova interação" : (item.status || "Pendente"), data: item.dataResposta || item.createdAt, pagina: "Pendências Clientes", referenciaId: item.id, modulo: "solicitacao" })
+      adicionar({
+        modulo: "documento",
+        categoria: "Documento aguardando ação",
+        clienteNome: item.cliente,
+        titulo: item.tipo || "Documento",
+        detalhe: item.observacao || item.origem || "Documento aguardando conferência ou entrega",
+        status: item.status || "Aguardando análise",
+        data: item.dataEnvio || item.createdAt,
+        prioridade: /recebid|entregue pelo cliente/.test(normalizar(item.status)) ? 108 : 88,
+        pagina: "Documentos Digitais",
+        referenciaId: item.id,
+      })
     })
 
   for (const [lista, rotulo, pagina, campoAtivo] of [
@@ -593,85 +744,391 @@ async function consultaPrioridadesHoje(clientes) {
       .forEach((item) => {
         const dias = diasAte(item.dataValidade)
         if (dias === null || dias > 30) return
-        const cliente = item.cliente || clientesPorId.get(Number(item.clienteId)) || "Cliente"
-        const prioridade = dias < 0 ? 102 + Math.min(Math.abs(dias), 15) : dias === 0 ? 96 : dias <= 7 ? 82 - dias : 58 - Math.min(dias, 20)
-        adicionar({ prioridade, cliente, titulo: rotulo, detalhe: dias < 0 ? "Regularização necessária" : "Renovação programada", status: textoPrazo(dias), data: item.dataValidade, pagina, referenciaId: item.id, modulo: normalizar(rotulo).replace(/\s+/g, "-") })
+        const cadastro = porId.get(Number(item.clienteId))
+        adicionar({
+          modulo: normalizar(rotulo).replace(/\s+/g, "-"),
+          categoria: "Identidade digital",
+          clienteNome: item.cliente || (cadastro ? nomeCliente(cadastro) : "Cliente"),
+          clienteId: item.clienteId,
+          titulo: rotulo,
+          detalhe: dias < 0 ? "Regularização necessária" : "Renovação programada",
+          status: textoPrazo(dias),
+          data: item.dataValidade,
+          prioridade: prioridadePorPrazo(dias, { vencido: 118, hoje: 110, futuro: 86, semData: 60 }),
+          pagina,
+          referenciaId: item.id,
+        })
       })
   }
 
-  prioridades.sort((a, b) => b.prioridade - a.prioridade || String(a.data || "").localeCompare(String(b.data || "")))
-  const resposta = fraseListaPrioridades(prioridades)
-  const exibidos = prioridades.slice(0, 30)
+  agenda
+    .filter((item) => !item.cliente || nomes.has(normalizar(item.cliente)))
+    .forEach((item) => {
+      const dias = diasAte(item.data)
+      if (dias === null || dias > 7) return
+      adicionar({
+        modulo: "agenda",
+        categoria: "Tarefa ou compromisso",
+        clienteNome: item.cliente || "Escritório",
+        titulo: item.titulo || "Compromisso",
+        detalhe: item.tipo || "Agenda",
+        status: textoPrazo(dias),
+        data: item.data,
+        prioridade: prioridadePorPrazo(dias, { vencido: 108, hoje: 102, futuro: 76, semData: 55 }),
+        pagina: "Agenda",
+        referenciaId: item.id,
+      })
+    })
 
+  return itens.sort((a, b) => b.prioridade - a.prioridade || String(a.data || "9999").localeCompare(String(b.data || "9999")) || a.cliente.localeCompare(b.cliente))
+}
+
+async function carregarNovidadesHoje(clientes, cliente = null) {
+  const permitidos = clientes.filter(clienteAtivo)
+  const nomes = nomesPermitidos(permitidos)
+  const ids = new Set(permitidos.map((item) => Number(item.id)))
+  const porId = new Map(permitidos.map((item) => [Number(item.id), item]))
+  const clienteId = cliente ? Number(cliente.id) : null
+  const clienteNome = cliente ? normalizar(nomeCliente(cliente)) : null
+  const [servicos, financeiros, fiscais, solicitacoes, documentos] = await Promise.all([
+    ServicoAvulso.findAll({ order: [["updatedAt", "DESC"]], limit: 1000 }),
+    Financeiro.findAll({ order: [["updatedAt", "DESC"]], limit: 1000 }),
+    Fiscal.findAll({ order: [["updatedAt", "DESC"]], limit: 1000 }),
+    SolicitacaoCliente.findAll({ order: [["updatedAt", "DESC"]], limit: 1000 }),
+    DocumentoDigital.findAll({ order: [["updatedAt", "DESC"]], limit: 1000 }),
+  ])
+  const novidades = []
+  const adicionar = (item) => {
+    if (clienteId && item.clienteId && Number(item.clienteId) !== clienteId) return
+    if (clienteNome && !item.clienteId && normalizar(item.cliente) !== clienteNome) return
+    novidades.push(item)
+  }
+
+  servicos
+    .filter((item) => ids.has(Number(item.clienteId)) && recebido(item.status) && dataEhHoje(item.dataRecebimento || item.updatedAt))
+    .forEach((item) => adicionar({
+      id: `pagamento-servico-${item.id}`,
+      tipoNovidade: "pagamento",
+      clienteId: item.clienteId,
+      cliente: item.cliente || nomeCliente(porId.get(Number(item.clienteId))),
+      titulo: item.descricao || "Serviço do cliente",
+      detalhe: `${Number(item.quantidade || 1)}x • ${item.formaPagamento || "Forma não informada"}`,
+      status: "Recebido hoje",
+      data: item.dataRecebimento || item.updatedAt,
+      dataFormatada: formatarData(item.dataRecebimento || item.updatedAt),
+      valor: formatarMoeda(numeroMoeda(item.valorTotal)),
+      valorNumero: numeroMoeda(item.valorTotal),
+      paginaSugerida: "Clientes",
+    }))
+
+  financeiros
+    .filter((item) => nomes.has(normalizar(item.cliente)) && recebido(item.status) && dataEhHoje(item.dataRecebimento || item.updatedAt) && !origemEhServico(item))
+    .forEach((item) => adicionar({
+      id: `pagamento-financeiro-${item.id}`,
+      tipoNovidade: "pagamento",
+      clienteId: item.clienteId,
+      cliente: item.cliente,
+      titulo: item.descricao || "Recebimento",
+      detalhe: item.formaPagamento || item.origem || "Financeiro",
+      status: "Recebido hoje",
+      data: item.dataRecebimento || item.updatedAt,
+      dataFormatada: formatarData(item.dataRecebimento || item.updatedAt),
+      valor: formatarMoeda(numeroMoeda(item.valor)),
+      valorNumero: numeroMoeda(item.valor),
+      paginaSugerida: "Financeiro",
+    }))
+
+  fiscais
+    .filter((item) => nomes.has(normalizar(item.cliente)) && concluido(item.status) && dataEhHoje(item.updatedAt))
+    .forEach((item) => adicionar({
+      id: `resolvida-fiscal-${item.id}`,
+      tipoNovidade: "resolvida",
+      cliente: item.cliente,
+      titulo: item.obrigacao || "Obrigação fiscal",
+      detalhe: `Competência ${item.competencia || "não informada"}`,
+      status: item.status || "Concluído hoje",
+      data: item.updatedAt,
+      dataFormatada: formatarData(item.updatedAt),
+      valor: item.valor && numeroMoeda(item.valor) > 0 ? formatarMoeda(numeroMoeda(item.valor)) : "",
+      paginaSugerida: "Fiscal",
+    }))
+
+  solicitacoes
+    .filter((item) => nomes.has(normalizar(item.cliente)) && concluido(item.status) && dataEhHoje(item.updatedAt))
+    .forEach((item) => adicionar({
+      id: `resolvida-solicitacao-${item.id}`,
+      tipoNovidade: "resolvida",
+      cliente: item.cliente,
+      titulo: item.titulo || "Solicitação do cliente",
+      detalhe: item.respostaCliente || item.categoria || "Solicitação atendida",
+      status: item.status || "Concluída hoje",
+      data: item.updatedAt,
+      dataFormatada: formatarData(item.updatedAt),
+      valor: "",
+      paginaSugerida: "Pendências Clientes",
+    }))
+
+  documentos
+    .filter((item) => nomes.has(normalizar(item.cliente)) && documentoConcluido(item.status) && dataEhHoje(item.updatedAt))
+    .forEach((item) => adicionar({
+      id: `resolvida-documento-${item.id}`,
+      tipoNovidade: "resolvida",
+      cliente: item.cliente,
+      titulo: item.tipo || "Documento",
+      detalhe: item.observacao || item.origem || "Documento tratado",
+      status: item.status || "Concluído hoje",
+      data: item.updatedAt,
+      dataFormatada: formatarData(item.updatedAt),
+      valor: "",
+      paginaSugerida: "Documentos Digitais",
+    }))
+
+  return novidades.sort((a, b) => new Date(b.data || 0) - new Date(a.data || 0))
+}
+
+function agruparPendenciasPorCliente(itens) {
+  const mapa = new Map()
+  for (const item of itens) {
+    const chave = item.clienteId ? `id-${item.clienteId}` : `nome-${normalizar(item.cliente)}`
+    if (!mapa.has(chave)) mapa.set(chave, { cliente: item.cliente, clienteId: item.clienteId || null, itens: [], prioridade: 0, valorNumero: 0 })
+    const grupo = mapa.get(chave)
+    grupo.itens.push(item)
+    grupo.prioridade = Math.max(grupo.prioridade, item.prioridade || 0)
+    grupo.valorNumero += Number(item.valorNumero || 0)
+  }
+
+  return [...mapa.values()]
+    .sort((a, b) => b.prioridade - a.prioridade || a.cliente.localeCompare(b.cliente))
+    .map((grupo, indice) => {
+      const detalhes = grupo.itens.slice(0, 6).map((item) => {
+        const valor = item.valor ? `, ${item.valor}` : ""
+        const data = item.data ? `, ${item.status.toLowerCase()}` : ""
+        return `${item.titulo}${valor}${data}`
+      })
+      const extras = grupo.itens.length - detalhes.length
+      return {
+        id: `cliente-pendencias-${grupo.clienteId || indice}`,
+        clienteId: grupo.clienteId,
+        cliente: grupo.cliente,
+        titulo: `${grupo.itens.length} ${grupo.itens.length === 1 ? "pendência" : "pendências"}`,
+        detalhe: `${detalhes.join(" • ")}${extras > 0 ? ` • mais ${extras}` : ""}`,
+        status: grupo.itens[0]?.status || "Pendente",
+        data: grupo.itens[0]?.data || null,
+        dataFormatada: grupo.itens[0]?.dataFormatada || "Sem data definida",
+        valor: grupo.valorNumero > 0 ? formatarMoeda(grupo.valorNumero) : "",
+        prioridade: grupo.prioridade,
+        paginaSugerida: grupo.itens[0]?.paginaSugerida || "Clientes",
+      }
+    })
+}
+
+function fraseListaPrioridades(itens, novidades = []) {
+  if (!itens.length && !novidades.length) {
+    return "Hoje não encontrei pendências abertas nem novidades registradas no escritório."
+  }
+
+  const principais = itens.slice(0, 6).map((item) => {
+    const valor = item.valor ? ` no valor de ${item.valor}` : ""
+    const prazo = item.status ? `, ${String(item.status).toLowerCase()}` : ""
+    return `${item.cliente} tem ${item.titulo}${valor}${prazo}`
+  })
+  const recebimentos = novidades.filter((item) => item.tipoNovidade === "pagamento")
+    .slice(0, 4)
+    .map((item) => `${item.cliente} pagou ${item.valor || "um valor"} referente a ${item.titulo}`)
+  const resolvidas = novidades.filter((item) => item.tipoNovidade === "resolvida")
+    .slice(0, 3)
+    .map((item) => `${item.cliente} teve ${item.titulo} concluído`)
+
+  const blocos = []
+  if (principais.length) blocos.push(`Prioridades abertas: ${principais.join("; ")}.`)
+  if (recebimentos.length) blocos.push(`Pagamentos recebidos hoje: ${recebimentos.join("; ")}.`)
+  if (resolvidas.length) blocos.push(`Pendências resolvidas hoje: ${resolvidas.join("; ")}.`)
+  if (itens.length) blocos.push(`A prioridade principal é ${itens[0].cliente}: ${itens[0].titulo}, porque ${String(itens[0].status || "exige atenção").toLowerCase()}.`)
+  return blocos.join(" ")
+}
+
+async function consultaPrioridadesHoje(clientes, cliente = null) {
+  const [pendencias, novidades] = await Promise.all([
+    carregarPendenciasOperacionais(clientes, cliente),
+    carregarNovidadesHoje(clientes, cliente),
+  ])
+  const resposta = fraseListaPrioridades(pendencias, novidades)
+  const exibidos = pendencias.slice(0, 50)
   return respostaConsulta({
     resposta,
     fala: resposta,
-    pontos: exibidos.slice(0, 8).map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
-    recomendacao: prioridades.length ? "Comece pela primeira prioridade e siga a ordem apresentada pela Nexa." : "Mantenha a revisão preventiva do Assistente do Dia.",
+    pontos: exibidos.slice(0, 12).map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
+    recomendacao: pendencias.length ? `Comece por ${pendencias[0].cliente}: ${pendencias[0].titulo}.` : "Não há prioridade aberta agora.",
     consulta: {
       tipo: "prioridades-hoje",
-      titulo: "Prioridades de hoje",
-      resumo: `${prioridades.length} ${prioridades.length === 1 ? "prioridade encontrada" : "prioridades encontradas"}.`,
-      total: prioridades.length,
+      titulo: "Prioridades e novidades de hoje",
+      resumo: `${pendencias.length} pendência${pendencias.length === 1 ? "" : "s"} aberta${pendencias.length === 1 ? "" : "s"} • ${novidades.length} novidade${novidades.length === 1 ? "" : "s"} hoje.`,
+      total: pendencias.length,
       itens: exibidos,
+      novidades: novidades.slice(0, 30),
+      prioridadePrincipal: exibidos[0] || null,
       paginaSugerida: "Assistente do Dia",
       acaoSugerida: acaoPagina("Assistente do Dia"),
     },
   })
 }
 
-async function consultaAtencao(clientes) {
-  const ativos = clientes.filter(clienteAtivo)
-  const nomes = nomesPermitidos(ativos)
-  const ids = new Set(ativos.map((item) => Number(item.id)))
-  const [fiscais, financeiros, certificados, procuracoes] = await Promise.all([
-    Fiscal.findAll({ limit: 1200 }),
-    Financeiro.findAll({ limit: 1200 }),
-    CertificadoDigital.findAll({ limit: 500 }),
-    ProcuracaoEcac.findAll({ limit: 500 }),
-  ])
-  const mapa = new Map(ativos.map((cliente) => [normalizar(nomeCliente(cliente)), { cliente, score: 0, motivos: [] }]))
-  fiscais.filter((item) => nomes.has(normalizar(item.cliente)) && !encerrado(item.status)).forEach((item) => {
-    const linha = mapa.get(normalizar(item.cliente))
-    const dias = diasAte(item.vencimento)
-    if (!linha || dias === null) return
-    if (dias < 0) { linha.score += 8; linha.motivos.push(`${item.obrigacao || "Obrigação"} vencida`) }
-    else if (dias === 0) { linha.score += 6; linha.motivos.push(`${item.obrigacao || "Obrigação"} vence hoje`) }
-    else if (dias <= 3) { linha.score += 4; linha.motivos.push(`${item.obrigacao || "Obrigação"} vence em ${dias} dias`) }
-  })
-  financeiros.filter((item) => nomes.has(normalizar(item.cliente)) && !encerrado(item.status)).forEach((item) => {
-    const linha = mapa.get(normalizar(item.cliente))
-    if (linha && (diasAte(item.vencimento) ?? 999) < 0) { linha.score += 5; linha.motivos.push(`Financeiro vencido: ${item.descricao || "lançamento"}`) }
-  })
-  for (const [lista, rotulo] of [[certificados, "Certificado"], [procuracoes, "Procuração"]]) {
-    lista.filter((item) => ids.has(Number(item.clienteId))).forEach((item) => {
-      const cliente = ativos.find((c) => Number(c.id) === Number(item.clienteId))
-      const linha = cliente ? mapa.get(normalizar(nomeCliente(cliente))) : null
-      const dias = diasAte(item.dataValidade)
-      if (!linha || dias === null) return
-      if (dias < 0) { linha.score += 7; linha.motivos.push(`${rotulo} vencido`) }
-      else if (dias <= 30) { linha.score += 3; linha.motivos.push(`${rotulo} vence em ${dias} dias`) }
-    })
-  }
-  const ranking = [...mapa.values()].filter((item) => item.score > 0).sort((a, b) => b.score - a.score)
-  const exibidos = ranking.slice(0, 20).map((item) => ({
-    id: item.cliente.id,
-    clienteId: item.cliente.id,
-    cliente: nomeCliente(item.cliente),
-    titulo: nomeCliente(item.cliente),
-    detalhe: [...new Set(item.motivos)].slice(0, 4).join(" • "),
-    status: item.score >= 12 ? "Prioridade alta" : item.score >= 6 ? "Prioridade média" : "Atenção preventiva",
-  }))
+async function consultaPendenciasGerais(clientes, cliente = null) {
+  const pendencias = await carregarPendenciasOperacionais(clientes, cliente)
+  const grupos = agruparPendenciasPorCliente(pendencias)
+  const partes = grupos.map((grupo) => `${grupo.cliente}: ${grupo.detalhe}`)
+  const resposta = grupos.length
+    ? `Encontrei ${pendencias.length} pendência${pendencias.length === 1 ? "" : "s"} em ${grupos.length} cliente${grupos.length === 1 ? "" : "s"}. ${partes.join("; ")}. A prioridade é ${pendencias[0].cliente}: ${pendencias[0].titulo}, ${String(pendencias[0].status || "exige atenção").toLowerCase()}.`
+    : "Não encontrei pendências abertas nos clientes do escritório."
   return respostaConsulta({
-    resposta: ranking.length ? `${ranking.length} cliente${ranking.length === 1 ? " precisa" : "s precisam"} de atenção com base nos dados atuais.` : "Nenhum cliente ativo apresenta alerta crítico agora.",
-    pontos: exibidos.slice(0, 8).map((item) => `${item.cliente}: ${item.status} — ${item.detalhe}`),
-    recomendacao: ranking.length ? "Comece pelos clientes classificados como prioridade alta." : "Mantenha o acompanhamento preventivo.",
+    resposta,
+    fala: resposta,
+    pontos: grupos.slice(0, 15).map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
+    recomendacao: pendencias.length ? `Trate primeiro ${pendencias[0].cliente}: ${pendencias[0].titulo}.` : "Nenhuma ação pendente.",
+    consulta: {
+      tipo: "pendencias-gerais",
+      titulo: cliente ? `Todas as pendências — ${nomeCliente(cliente)}` : "Todas as pendências dos clientes",
+      resumo: `${pendencias.length} pendência${pendencias.length === 1 ? "" : "s"} em ${grupos.length} cliente${grupos.length === 1 ? "" : "s"}.`,
+      total: pendencias.length,
+      clientesComPendencias: grupos.length,
+      itens: grupos.slice(0, 60),
+      prioridadePrincipal: pendencias[0] || null,
+      paginaSugerida: "Assistente do Dia",
+      acaoSugerida: acaoPagina("Assistente do Dia"),
+    },
+  })
+}
+
+async function consultaPagamentosHoje(clientes, cliente = null) {
+  const novidades = (await carregarNovidadesHoje(clientes, cliente)).filter((item) => item.tipoNovidade === "pagamento")
+  const total = novidades.reduce((soma, item) => soma + Number(item.valorNumero || 0), 0)
+  const resposta = novidades.length
+    ? `Hoje ${novidades.length} pagamento${novidades.length === 1 ? " foi recebido" : "s foram recebidos"}, totalizando ${formatarMoeda(total)}. ${novidades.map((item) => `${item.cliente} pagou ${item.valor} referente a ${item.titulo}`).join("; ")}.`
+    : "Nenhum pagamento de cliente foi registrado hoje."
+  return respostaConsulta({
+    resposta,
+    fala: resposta,
+    pontos: novidades.map((item) => `${item.cliente}: ${item.valor} — ${item.titulo}`),
+    consulta: {
+      tipo: "pagamentos-hoje",
+      titulo: "Pagamentos recebidos hoje",
+      resumo: `${novidades.length} pagamento${novidades.length === 1 ? "" : "s"} • ${formatarMoeda(total)}.`,
+      total: novidades.length,
+      valorTotalFormatado: formatarMoeda(total),
+      itens: novidades,
+      paginaSugerida: "Financeiro",
+      acaoSugerida: acaoPagina("Financeiro"),
+    },
+  })
+}
+
+async function consultaResolvidasHoje(clientes, cliente = null) {
+  const novidades = await carregarNovidadesHoje(clientes, cliente)
+  const resposta = novidades.length
+    ? `Hoje houve ${novidades.length} ${novidades.length === 1 ? "atualização" : "atualizações"}: ${novidades.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`).join("; ")}.`
+    : "Nenhum pagamento ou encerramento de pendência foi registrado hoje."
+  return respostaConsulta({
+    resposta,
+    fala: resposta,
+    pontos: novidades.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
+    consulta: {
+      tipo: "resolvidas-hoje",
+      titulo: "Pagamentos e pendências resolvidas hoje",
+      resumo: `${novidades.length} ${novidades.length === 1 ? "atualização" : "atualizações"}.`,
+      total: novidades.length,
+      itens: novidades,
+      paginaSugerida: "Assistente do Dia",
+      acaoSugerida: acaoPagina("Assistente do Dia"),
+    },
+  })
+}
+
+async function consultaMensagensPendentes(clientes, cliente = null) {
+  const nomes = nomesPermitidos(clientes.filter(clienteAtivo))
+  let itens = await SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1000 })
+  itens = itens.filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAberta(item))
+  if (cliente) itens = itens.filter((item) => normalizar(item.cliente) === normalizar(nomeCliente(cliente)))
+  const exibidos = itens.map((item) => ({
+    id: item.id,
+    cliente: item.cliente,
+    titulo: item.titulo || "Solicitação do cliente",
+    detalhe: item.mensagem || item.categoria || "Pedido de ajuda",
+    status: item.novaInteracao ? "Nova interação" : (item.status || "Pendente"),
+    data: item.createdAt,
+    dataFormatada: formatarData(item.createdAt),
+    paginaSugerida: "Pendências Clientes",
+  }))
+  const resposta = exibidos.length
+    ? `Há ${exibidos.length} mensagem${exibidos.length === 1 ? "" : "s"} ou pedido${exibidos.length === 1 ? "" : "s"} de ajuda pendente${exibidos.length === 1 ? "" : "s"}: ${exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.detalhe}`).join("; ")}.`
+    : "Não há mensagens ou pedidos de ajuda pendentes registrados no sistema."
+  return respostaConsulta({
+    resposta,
+    fala: resposta,
+    pontos: exibidos.map((item) => `${item.cliente}: ${item.titulo}`),
+    consulta: {
+      tipo: "mensagens-pendentes",
+      titulo: "Mensagens e pedidos de ajuda",
+      resumo: `${exibidos.length} item${exibidos.length === 1 ? "" : "s"} pendente${exibidos.length === 1 ? "" : "s"}.`,
+      total: exibidos.length,
+      itens: exibidos,
+      paginaSugerida: "Pendências Clientes",
+      acaoSugerida: acaoPagina("Pendências Clientes", cliente),
+    },
+  })
+}
+
+async function consultaDocumentosPendentes(clientes, cliente = null) {
+  let itens = await DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1000 })
+  itens = filtrarEscopo(itens, clientes.filter(clienteAtivo), cliente).filter(documentoExigeAtencao)
+  const exibidos = itens.map((item) => ({
+    id: item.id,
+    cliente: item.cliente,
+    titulo: item.tipo || "Documento",
+    detalhe: item.observacao || item.origem || "Documento aguardando ação",
+    status: item.status || "Aguardando análise",
+    data: item.dataEnvio || item.createdAt,
+    dataFormatada: formatarData(item.dataEnvio || item.createdAt),
+    paginaSugerida: "Documentos Digitais",
+  }))
+  const resposta = exibidos.length
+    ? `Há ${exibidos.length} documento${exibidos.length === 1 ? "" : "s"} aguardando ação no escritório: ${exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`).join("; ")}.`
+    : "Não há documentos aguardando conferência ou entrega no escritório."
+  return respostaConsulta({
+    resposta,
+    fala: resposta,
+    pontos: exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
+    consulta: {
+      tipo: "documentos-pendentes",
+      titulo: "Documentos aguardando ação",
+      resumo: `${exibidos.length} documento${exibidos.length === 1 ? "" : "s"}.`,
+      total: exibidos.length,
+      itens: exibidos,
+      paginaSugerida: "Documentos Digitais",
+      acaoSugerida: acaoPagina("Documentos Digitais", cliente),
+    },
+  })
+}
+
+async function consultaAtencao(clientes) {
+  const pendencias = await carregarPendenciasOperacionais(clientes)
+  const grupos = agruparPendenciasPorCliente(pendencias).map((item) => ({
+    ...item,
+    status: item.prioridade >= 120 ? "Prioridade alta" : item.prioridade >= 100 ? "Prioridade média" : "Atenção preventiva",
+  }))
+  const resposta = grupos.length
+    ? `${grupos.length} cliente${grupos.length === 1 ? " precisa" : "s precisam"} de atenção. ${grupos.map((item) => `${item.cliente}: ${item.detalhe}`).join("; ")}. A prioridade principal é ${pendencias[0].cliente}: ${pendencias[0].titulo}.`
+    : "Nenhum cliente apresenta pendência aberta ou alerta operacional agora."
+  return respostaConsulta({
+    resposta,
+    pontos: grupos.slice(0, 15).map((item) => `${item.cliente}: ${item.status} — ${item.detalhe}`),
+    recomendacao: pendencias.length ? `Comece por ${pendencias[0].cliente}: ${pendencias[0].titulo}.` : "Mantenha o acompanhamento preventivo.",
     consulta: {
       tipo: "clientes-atencao",
       titulo: "Clientes que precisam de atenção",
-      resumo: `${ranking.length} cliente${ranking.length === 1 ? "" : "s"} com alertas.`,
-      total: ranking.length,
-      itens: exibidos,
+      resumo: `${grupos.length} cliente${grupos.length === 1 ? "" : "s"} com pendências em qualquer área.`,
+      total: grupos.length,
+      itens: grupos.slice(0, 60),
+      prioridadePrincipal: pendencias[0] || null,
       paginaSugerida: "Assistente do Dia",
       acaoSugerida: acaoPagina("Assistente do Dia"),
     },
@@ -679,70 +1136,64 @@ async function consultaAtencao(clientes) {
 }
 
 async function consultaEscritorio(clientes) {
-  const ativos = clientes.filter(clienteAtivo)
-  const nomes = nomesPermitidos(ativos)
-  const ids = new Set(ativos.map((item) => Number(item.id)))
-  const [fiscais, financeiros, certificados, procuracoes] = await Promise.all([
-    Fiscal.findAll({ limit: 1200 }),
-    Financeiro.findAll({ limit: 1200 }),
-    CertificadoDigital.findAll({ limit: 500 }),
-    ProcuracaoEcac.findAll({ limit: 500 }),
+  const [pendencias, novidades] = await Promise.all([
+    carregarPendenciasOperacionais(clientes),
+    carregarNovidadesHoje(clientes),
   ])
-  const fiscaisAbertos = fiscais.filter((item) => nomes.has(normalizar(item.cliente)) && !encerrado(item.status))
-  const financeirosAbertos = financeiros.filter((item) => nomes.has(normalizar(item.cliente)) && !encerrado(item.status))
-  const metricas = {
-    ativos: ativos.length,
-    vencidas: fiscaisAbertos.filter((item) => (diasAte(item.vencimento) ?? 999) < 0).length,
-    hoje: fiscaisAbertos.filter((item) => diasAte(item.vencimento) === 0).length,
-    tresDias: fiscaisAbertos.filter((item) => { const d = diasAte(item.vencimento); return d !== null && d > 0 && d <= 3 }).length,
-    financeiro: financeirosAbertos.filter((item) => (diasAte(item.vencimento) ?? 999) < 0).length,
-    certificados: certificados.filter((item) => ids.has(Number(item.clienteId)) && (diasAte(item.dataValidade) ?? 999) <= 30).length,
-    procuracoes: procuracoes.filter((item) => ids.has(Number(item.clienteId)) && (diasAte(item.dataValidade) ?? 999) <= 30).length,
-  }
-  const itens = [
-    { titulo: "Clientes ativos", detalhe: String(metricas.ativos), status: "Carteira operacional" },
-    { titulo: "Obrigações vencidas", detalhe: String(metricas.vencidas), status: metricas.vencidas ? "Ação imediata" : "Sem vencidas" },
-    { titulo: "Vencimentos de hoje", detalhe: String(metricas.hoje), status: metricas.hoje ? "Revisar hoje" : "Nenhum" },
-    { titulo: "Vencimentos em até 3 dias", detalhe: String(metricas.tresDias), status: metricas.tresDias ? "Atenção preventiva" : "Nenhum" },
-    { titulo: "Financeiro vencido", detalhe: String(metricas.financeiro), status: metricas.financeiro ? "Cobrança necessária" : "Sem atrasos" },
-    { titulo: "Certificados até 30 dias", detalhe: String(metricas.certificados), status: metricas.certificados ? "Planejar renovação" : "Nenhum" },
-    { titulo: "Procurações até 30 dias", detalhe: String(metricas.procuracoes), status: metricas.procuracoes ? "Planejar renovação" : "Nenhuma" },
-  ]
-  const criticos = metricas.vencidas + metricas.hoje + metricas.financeiro
+  const grupos = agruparPendenciasPorCliente(pendencias)
+  const porCategoria = new Map()
+  for (const item of pendencias) porCategoria.set(item.categoria, (porCategoria.get(item.categoria) || 0) + 1)
+  const itens = [...porCategoria.entries()].map(([categoria, total], indice) => ({
+    id: `categoria-${indice}`,
+    titulo: categoria,
+    detalhe: `${total} ${total === 1 ? "item aberto" : "itens abertos"}`,
+    status: "Pendente",
+  }))
+  const resposta = pendencias.length
+    ? `O escritório possui ${pendencias.length} pendência${pendencias.length === 1 ? "" : "s"} em ${grupos.length} cliente${grupos.length === 1 ? "" : "s"}. A prioridade é ${pendencias[0].cliente}: ${pendencias[0].titulo}, ${String(pendencias[0].status || "exige atenção").toLowerCase()}. Hoje também houve ${novidades.length} ${novidades.length === 1 ? "atualização" : "atualizações"} registrada${novidades.length === 1 ? "" : "s"}.`
+    : `O escritório não possui pendências abertas. Hoje houve ${novidades.length} ${novidades.length === 1 ? "atualização" : "atualizações"} registrada${novidades.length === 1 ? "" : "s"}.`
   return respostaConsulta({
-    resposta: criticos ? `O escritório possui ${criticos} ${criticos === 1 ? "item" : "itens"} de atenção imediata hoje.` : "O escritório não apresenta itens críticos vencidos ou com vencimento hoje.",
-    pontos: itens.map((item) => `${item.titulo}: ${item.detalhe} — ${item.status}`),
-    recomendacao: criticos ? "Abra o Assistente do Dia e trate primeiro os itens vencidos." : "Revise os próximos vencimentos para manter a operação preventiva.",
+    resposta,
+    pontos: grupos.slice(0, 12).map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
+    recomendacao: pendencias.length ? `Comece por ${pendencias[0].cliente}: ${pendencias[0].titulo}.` : "Nenhuma ação imediata necessária.",
     consulta: {
       tipo: "escritorio-hoje",
-      titulo: "Situação do escritório hoje",
-      resumo: `${criticos} ${criticos === 1 ? "item imediato" : "itens imediatos"}.`,
-      total: itens.length,
-      itens,
+      titulo: "Situação completa do escritório",
+      resumo: `${pendencias.length} pendência${pendencias.length === 1 ? "" : "s"} • ${novidades.length} novidade${novidades.length === 1 ? "" : "s"} hoje.`,
+      total: pendencias.length,
+      itens: grupos.slice(0, 60),
+      categorias: itens,
+      novidades: novidades.slice(0, 30),
+      prioridadePrincipal: pendencias[0] || null,
       paginaSugerida: "Assistente do Dia",
       acaoSugerida: acaoPagina("Assistente do Dia"),
     },
   })
 }
 
-async function detectarConsultaInteligente({ mensagem, clienteId, usuario }) {
+async function detectarConsultaInteligente({ mensagem, clienteId, usuario, intencaoForcada = null }) {
   const texto = normalizar(mensagem)
-  if (!texto) return null
+  if (!texto && !intencaoForcada) return null
 
   const clientes = await carregarClientes(usuario)
   const localizado = localizarCliente(clientes, texto, clienteId)
-  if (!consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
+  if (!intencaoForcada && !consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
   if (localizado.ambiguo) {
     return respostaConsulta({
-      resposta: "Encontrei mais de um cliente compatível. Informe o nome completo ou selecione o cliente no campo de contexto.",
+      resposta: "Encontrei mais de um cliente compatível. Informe o nome completo ou o código do cliente.",
       consulta: { tipo: "cliente-ambiguo", titulo: "Cliente não identificado", resumo: "Preciso de um nome mais específico.", total: 0, itens: [] },
     })
   }
 
-  const intencao = identificarIntencao(texto, localizado.cliente)
+  const intencao = intencaoForcada || identificarIntencao(texto, localizado.cliente)
   if (!intencao) return null
   if (intencao === "clientes") return consultaClientes(clientes, texto)
-  if (intencao === "prioridades-hoje") return consultaPrioridadesHoje(clientes)
+  if (intencao === "prioridades-hoje") return consultaPrioridadesHoje(clientes, localizado.cliente)
+  if (intencao === "pendencias-gerais") return consultaPendenciasGerais(clientes, localizado.cliente)
+  if (intencao === "pagamentos-hoje") return consultaPagamentosHoje(clientes, localizado.cliente)
+  if (intencao === "resolvidas-hoje") return consultaResolvidasHoje(clientes, localizado.cliente)
+  if (intencao === "mensagens-pendentes") return consultaMensagensPendentes(clientes, localizado.cliente)
+  if (intencao === "documentos-pendentes") return consultaDocumentosPendentes(clientes, localizado.cliente)
   if (intencao === "fiscal") return consultaFiscal(clientes, localizado.cliente, texto)
   if (intencao === "financeiro") return consultaFinanceiro(clientes, localizado.cliente, texto)
   if (intencao === "documentos") return consultaDocumentos(clientes, localizado.cliente, texto)

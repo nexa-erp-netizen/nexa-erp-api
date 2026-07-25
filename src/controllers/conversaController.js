@@ -33,6 +33,7 @@ const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
 const NEXA_CONVERSACIONAL_V2_ATIVA = String(process.env.NEXA_CONVERSACIONAL_V2 || "true").toLowerCase() !== "false"
+const NEXA_MODEL_ROUTER_ATIVO = String(process.env.NEXA_MODEL_ROUTER || "true").toLowerCase() !== "false"
 
 
 const PAGINAS_NAVEGACAO = [
@@ -1165,21 +1166,23 @@ function perguntaExigePesquisaWeb(mensagem, historico = []) {
   if (perguntaProfissionalConceitual(mensagem, historico)) return false
 
   const textoAtual = normalizar(mensagem)
-  const saudacaoSemAssuntoProfissional = /^(oi|ola|bom dia|boa tarde|boa noite)(\s|,|!|$)/.test(textoAtual)
-    && !TEMA_PROFISSIONAL_ATUALIZAVEL.test(textoAtual)
-  if (saudacaoSemAssuntoProfissional) return false
+  const pedidoExplicito = /(pesquise|pesquisar|procure na internet|busque na internet|consulte a internet|confirme na internet|verifique online|fonte oficial|regra atual|legislacao atual|legislação atual)/.test(textoAtual)
+  if (pedidoExplicito) return true
+
+  const perguntaIncompletaDeCalculo = /(quanto|qual(?: e)?(?: o)? valor).*(ele|ela|esse cliente|essa empresa|a empresa).*(imposto|tribut|das)/.test(textoAtual)
+    && !/(faturamento|receita|atividade|cnae|anexo|regime|simples|presumido|real|municipio|cidade)/.test(textoAtual)
+  if (perguntaIncompletaDeCalculo) return false
 
   const historicoRecente = limparHistorico(historico)
     .slice(-6)
     .map((item) => normalizar(item.texto))
     .join(" ")
+  const contexto = `${historicoRecente} ${textoAtual}`
+  const temaProfissional = TEMA_PROFISSIONAL_ATUALIZAVEL.test(contexto)
+  const exigeNumeroAtual = /(codigo|aliquota|valor vigente|limite|prazo|vencimento|tabela|salario minimo|contribuicao mensal|percentual atual)/.test(textoAtual)
+  const indicioAtualidade = INDICIO_ATUALIDADE.test(textoAtual)
 
-  const temaAtual = TEMA_PROFISSIONAL_ATUALIZAVEL.test(textoAtual)
-  const perguntaFactual = PERGUNTA_FATUAL_OU_NORMATIVA.test(textoAtual)
-  const temaNoHistorico = TEMA_PROFISSIONAL_ATUALIZAVEL.test(historicoRecente)
-  const continuacaoDoAssunto = CONTINUACAO_CURTA.test(textoAtual) && temaNoHistorico
-
-  return (temaAtual && perguntaFactual) || continuacaoDoAssunto || INDICIO_ATUALIDADE.test(textoAtual)
+  return temaProfissional && (exigeNumeroAtual || indicioAtualidade)
 }
 
 function pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico = []) {
@@ -1188,9 +1191,10 @@ function pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico = []) {
 }
 
 function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
-  if (clienteId || tipoContexto === "cliente") return true
   const texto = normalizar(mensagem)
-  return /(meus? clientes?|cliente cadastrado|escritorio|nexa|pendenc|venciment|financeir|honorario|cobranc|pagament|devendo|quanto deve|servicos? e cobrancas?|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
+  const referenciaOperacional = /(meus? clientes?|cliente cadastrado|esse cliente|essa empresa|cliente aberto|escritorio|nexa|pendenc|venciment|financeir|honorario|cobranc|pagament|devendo|quanto deve|servicos? e cobrancas?|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
+  const pronomeComDadoOperacional = clienteId && /(quanto (?:ele|ela) deve|o que (?:ele|ela) deve|pendencias? (?:dele|dela)|documentos? (?:dele|dela)|fiscal (?:dele|dela)|cobrancas? (?:dele|dela))/.test(texto)
+  return referenciaOperacional || pronomeComDadoOperacional || (tipoContexto === "cliente" && referenciaOperacional)
 }
 
 function respostaObjetivaAntesDaPesquisa(mensagem) {
@@ -1220,13 +1224,18 @@ function respostaObjetivaAntesDaPesquisa(mensagem) {
   return null
 }
 
-function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias }) {
+function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias, clienteAtual = null, paginaAtual = "" }) {
   return {
     escopo: tipoContexto === "interessado" ? "novo_atendimento" : "consultoria_livre",
     usuario: { nome: nomeUsuario },
     interessado: tipoContexto === "interessado"
       ? { identificacao: interessadoNome || "Novo atendimento", cadastrado: false }
       : null,
+    contextoAmbiente: {
+      paginaAtual: paginaAtual || null,
+      clienteAberto: clienteAtual || null,
+      observacao: "O cliente aberto é apenas contexto de tela. Não presuma que pronomes se referem a ele quando o assunto recente indicar outra pessoa ou conceito.",
+    },
     memorias,
     dataHoraBrasil: dataHoraBrasil(),
   }
@@ -1438,6 +1447,108 @@ function interpretarJson(texto) {
     pontos: [],
     recomendacao: "",
     fundamentos: [],
+  }
+}
+
+const INTENCOES_CONSULTA_ROTEADOR = new Set([
+  "prioridades-hoje",
+  "pendencias-gerais",
+  "pagamentos-hoje",
+  "resolvidas-hoje",
+  "mensagens-pendentes",
+  "documentos-pendentes",
+  "financeiro",
+  "fiscal",
+  "documentos",
+  "certificados",
+  "procuracoes",
+  "clientes",
+  "cliente",
+  "atencao",
+  "escritorio",
+])
+
+function normalizarRotaModelo(valor) {
+  const rota = normalizar(valor).replace(/\s+/g, "-")
+  if (["navegacao", "consulta", "conversa", "pesquisa", "esclarecer"].includes(rota)) return rota
+  return null
+}
+
+async function rotearMensagemComModelo({ mensagem, nomeUsuario, historico, paginaAtual = "", clienteAtual = null }) {
+  if (!NEXA_MODEL_ROUTER_ATIVO || PROVEDOR_PADRAO !== "groq" || !process.env.GROQ_API_KEY) return null
+
+  const historicoRecente = limparHistorico(historico).slice(-10)
+  const mensagens = [
+    {
+      role: "system",
+      content: `Você é o roteador conversacional da Nexa, colega digital do escritório contábil de ${nomeUsuario}.
+Classifique a mensagem pela intenção real, considerando o histórico. Não use palavras isoladas para decidir.
+ROTAS:
+- navegacao: pedido explícito para abrir, entrar, ir, voltar ou mostrar uma tela/cliente.
+- consulta: pergunta sobre dados reais cadastrados no ERP.
+- conversa: conhecimento geral, explicação, opinião, redação, cálculo genérico ou conversa livre.
+- pesquisa: somente quando o usuário pedir pesquisa online ou quando a resposta exigir regra, valor, código, prazo ou notícia atual.
+- esclarecer: a pergunta está incompleta e é impossível responder corretamente sem um dado essencial.
+INTENÇÕES DE CONSULTA PERMITIDAS:
+prioridades-hoje, pendencias-gerais, pagamentos-hoje, resolvidas-hoje, mensagens-pendentes, documentos-pendentes, financeiro, fiscal, documentos, certificados, procuracoes, clientes, cliente, atencao, escritorio.
+REGRAS IMPORTANTES:
+- “Quais são as pendências?” significa pendencias-gerais e deve incluir qualquer categoria, não apenas fiscal.
+- “O que tenho para hoje?”, “resumo do dia” e “relatório para hoje” significam prioridades-hoje, sem abrir Relatórios.
+- “Quem pagou hoje?” significa pagamentos-hoje.
+- “Tem mensagem de cliente?” significa mensagens-pendentes.
+- “Por que contador não pode ser MEI?” é conversa, não consulta do ERP.
+- “E qual empresa ele pode abrir?” continua o assunto anterior e é conversa.
+- “Quanto ele vai pagar de imposto?” deve ser esclarecer quando faltarem regime, atividade e faturamento; formule uma pergunta curta para obter o dado ausente.
+- A tela ou cliente atualmente aberto não substitui o assunto da conversa.
+Retorne SOMENTE JSON válido:
+{"rota":"consulta|navegacao|conversa|pesquisa|esclarecer","intencao":"uma intenção permitida ou null","resposta":"somente quando rota=esclarecer","motivo":"frase curta"}`,
+    },
+    ...historicoRecente.map((item) => ({
+      role: item.autor === "usuario" ? "user" : "assistant",
+      content: item.texto,
+    })),
+    {
+      role: "user",
+      content: `MENSAGEM ATUAL: ${String(mensagem || "").slice(0, 1200)}\nTELA ATUAL: ${paginaAtual || "não informada"}\nCLIENTE ABERTO: ${JSON.stringify(clienteAtual || null)}`,
+    },
+  ]
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 22000)
+  try {
+    const resposta = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: MODELO_PADRAO,
+        messages: mensagens,
+        max_tokens: 220,
+        temperature: 0.05,
+      }),
+    })
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) throw new Error(dados?.error?.message || `Groq respondeu com status ${resposta.status}`)
+    const objeto = extrairObjetoJsonLivre(extrairTextoGroq(dados))
+    const rota = normalizarRotaModelo(objeto?.rota)
+    if (!rota) return null
+    const intencaoCandidata = normalizar(objeto?.intencao).replace(/\s+/g, "-")
+    const intencao = INTENCOES_CONSULTA_ROTEADOR.has(intencaoCandidata) ? intencaoCandidata : null
+    return {
+      rota,
+      intencao,
+      resposta: String(objeto?.resposta || "").trim(),
+      motivo: String(objeto?.motivo || "").trim(),
+      modelo: MODELO_PADRAO,
+    }
+  } catch (error) {
+    console.warn("ROTEADOR CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
+    return null
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -1719,8 +1830,25 @@ async function gerarResposta(parametros) {
   const respostaObjetiva = respostaObjetivaAntesDaPesquisa(parametros.mensagem)
   if (respostaObjetiva) return respostaObjetiva
 
-  const usarPesquisa = perguntaExigePesquisaWeb(parametros.mensagem, parametros.historico)
-  if (usarPesquisa) return gerarRespostaComPesquisa(parametros)
+  const usarPesquisa = parametros.forcarPesquisaWeb === true
+    || (parametros.bloquearPesquisaWeb !== true && perguntaExigePesquisaWeb(parametros.mensagem, parametros.historico))
+  if (usarPesquisa) {
+    const pesquisada = await gerarRespostaComPesquisa(parametros)
+    if (pesquisada?.confirmado !== false && pesquisada?.resposta) return pesquisada
+
+    const respostaNatural = await gerarRespostaPadrao({
+      ...parametros,
+      contexto: {
+        ...(parametros.contexto || {}),
+        pesquisaOnline: "A pesquisa online não confirmou uma fonte suficiente. Responda de forma útil com conhecimento geral, deixando claro quando um dado atual precisa ser verificado, sem usar uma recusa genérica.",
+      },
+    })
+    return {
+      ...respostaNatural,
+      pesquisaWeb: false,
+      pesquisaWebIndisponivel: true,
+    }
+  }
   return gerarRespostaPadrao(parametros)
 }
 
@@ -1738,7 +1866,10 @@ function compactarResultadoParaConversa(resultado) {
       total: consulta.total,
       valorTotalFormatado: consulta.valorTotalFormatado,
       cliente: consulta.cliente,
-      itens: Array.isArray(consulta.itens) ? consulta.itens.slice(0, 10) : [],
+      itens: Array.isArray(consulta.itens) ? consulta.itens.slice(0, 40) : [],
+      novidades: Array.isArray(consulta.novidades) ? consulta.novidades.slice(0, 30) : [],
+      prioridadePrincipal: consulta.prioridadePrincipal || null,
+      clientesComPendencias: consulta.clientesComPendencias,
     } : null,
   }
 }
@@ -1768,12 +1899,20 @@ async function naturalizarResultadoSistema({
 
   const historicoRecente = limparHistorico(historico).slice(-10)
   const contextoConfirmado = compactarResultadoParaConversa(resultado)
-  const consultaPrioridades = contextoConfirmado?.consulta?.tipo === "prioridades-hoje"
+  const tipoConsulta = contextoConfirmado?.consulta?.tipo || ""
+  const consultaPrioridades = tipoConsulta === "prioridades-hoje"
+  const consultaPendencias = tipoConsulta === "pendencias-gerais"
+  const consultaNovidades = ["pagamentos-hoje", "resolvidas-hoje"].includes(tipoConsulta)
+  const consultaComListaCompleta = consultaPrioridades || consultaPendencias || consultaNovidades || ["mensagens-pendentes", "documentos-pendentes"].includes(tipoConsulta)
   const instrucaoAtividade = atividade === "navegacao"
     ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
     : consultaPrioridades
-      ? "Os DADOS CONFIRMADOS vieram diretamente do ERP. Entregue um resumo operacional do dia: cite, em ordem de urgência, o cliente, a pendência, o valor quando existir e a data de vencimento. Recomende por onde começar. Não mande o usuário para a tela de Relatórios e não transforme a resposta em uma contagem vaga."
-      : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
+      ? "Os dados vieram do ERP. Faça o resumo do dia em duas partes: prioridades abertas e novidades de hoje. Cite cliente, pendência, valor e vencimento quando existirem. Informe claramente a prioridade principal. Inclua pagamentos e pendências resolvidas presentes em novidades. Não abra Relatórios."
+      : consultaPendencias
+        ? "Os dados vieram do ERP. Relacione todos os clientes presentes nos itens, sem limitar a resposta à área fiscal. Para cada cliente, resuma as pendências de qualquer categoria e, ao final, informe qual é a prioridade principal. Não omita clientes."
+        : consultaNovidades
+          ? "Os dados vieram do ERP. Relacione todos os pagamentos ou pendências resolvidas presentes nos itens, com cliente, motivo e valor quando existir."
+          : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
 
   const mensagens = [
     {
@@ -1821,8 +1960,8 @@ ${JSON.stringify(contextoConfirmado)}`,
       body: JSON.stringify({
         model: MODELO_PADRAO,
         messages: mensagens,
-        max_tokens: 420,
-        temperature: 0.68,
+        max_tokens: consultaComListaCompleta ? 1200 : 520,
+        temperature: consultaComListaCompleta ? 0.35 : 0.68,
       }),
     })
 
@@ -1837,8 +1976,8 @@ ${JSON.stringify(contextoConfirmado)}`,
       ...base,
       resposta: texto,
       ...(origem === "voz" ? { fala: texto } : {}),
-      modo: `${resultado?.modo || "sistema"}-conversacional-v2`,
-      modelo: `${MODELO_PADRAO} + Nexa Conversacional v2`,
+      modo: `${resultado?.modo || "sistema"}-conversacional-v2.1`,
+      modelo: `${MODELO_PADRAO} + Nexa Conversacional v2.1`,
     }
   } catch (error) {
     console.warn("NATURALIZACAO CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
@@ -1856,6 +1995,7 @@ async function status(req, res) {
   const base = {
     provedorPrincipal: PROVEDOR_PADRAO,
     conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
+    roteadorPorModelo: NEXA_MODEL_ROUTER_ATIVO,
     groq: {
       configurada: Boolean(apiKey),
       online: false,
@@ -1950,7 +2090,15 @@ async function contexto(req, res) {
 
     let contextoNexa
     if (conversaCasual || tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto)) {
-      contextoNexa = contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias })
+      const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
+      contextoNexa = contextoLivre({
+        nomeUsuario,
+        tipoContexto,
+        interessadoNome,
+        memorias,
+        clienteAtual: clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null,
+        paginaAtual: String(req.body?.paginaAtual || ""),
+      })
       if (conversaCasual) contextoNexa.escopo = "conversa_casual"
     } else {
       const contextoCompleto = clienteId
@@ -2187,17 +2335,30 @@ async function conversar(req, res) {
       return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
     }
 
-    const comandoNavegacao = await detectarComandoNavegacao({
+    const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
+    const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
+    const rotaModelo = await rotearMensagemComModelo({
       mensagem,
-      clienteId,
-      usuario: usuarioCompleto,
-      origem,
-      paginaAtual,
+      nomeUsuario,
       historico,
+      paginaAtual,
+      clienteAtual: clienteAtualResumo,
     })
 
+    let comandoNavegacao = null
+    const deveTentarNavegacao = rotaModelo?.rota === "navegacao" || (!rotaModelo && pareceComandoNavegacao(normalizar(mensagem)))
+    if (deveTentarNavegacao) {
+      comandoNavegacao = await detectarComandoNavegacao({
+        mensagem,
+        clienteId,
+        usuario: usuarioCompleto,
+        origem,
+        paginaAtual,
+        historico,
+      })
+    }
+
     if (comandoNavegacao) {
-      const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
       const respostaNavegacao = await naturalizarResultadoSistema({
         mensagem,
         nomeUsuario,
@@ -2205,7 +2366,7 @@ async function conversar(req, res) {
         resultado: comandoNavegacao,
         origem,
         paginaAtual,
-        clienteAtual: clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null,
+        clienteAtual: clienteAtualResumo,
         atividade: "navegacao",
       })
 
@@ -2214,40 +2375,69 @@ async function conversar(req, res) {
         usuarioId: req.usuario.id,
         autor: "nexa",
         texto: respostaNavegacao.resposta,
-        dados: respostaNavegacao,
+        dados: { ...respostaNavegacao, roteadorModelo: rotaModelo },
       })
-      return res.json(anexarMetadadosConversa(respostaNavegacao, conversa))
+      return res.json(anexarMetadadosConversa({ ...respostaNavegacao, roteadorModelo: rotaModelo }, conversa))
     }
 
-    if (conversa.tipoContexto !== "interessado") {
-      const consultaInteligente = await detectarConsultaInteligente({
+    if (rotaModelo?.rota === "esclarecer" && rotaModelo.resposta) {
+      const respostaEsclarecimento = {
+        resposta: rotaModelo.resposta,
+        ...(origem === "voz" ? { fala: rotaModelo.resposta } : {}),
+        pontos: [],
+        recomendacao: "",
+        fundamentos: [],
+        modo: "nexa-conversacional-v2.1-esclarecimento",
+        provedor: "groq",
+        modelo: `${MODELO_PADRAO} + roteador`,
+        atividade: "esclarecimento",
+        conversacionalV2: true,
+        roteadorModelo: rotaModelo,
+        respondidoEm: new Date().toISOString(),
+      }
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaEsclarecimento.resposta,
+        dados: respostaEsclarecimento,
+      })
+      return res.json(anexarMetadadosConversa(respostaEsclarecimento, conversa))
+    }
+
+    let consultaInteligente = null
+    const deveTentarConsulta = conversa.tipoContexto !== "interessado"
+      && (rotaModelo?.rota === "consulta" || !rotaModelo)
+    if (deveTentarConsulta) {
+      consultaInteligente = await detectarConsultaInteligente({
         mensagem,
         clienteId,
         usuario: usuarioCompleto,
+        intencaoForcada: rotaModelo?.rota === "consulta" ? rotaModelo.intencao : null,
+      })
+    }
+
+    if (consultaInteligente) {
+      const respostaConsultaNatural = await naturalizarResultadoSistema({
+        mensagem,
+        nomeUsuario,
+        historico,
+        resultado: consultaInteligente,
+        origem,
+        paginaAtual,
+        clienteAtual: clienteAtualResumo,
+        atividade: "consulta",
       })
 
-      if (consultaInteligente) {
-        const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
-        const respostaConsultaNatural = await naturalizarResultadoSistema({
-          mensagem,
-          nomeUsuario,
-          historico,
-          resultado: consultaInteligente,
-          origem,
-          paginaAtual,
-          clienteAtual: clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null,
-          atividade: "consulta",
-        })
-
-        await salvarMensagemConversa({
-          conversa,
-          usuarioId: req.usuario.id,
-          autor: "nexa",
-          texto: respostaConsultaNatural.resposta,
-          dados: respostaConsultaNatural,
-        })
-        return res.json(anexarMetadadosConversa(respostaConsultaNatural, conversa))
-      }
+      const respostaComRota = { ...respostaConsultaNatural, roteadorModelo: rotaModelo }
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaComRota.resposta,
+        dados: respostaComRota,
+      })
+      return res.json(anexarMetadadosConversa(respostaComRota, conversa))
     }
 
     const conversaCasual = mensagemEhConversaCasual(mensagem)
@@ -2260,12 +2450,15 @@ async function conversar(req, res) {
     })
 
     let contextoNexa
-    if (conversaCasual || conversa.tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, conversa.tipoContexto)) {
+    const rotaLivre = ["conversa", "pesquisa", "esclarecer"].includes(rotaModelo?.rota)
+    if (conversaCasual || rotaLivre || conversa.tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, conversa.tipoContexto)) {
       contextoNexa = contextoLivre({
         nomeUsuario,
         tipoContexto: conversa.tipoContexto,
         interessadoNome: conversa.interessadoNome,
         memorias,
+        clienteAtual: clienteAtualResumo,
+        paginaAtual,
       })
       if (conversaCasual) contextoNexa.escopo = "conversa_casual"
     } else {
@@ -2289,6 +2482,8 @@ async function conversar(req, res) {
       historico,
       conversaCasual,
       respostaCurta,
+      forcarPesquisaWeb: rotaModelo?.rota === "pesquisa",
+      bloquearPesquisaWeb: rotaModelo?.rota === "conversa",
     })
 
     const respostaFinal = {
@@ -2304,6 +2499,7 @@ async function conversar(req, res) {
       correcaoContextualAplicada: correcaoContextual.alterada,
       substituicoesVocabulario: substituicoesAplicadas,
       conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
+      roteadorModelo: rotaModelo,
       atividade: resultado.pesquisaWeb ? "pesquisa" : "conversa",
       transcricaoOriginal: mensagemAlterada ? mensagemOriginal : undefined,
       transcricaoCorrigida: mensagemAlterada ? mensagem : undefined,
