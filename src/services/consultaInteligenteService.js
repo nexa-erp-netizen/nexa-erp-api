@@ -172,7 +172,7 @@ function localizarCliente(clientes, texto, clienteId) {
 }
 
 function pedidoPrioridadesHoje(texto) {
-  return /(qual(?: e)?(?: a)? prioridade(?: principal)?(?: para| de)? hoje|quais(?: sao)?(?: as)? prioridades?(?: para| de)? hoje|prioridades? do dia|o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje|o que e mais urgente hoje|por onde (?:eu )?comeco hoje|como esta meu dia|organize meu dia)/.test(texto)
+  return /(qual(?: e)?(?: a)? prioridade(?: principal)?(?: para| de)? hoje|quais(?: sao)?(?: as)? prioridades?(?: para| de)? hoje|prioridades? do dia|o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje|o que e mais urgente hoje|por onde (?:eu )?comeco hoje|como esta meu dia|organize meu dia|(?:faca |me (?:de|passe|mostre|fale) )?(?:um )?(?:relatorio|resumo|panorama)(?: operacional)? (?:de|do|para|pra) (?:hoje|dia)|(?:relatorio|resumo) de hoje)/.test(texto)
 }
 
 function consultaSolicitada(texto, cliente = null, clienteId = null) {
@@ -469,17 +469,28 @@ function fraseListaPrioridades(itens) {
     return "Hoje não encontrei pendências vencidas, vencimentos próximos ou novas interações nos dados atuais da Nexa."
   }
 
-  const principais = itens.slice(0, 3)
-  const partes = principais.map((item, indice) => {
-    const prefixo = indice === 0 ? "primeiro" : indice === 1 ? "depois" : "em seguida"
-    return `${prefixo}, ${item.titulo} de ${item.cliente}, ${String(item.status || "pendente").toLowerCase()}`
+  const principais = itens.slice(0, 5)
+  const partes = principais.map((item) => {
+    const vencimento = item.data ? `, com vencimento em ${item.dataFormatada}` : ""
+    const status = item.status ? `, ${String(item.status).toLowerCase()}` : ""
+    const valor = item.valorFormatado ? ` no valor de ${item.valorFormatado}` : ""
+
+    if (item.modulo === "financeiro") {
+      return `${item.cliente} tem uma cobrança${valor} referente a ${item.titulo}${vencimento}${status}`
+    }
+
+    if (item.modulo === "fiscal") {
+      return `${item.cliente} tem ${item.titulo}${valor}${vencimento}${status}`
+    }
+
+    return `${item.cliente}: ${item.titulo}${vencimento}${status}`
   })
   const restante = itens.length - principais.length
   const complemento = restante > 0
     ? ` Além dessas, existem mais ${restante} ${restante === 1 ? "prioridade" : "prioridades"}.`
     : ""
 
-  return `Hoje você tem ${itens.length} ${itens.length === 1 ? "prioridade" : "prioridades"}: ${partes.join("; ")}.${complemento}`
+  return `Hoje você tem ${itens.length} ${itens.length === 1 ? "prioridade" : "prioridades"}. ${partes.join("; ")}.${complemento}`
 }
 
 async function consultaPrioridadesHoje(clientes) {
@@ -487,6 +498,7 @@ async function consultaPrioridadesHoje(clientes) {
   const nomes = nomesPermitidos(ativos)
   const ids = new Set(ativos.map((item) => Number(item.id)))
   const clientesPorId = new Map(ativos.map((item) => [Number(item.id), nomeCliente(item)]))
+  const clientesPorNome = new Map(ativos.map((item) => [normalizar(nomeCliente(item)), item]))
   const [fiscais, financeiros, documentos, solicitacoes, certificados, procuracoes] = await Promise.all([
     Fiscal.findAll({ limit: 1200 }),
     Financeiro.findAll({ limit: 1200 }),
@@ -497,16 +509,21 @@ async function consultaPrioridadesHoje(clientes) {
   ])
 
   const prioridades = []
-  const adicionar = ({ prioridade, cliente, titulo, detalhe, status, data = null, pagina, referenciaId = null, modulo }) => {
+  const adicionar = ({ prioridade, cliente, clienteId = null, titulo, detalhe, status, data = null, pagina, referenciaId = null, modulo, valor = null }) => {
     prioridades.push({
       id: `${modulo}-${referenciaId || prioridades.length + 1}`,
       referenciaId,
       cliente,
+      clienteId: clienteId || clientesPorNome.get(normalizar(cliente))?.id || null,
       titulo,
       detalhe,
       status,
       data,
       dataFormatada: data ? formatarData(data) : "Sem data definida",
+      valor: valor === null || valor === undefined ? null : numeroMoeda(valor),
+      valorFormatado: valor === null || valor === undefined || numeroMoeda(valor) <= 0
+        ? ""
+        : formatarMoeda(numeroMoeda(valor)),
       prioridade,
       modulo,
       paginaSugerida: pagina,
@@ -519,12 +536,17 @@ async function consultaPrioridadesHoje(clientes) {
       const dias = diasAte(item.vencimento)
       if (dias === null || dias > 7) return
       const titulo = item.obrigacao || "Obrigação fiscal"
+      const valor = numeroMoeda(item.valor)
+      const detalhe = [
+        `Competência ${item.competencia || "não informada"}`,
+        valor > 0 ? formatarMoeda(valor) : "",
+      ].filter(Boolean).join(" • ")
       if (dias < 0) {
-        adicionar({ prioridade: 110 + Math.min(Math.abs(dias) * 2, 20), cliente: item.cliente, titulo, detalhe: `Competência ${item.competencia || "não informada"}`, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal" })
+        adicionar({ prioridade: 110 + Math.min(Math.abs(dias) * 2, 20), cliente: item.cliente, titulo, detalhe, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
       } else if (dias === 0) {
-        adicionar({ prioridade: 105, cliente: item.cliente, titulo, detalhe: `Competência ${item.competencia || "não informada"}`, status: "Vence hoje", data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal" })
+        adicionar({ prioridade: 105, cliente: item.cliente, titulo, detalhe, status: "Vence hoje", data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
       } else {
-        adicionar({ prioridade: 88 - dias, cliente: item.cliente, titulo, detalhe: `Competência ${item.competencia || "não informada"}`, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal" })
+        adicionar({ prioridade: 88 - dias, cliente: item.cliente, titulo, detalhe, status: textoPrazo(dias), data: item.vencimento, pagina: "Fiscal", referenciaId: item.id, modulo: "fiscal", valor })
       }
     })
 
@@ -535,7 +557,19 @@ async function consultaPrioridadesHoje(clientes) {
       if (dias === null || dias > 3) return
       const titulo = item.descricao || item.tipo || "Lançamento financeiro"
       const prioridade = dias < 0 ? 100 + Math.min(Math.abs(dias), 12) : dias === 0 ? 92 : 78 - dias
-      adicionar({ prioridade, cliente: item.cliente, titulo, detalhe: `${item.tipo || "Financeiro"} • ${formatarMoeda(numeroMoeda(item.valor))}`, status: textoPrazo(dias), data: item.vencimento, pagina: "Financeiro", referenciaId: item.id, modulo: "financeiro" })
+      adicionar({
+        prioridade,
+        cliente: item.cliente,
+        clienteId: item.clienteId,
+        titulo,
+        detalhe: `${item.origem || item.tipo || "Financeiro"} • ${formatarMoeda(numeroMoeda(item.valor))}`,
+        status: textoPrazo(dias),
+        data: item.vencimento,
+        pagina: item.origem === "Serviço do Cliente" ? "Clientes" : "Financeiro",
+        referenciaId: item.id,
+        modulo: "financeiro",
+        valor: item.valor,
+      })
     })
 
   documentos

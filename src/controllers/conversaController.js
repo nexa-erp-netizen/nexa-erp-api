@@ -154,6 +154,47 @@ function normalizar(valor) {
     .trim()
 }
 
+function pedidoResumoOperacionalDoDia(valor) {
+  const texto = normalizar(valor)
+  if (!texto) return false
+
+  const abriuRelatoriosExplicitamente = /(^|\s)(abra|abre|abrir|acesse|acessar|entre|entrar|va para|vai para|me leve para|navegue para)\s+(?:a\s+)?(?:pagina|tela|area|secao|modulo)?\s*(?:de\s+)?relatorios?\b/.test(texto)
+  if (abriuRelatoriosExplicitamente) return false
+
+  return /(?:^|\s)(?:me (?:de|dê|passe|mostre|fale)|faca|faça|quero|preciso de)?\s*(?:um\s+)?(?:relatorio|resumo|panorama)\s+(?:operacional\s+)?(?:de|do|para|pra)\s+(?:hoje|dia)\b/.test(texto)
+    || /(?:^|\s)(?:relatorio|resumo)\s+de\s+hoje\b/.test(texto)
+    || /(?:^|\s)o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje\b/.test(texto)
+}
+
+function corrigirTranscricaoPeloContexto({ mensagem, historico = [], origem = "texto" }) {
+  const textoOriginal = String(mensagem || "").trim()
+  if (!textoOriginal || normalizar(origem) !== "voz") {
+    return { texto: textoOriginal, alterada: false, substituicoes: [] }
+  }
+
+  const contextoRecente = limparHistorico(historico)
+    .slice(-8)
+    .map((item) => normalizar(item.texto))
+    .join(" ")
+  const atual = normalizar(textoOriginal)
+  const assuntoContador = /(contador|contadora|contabilidade|profissao contabil|mei)/.test(contextoRecente)
+  const continuacaoSobreEmpresa = /(tipo de empresa|empresa.*abrir|pode abrir|qual empresa|natureza juridica)/.test(atual)
+
+  if (assuntoContador && continuacaoSobreEmpresa && /\bcomputador(?:a|es)?\b/i.test(textoOriginal)) {
+    const corrigido = textoOriginal.replace(/\bcomputador(?:a|es)?\b/gi, (termo) => {
+      if (/a$/i.test(termo)) return "contadora"
+      return "contador"
+    })
+    return {
+      texto: corrigido,
+      alterada: corrigido !== textoOriginal,
+      substituicoes: [{ termoOuvido: "computador", termoCorreto: "contador", origem: "contexto" }],
+    }
+  }
+
+  return { texto: textoOriginal, alterada: false, substituicoes: [] }
+}
+
 function distanciaLevenshtein(a, b) {
   const origem = normalizar(a)
   const destino = normalizar(b)
@@ -277,6 +318,7 @@ function pareceComandoNavegacao(texto) {
 }
 
 function perguntaLivreSemDestinoDeTela(texto) {
+  if (pedidoResumoOperacionalDoDia(texto)) return true
   if (configuracaoPaginaNoTexto(texto) || configuracaoGrupoNoTexto(texto)) return false
   return /^(por que|porque|qual|quais|como|o que|oque|quem|quando|quanto|quantos|quantas|posso|pode|devo|preciso|sera que)\b/.test(texto)
 }
@@ -752,6 +794,8 @@ REGRAS IMPORTANTES:
 - "quero ver a movimentação do Maurício" => página "Movimentos Clientes" com Maurício.
 - "entre em ferramentas" => abrir o grupo "Ferramentas".
 - "abra o dashboard" => página "Dashboard".
+- "faça um relatório para hoje", "resumo do dia" e "o que tenho para fazer hoje" são CONSULTAS OPERACIONAIS, portanto classifique como conversar. Não abra Relatórios.
+- Só navegue para "Relatórios" quando houver pedido explícito de abrir/acessar a página, tela, área ou módulo de relatórios.
 - "como está a Multicópias?" é conversa, não navegação.
 - Quando disser "dele", "dela", "desse cliente", "agora no fiscal" ou algo equivalente, use o cliente atual se existir.
 - Se o pedido for claramente de navegação, não faça pergunta desnecessária. Só marque ambíguo quando houver realmente dois clientes possíveis ou faltar um cliente indispensável.
@@ -851,6 +895,7 @@ Retorne SOMENTE JSON válido, sem markdown:
 }
 
 async function detectarComandoNavegacao(parametros) {
+  if (pedidoResumoOperacionalDoDia(parametros?.mensagem)) return null
   const deterministico = await detectarComandoNavegacaoDeterministico(parametros)
   if (deterministico) return deterministico
 
@@ -1100,8 +1145,24 @@ const PERGUNTA_FATUAL_OU_NORMATIVA = /(qual|quais|quanto|quantos|codigo|categori
 const INDICIO_ATUALIDADE = /(hoje|agora|atual|atualmente|vigente|este ano|neste ano|202[0-9]|ultima atualizacao|mais recente|novo valor|nova regra)/
 const CONTINUACAO_CURTA = /^(e |e o |e a |qual |quais |quanto |quantos |esse |essa |isso |como |por que |porque )/
 
+function perguntaProfissionalConceitual(mensagem, historico = []) {
+  const textoAtual = normalizar(mensagem)
+  const historicoRecente = limparHistorico(historico)
+    .slice(-6)
+    .map((item) => normalizar(item.texto))
+    .join(" ")
+  const contexto = `${historicoRecente} ${textoAtual}`
+
+  const temaProfissional = TEMA_PROFISSIONAL_ATUALIZAVEL.test(contexto)
+  const pedidoExplicativo = /^(?:e\s+)?(por que|porque|como|o que significa|oque significa|qual tipo|quais tipos|que tipo|qual empresa|quais empresas|qual natureza juridica|quais naturezas juridicas)\b/.test(textoAtual)
+  const dependeDeNumeroOuRegraAtual = /(codigo|aliquota|valor|limite|prazo|vencimento|tabela|vigente|atual|atualmente|este ano|neste ano|202[0-9]|nova regra|novo valor)/.test(textoAtual)
+
+  return temaProfissional && pedidoExplicativo && !dependeDeNumeroOuRegraAtual
+}
+
 function perguntaExigePesquisaWeb(mensagem, historico = []) {
   if (!PESQUISA_WEB_ATIVA || mensagemEhConversaCasual(mensagem)) return false
+  if (perguntaProfissionalConceitual(mensagem, historico)) return false
 
   const textoAtual = normalizar(mensagem)
   const saudacaoSemAssuntoProfissional = /^(oi|ola|bom dia|boa tarde|boa noite)(\s|,|!|$)/.test(textoAtual)
@@ -1331,6 +1392,8 @@ Não acrescente uma aula, lista ou alerta que não foi solicitado, mas também n
     : `Use o CONTEXTO NEXA quando ele for relevante.
 Não invente clientes, datas, valores, pendências, serviços ou ações.
 Trate os dados recebidos como a fonte oficial do ERP.
+Em perguntas contábeis ou empresariais conceituais, explique a regra geral com naturalidade. Não use a resposta genérica “não consegui confirmar” só porque a pergunta não veio do ERP.
+Quando a resposta depender de valor, prazo, código ou norma vigente, deixe claro que esses pontos precisam de validação atual antes de uma decisão definitiva.
 Quando houver memórias, use-as discretamente.
 Você pode orientar, resumir, comparar e preparar textos, mas nunca diga que alterou, excluiu, enviou ou concluiu algo que não foi realmente executado.`
 
@@ -1705,9 +1768,12 @@ async function naturalizarResultadoSistema({
 
   const historicoRecente = limparHistorico(historico).slice(-10)
   const contextoConfirmado = compactarResultadoParaConversa(resultado)
+  const consultaPrioridades = contextoConfirmado?.consulta?.tipo === "prioridades-hoje"
   const instrucaoAtividade = atividade === "navegacao"
     ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
-    : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
+    : consultaPrioridades
+      ? "Os DADOS CONFIRMADOS vieram diretamente do ERP. Entregue um resumo operacional do dia: cite, em ordem de urgência, o cliente, a pendência, o valor quando existir e a data de vencimento. Recomende por onde começar. Não mande o usuário para a tela de Relatórios e não transforme a resposta em uma contagem vaga."
+      : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
 
   const mensagens = [
     {
@@ -1851,13 +1917,13 @@ async function contexto(req, res) {
       clienteId,
       texto: mensagemOriginal,
     })
-    const mensagem = vocabulario.texto
+    let mensagem = vocabulario.texto
     const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
     const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
       ? req.body.tipoContexto
       : (clienteId ? "cliente" : "geral")
     const interessadoNome = String(req.body?.interessadoNome || "").trim()
-    const respostaCurta = !perguntaPedeDetalhes(mensagem)
+    let respostaCurta = !perguntaPedeDetalhes(mensagem)
 
     if (!mensagem) {
       return res.status(400).json({ message: "Escreva uma pergunta para a Nexa" })
@@ -1867,6 +1933,13 @@ async function contexto(req, res) {
     const nomeUsuario = usuarioBanco?.nome || "Administrador"
     const persistido = conversaId ? await historicoPersistente(conversaId, req.usuario.id) : []
     const historico = persistido.length ? persistido : limparHistorico(req.body?.historico)
+    const correcaoContextual = corrigirTranscricaoPeloContexto({
+      mensagem,
+      historico,
+      origem: req.body?.origem || "texto",
+    })
+    mensagem = correcaoContextual.texto
+    respostaCurta = !perguntaPedeDetalhes(mensagem)
     const memorias = await obterMemoriasRelevantes({
       usuarioId: req.usuario.id,
       clienteId,
@@ -1905,10 +1978,14 @@ async function contexto(req, res) {
       interessadoNome,
       respostaCurta,
       vocabularioAplicado: vocabulario.alterada,
-      substituicoesVocabulario: vocabulario.substituicoes,
+      correcaoContextualAplicada: correcaoContextual.alterada,
+      substituicoesVocabulario: [
+        ...(vocabulario.substituicoes || []),
+        ...(correcaoContextual.substituicoes || []),
+      ],
       conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
-      transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
-      transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
+      transcricaoOriginal: (vocabulario.alterada || correcaoContextual.alterada) ? mensagemOriginal : undefined,
+      transcricaoCorrigida: (vocabulario.alterada || correcaoContextual.alterada) ? mensagem : undefined,
       geradoEm: new Date().toISOString(),
     })
   } catch (error) {
@@ -1930,7 +2007,7 @@ async function conversar(req, res) {
       clienteId,
       texto: mensagemOriginal,
     })
-    const mensagem = vocabulario.texto
+    let mensagem = vocabulario.texto
     const conversaId = req.body?.conversaId ? Number(req.body.conversaId) : null
     const tipoContexto = ["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)
       ? req.body.tipoContexto
@@ -1962,17 +2039,28 @@ async function conversar(req, res) {
 
     const historicoBanco = await historicoPersistente(conversa.id, req.usuario.id)
     const historico = historicoBanco.length ? historicoBanco : limparHistorico(req.body?.historico)
+    const correcaoContextual = corrigirTranscricaoPeloContexto({ mensagem, historico, origem })
+    mensagem = correcaoContextual.texto
+    const mensagemAlterada = Boolean(vocabulario.alterada || correcaoContextual.alterada)
+    const substituicoesAplicadas = [
+      ...(vocabulario.substituicoes || []),
+      ...(correcaoContextual.substituicoes || []),
+    ]
 
     await salvarMensagemConversa({
       conversa,
       usuarioId: req.usuario.id,
       autor: "usuario",
-      texto: mensagemOriginal,
+      texto: mensagemAlterada ? mensagem : mensagemOriginal,
       dados: {
         origem,
         paginaAtual: paginaAtual || null,
-        ...(vocabulario.alterada
-          ? { transcricaoCorrigida: mensagem, substituicoesVocabulario: vocabulario.substituicoes }
+        ...(mensagemAlterada
+          ? {
+            transcricaoOriginal: mensagemOriginal,
+            transcricaoCorrigida: mensagem,
+            substituicoesVocabulario: substituicoesAplicadas,
+          }
           : {}),
       },
     })
@@ -2213,11 +2301,12 @@ async function conversar(req, res) {
       memoriaAtiva: true,
       memoriasUsadas: memorias.length,
       vocabularioAplicado: vocabulario.alterada,
-      substituicoesVocabulario: vocabulario.substituicoes,
+      correcaoContextualAplicada: correcaoContextual.alterada,
+      substituicoesVocabulario: substituicoesAplicadas,
       conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
       atividade: resultado.pesquisaWeb ? "pesquisa" : "conversa",
-      transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
-      transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
+      transcricaoOriginal: mensagemAlterada ? mensagemOriginal : undefined,
+      transcricaoCorrigida: mensagemAlterada ? mensagem : undefined,
       aviso: resultado.pesquisaWeb
         ? (resultado.confirmado
           ? "Resposta confirmada por pesquisa na internet."
