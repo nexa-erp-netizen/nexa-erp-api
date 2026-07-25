@@ -183,8 +183,8 @@ function consultaSolicitada(texto, cliente = null, clienteId = null) {
   const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
 
   const referenciaSistema = /(na nexa|no sistema|cadastrad|registrad|lancad|meus? clientes?|minhas? pendencias?|do escritorio|da carteira|cliente selecionado|desse cliente|deste cliente)/.test(texto)
-  const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao)/.test(texto)
-  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|moviment|agenda|assistente do dia|venciment|das)/.test(texto)
+  const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao|devendo|\bdeve\b|quanto deve)/.test(texto)
+  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das)/.test(texto)
 
   const fraseEscritorio = /(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)
   const frasePrioridadesHoje = pedidoPrioridadesHoje(texto)
@@ -211,7 +211,7 @@ function identificarIntencao(texto, cliente) {
   if (/certificad/.test(texto)) return "certificados"
   if (/procurac/.test(texto)) return "procuracoes"
   if (/(document|arquivo|anexo)/.test(texto)) return "documentos"
-  if (/(financeir|honor|cobranc|receber|pagar|inadimpl|valor pendente)/.test(texto)) return "financeiro"
+  if (/(financeir|honor|cobranc|receber|pagar|inadimpl|valor pendente|pagament|devendo|\bdeve\b|quanto deve|o que deve|ainda deve)/.test(texto)) return "financeiro"
   if (/(fiscal|obrig|pendenc|das|imposto|tribut|vencimento)/.test(texto)) return "fiscal"
   if (/(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes)/.test(texto)) return "clientes"
   if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cnpj)/.test(texto)) return "cliente"
@@ -294,7 +294,7 @@ async function consultaFiscal(clientes, cliente, texto) {
 async function consultaFinanceiro(clientes, cliente, texto) {
   let itens = await Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 1000 })
   itens = filtrarEscopo(itens, clientes, cliente).filter((item) => !encerrado(item.status))
-  if (/(receber|honor|cobranc|inadimpl)/.test(texto)) itens = itens.filter((item) => !/(despesa|pagar|saida)/.test(normalizar(item.tipo)))
+  if (/(receber|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|ainda deve)/.test(texto)) itens = itens.filter((item) => !/(despesa|pagar|saida)/.test(normalizar(item.tipo)))
   if (/(pagar|despesa|contas a pagar)/.test(texto)) itens = itens.filter((item) => /(despesa|pagar|saida)/.test(normalizar(item.tipo)))
   const filtro = periodo(texto)
   itens = ordenarData(filtrarPeriodo(itens, filtro, "vencimento"), "vencimento")

@@ -5,6 +5,7 @@ const Financeiro = require("../models/Financeiro")
 const DocumentoDigital = require("../models/DocumentoDigital")
 const CertificadoDigital = require("../models/CertificadoDigital")
 const ProcuracaoEcac = require("../models/ProcuracaoEcac")
+const ServicoAvulso = require("../models/ServicoAvulso")
 const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
@@ -31,6 +32,7 @@ const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("
   : "groq/compound"
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
+const NEXA_CONVERSACIONAL_V2_ATIVA = String(process.env.NEXA_CONVERSACIONAL_V2 || "true").toLowerCase() !== "false"
 
 
 const PAGINAS_NAVEGACAO = [
@@ -710,7 +712,7 @@ function resolverClienteDaInterpretacao(clientes, resultado, clienteAtual) {
   return null
 }
 
-async function detectarComandoNavegacaoSemantico({ mensagem, clienteId, usuario, paginaAtual = "" }) {
+async function detectarComandoNavegacaoSemantico({ mensagem, clienteId, usuario, paginaAtual = "", historico = [] }) {
   const apiKey = process.env.GROQ_API_KEY
   if (!apiKey) return null
 
@@ -756,6 +758,7 @@ REGRAS IMPORTANTES:
 
 PÁGINA ATUAL: ${paginaAtual || "não informada"}
 CLIENTE ATUAL: ${clienteAtual ? `${clienteAtual.id} - ${nomeCliente(clienteAtual)}` : "nenhum"}
+HISTÓRICO RECENTE: ${JSON.stringify(limparHistorico(historico).slice(-8))}
 PÁGINAS DISPONÍVEIS: ${JSON.stringify(catalogoPaginas)}
 GRUPOS DISPONÍVEIS: ${JSON.stringify(gruposPermitidos)}
 CLIENTES CADASTRADOS: ${JSON.stringify(catalogoClientes)}
@@ -851,7 +854,6 @@ async function detectarComandoNavegacao(parametros) {
   const deterministico = await detectarComandoNavegacaoDeterministico(parametros)
   if (deterministico) return deterministico
 
-  if (normalizar(parametros?.origem) !== "voz") return null
   const texto = normalizar(parametros?.mensagem)
   if (perguntaLivreSemDestinoDeTela(texto)) return null
   return detectarComandoNavegacaoSemantico(parametros)
@@ -912,6 +914,48 @@ function resumirFinanceiro(item) {
   }
 }
 
+function numeroMoedaSeguro(valor) {
+  if (typeof valor === "number") return Number.isFinite(valor) ? valor : 0
+  let texto = String(valor ?? "").replace(/R\$/gi, "").replace(/\s/g, "")
+  if (!texto) return 0
+  if (texto.includes(",")) texto = texto.replace(/\./g, "").replace(",", ".")
+  const numero = Number(texto)
+  return Number.isFinite(numero) ? numero : 0
+}
+
+function formatarMoedaBrasil(valor) {
+  return numeroMoedaSeguro(valor).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  })
+}
+
+function resumirServicoCobranca(item) {
+  const valorTotal = numeroMoedaSeguro(item.valorTotal)
+  const dias = diasAte(item.vencimento)
+  const status = item.status || "Pendente"
+  const statusNormalizado = normalizar(status)
+  const emAtraso = !["recebido", "cancelado"].includes(statusNormalizado) && dias !== null && dias < 0
+
+  return {
+    id: item.id,
+    clienteId: item.clienteId,
+    cliente: item.cliente,
+    descricao: item.descricao,
+    quantidade: Number(item.quantidade || 1),
+    valorUnitario: formatarMoedaBrasil(item.valorUnitario),
+    desconto: formatarMoedaBrasil(item.desconto),
+    valorTotal: formatarMoedaBrasil(valorTotal),
+    valorTotalNumero: valorTotal,
+    data: item.data,
+    vencimento: item.vencimento,
+    dataRecebimento: item.dataRecebimento,
+    status: emAtraso ? "Em atraso" : status,
+    diasAteVencimento: dias,
+    formaPagamento: item.formaPagamento || null,
+  }
+}
+
 function resumirDocumento(item) {
   return {
     id: item.id,
@@ -957,12 +1001,13 @@ async function montarContextoCliente(clienteId, usuario) {
   }
 
   const nome = nomeCliente(cliente)
-  const [fiscais, financeiros, documentos, certificados, procuracoes] = await Promise.all([
+  const [fiscais, financeiros, documentos, certificados, procuracoes, servicosCobrancas] = await Promise.all([
     Fiscal.findAll({ where: { cliente: nome }, order: [["createdAt", "DESC"]], limit: 120 }),
     Financeiro.findAll({ where: { cliente: nome, [Op.or]: [{ origem: { [Op.ne]: "Serviço Avulso" } }, { origem: { [Op.is]: null } }] }, order: [["createdAt", "DESC"]], limit: 120 }),
     DocumentoDigital.findAll({ where: { cliente: nome }, order: [["createdAt", "DESC"]], limit: 80 }),
     CertificadoDigital.findAll({ where: { clienteId }, order: [["dataValidade", "DESC"]], limit: 10 }),
     ProcuracaoEcac.findAll({ where: { clienteId }, order: [["dataValidade", "DESC"]], limit: 10 }),
+    ServicoAvulso.findAll({ where: { clienteId }, order: [["data", "DESC"], ["createdAt", "DESC"]], limit: 60 }),
   ])
 
   return {
@@ -982,6 +1027,7 @@ async function montarContextoCliente(clienteId, usuario) {
     },
     obrigacoesFiscais: fiscais.map(resumirObrigacao),
     financeiro: financeiros.map(resumirFinanceiro),
+    servicosCobrancas: servicosCobrancas.map(resumirServicoCobranca),
     documentos: documentos.map(resumirDocumento),
     certificados: certificados.map(resumirCertificado),
     procuracoes: procuracoes.map(resumirProcuracao),
@@ -989,13 +1035,14 @@ async function montarContextoCliente(clienteId, usuario) {
 }
 
 async function montarContextoEscritorio(usuario) {
-  const [clientes, fiscais, financeiros, documentos, certificados, procuracoes] = await Promise.all([
+  const [clientes, fiscais, financeiros, documentos, certificados, procuracoes, servicosCobrancas] = await Promise.all([
     Cliente.findAll({ order: [["nome", "ASC"]] }),
     Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 400 }),
     Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 400 }),
     DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 200 }),
     CertificadoDigital.findAll({ order: [["dataValidade", "ASC"]], limit: 200 }),
     ProcuracaoEcac.findAll({ order: [["dataValidade", "ASC"]], limit: 200 }),
+    ServicoAvulso.findAll({ order: [["vencimento", "ASC"], ["createdAt", "DESC"]], limit: 300 }),
   ])
 
   let clientesPermitidos = clientes.filter(clienteOperacional)
@@ -1005,6 +1052,10 @@ async function montarContextoEscritorio(usuario) {
 
   const nomesPermitidos = new Set(clientesPermitidos.map(nomeCliente))
   const idsPermitidos = new Set(clientesPermitidos.map((c) => Number(c.id)))
+  const clientesAcessiveis = usuario?.perfil === "Cliente" && usuario?.clienteVinculado
+    ? clientes.filter((c) => nomeCliente(c) === usuario.clienteVinculado)
+    : clientes
+  const idsClientesAcessiveis = new Set(clientesAcessiveis.map((c) => Number(c.id)))
 
   return {
     escopo: "escritorio",
@@ -1022,6 +1073,9 @@ async function montarContextoEscritorio(usuario) {
     financeiroPendente: financeiros
       .filter((i) => nomesPermitidos.has(i.cliente) && !encerrado(i.status))
       .map(resumirFinanceiro),
+    servicosCobrancas: servicosCobrancas
+      .filter((i) => idsClientesAcessiveis.has(Number(i.clienteId)) && !["cancelado"].includes(normalizar(i.status)))
+      .map(resumirServicoCobranca),
     documentosRecentes: documentos
       .filter((i) => nomesPermitidos.has(i.cliente))
       .slice(0, 80)
@@ -1075,7 +1129,7 @@ function pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico = []) {
 function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
   if (clienteId || tipoContexto === "cliente") return true
   const texto = normalizar(mensagem)
-  return /(meus? clientes?|cliente cadastrado|escritorio|nexa|pendenc|venciment|financeir|honorario|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
+  return /(meus? clientes?|cliente cadastrado|escritorio|nexa|pendenc|venciment|financeir|honorario|cobranc|pagament|devendo|quanto deve|servicos? e cobrancas?|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
 }
 
 function respostaObjetivaAntesDaPesquisa(mensagem) {
@@ -1228,6 +1282,7 @@ function selecionarContextoParaPergunta(contexto, mensagem) {
       cliente: contexto.cliente,
       ...(querFiscal || perguntaGeral ? { obrigacoesFiscais: (contexto.obrigacoesFiscais || []).slice(0, 18) } : {}),
       ...(querFinanceiro || perguntaGeral ? { financeiro: (contexto.financeiro || []).slice(0, 18) } : {}),
+      ...(querFinanceiro || perguntaGeral ? { servicosCobrancas: (contexto.servicosCobrancas || []).slice(0, 24) } : {}),
       ...(querDocumento ? { documentos: (contexto.documentos || []).slice(0, 12) } : {}),
       ...(querDocumento ? { certificados: (contexto.certificados || []).slice(0, 8) } : {}),
       ...(querDocumento ? { procuracoes: (contexto.procuracoes || []).slice(0, 8) } : {}),
@@ -1239,6 +1294,7 @@ function selecionarContextoParaPergunta(contexto, mensagem) {
     ...(querCliente || perguntaGeral ? { clientesAtivos: (contexto.clientesAtivos || []).slice(0, 30) } : {}),
     ...(querFiscal || perguntaGeral ? { obrigacoesFiscais: (contexto.obrigacoesFiscais || []).slice(0, 24) } : {}),
     ...(querFinanceiro || perguntaGeral ? { financeiroPendente: (contexto.financeiroPendente || []).slice(0, 24) } : {}),
+    ...(querFinanceiro || querCliente || perguntaGeral ? { servicosCobrancas: (contexto.servicosCobrancas || []).slice(0, 30) } : {}),
     ...(querDocumento ? { documentosRecentes: (contexto.documentosRecentes || []).slice(0, 12) } : {}),
     ...(querDocumento ? { certificados: (contexto.certificados || []).slice(0, 12) } : {}),
     ...(querDocumento ? { procuracoes: (contexto.procuracoes || []).slice(0, 12) } : {}),
@@ -1257,26 +1313,26 @@ function limparHistorico(historico) {
 }
 
 function instrucoesNexa(nomeUsuario, { conversaCasual = false, respostaCurta = true } = {}) {
-  const personalidade = `Você é a Nexa, assistente e parceira de um escritório contábil brasileiro.
-Converse em português do Brasil com naturalidade, espontaneidade, segurança e profissionalismo.
+  const personalidade = `Você é a Nexa, colega digital de um escritório contábil brasileiro.
+Converse em português do Brasil como uma integrante experiente da equipe: natural, direta, atenta ao contexto e sem linguagem de robô.
 Use o nome do usuário somente quando soar natural: ${nomeUsuario}.
-Evite bordões, respostas engessadas, frases repetidas e apresentações desnecessárias.
-Você pode conversar sobre clientes cadastrados, novos interessados e dúvidas gerais, sem exigir que exista um cliente selecionado.`
+Não repita a pergunta, não faça apresentações e não use confirmações mecânicas.
+Você pode ter leve descontração e bom humor quando o assunto permitir, mas nunca brinque com valores, prazos, obrigações, riscos ou decisões técnicas.
+Quando a conversa continuar um assunto anterior, responda ao contexto sem obrigar o usuário a repetir nomes ou detalhes.`
 
   const regraDeConcisao = respostaCurta
-    ? `REGRA PRINCIPAL: responda somente o que foi perguntado, da forma mais curta possível.
-Para pergunta objetiva, responda com poucas palavras ou uma única frase.
-Exemplo: “Qual a categoria do código 1163 do INSS?” Resposta: “Contribuinte individual.”
-Não acrescente alíquota, exceção, alerta, fundamento, recomendação ou explicação sem o usuário pedir.
-Deixe pontos, recomendacao e fundamentos vazios em respostas objetivas.`
-    : `O usuário pediu aprofundamento. Explique com clareza, mas sem enrolação. Organize apenas quando isso realmente ajudar.`
+    ? `Responda normalmente em uma a três frases curtas.
+Perguntas muito objetivas podem receber uma única frase.
+Não acrescente uma aula, lista ou alerta que não foi solicitado, mas também não responda de forma seca ou telegráfica.`
+    : `O usuário pediu explicação. Aprofunde com clareza, mantendo uma conversa fluida e sem enrolação.`
 
   const regrasDoModo = conversaCasual
-    ? `Esta é uma conversa casual. Responda livre e naturalmente, sem transformar saudação em relatório e sem usar resposta pré-programada.`
-    : `Use o CONTEXTO NEXA quando ele for relevante. Não invente clientes, datas, valores, pendências ou informações.
-Em consulta livre, responda pela sua capacidade de orientação geral. Se não tiver segurança suficiente, diga apenas que precisa confirmar a informação.
-Quando houver memórias, use-as discretamente e sem anunciar que está consultando memória.
-Você pode orientar e preparar respostas, mas nunca afirme que alterou, excluiu, enviou ou concluiu dados.`
+    ? `Esta é uma conversa casual. Responda com espontaneidade e cordialidade, sem transformar a conversa em relatório.`
+    : `Use o CONTEXTO NEXA quando ele for relevante.
+Não invente clientes, datas, valores, pendências, serviços ou ações.
+Trate os dados recebidos como a fonte oficial do ERP.
+Quando houver memórias, use-as discretamente.
+Você pode orientar, resumir, comparar e preparar textos, mas nunca diga que alterou, excluiu, enviou ou concluiu algo que não foi realmente executado.`
 
   return `${personalidade}
 ${regraDeConcisao}
@@ -1495,6 +1551,14 @@ async function gerarRespostaComPesquisa({ mensagem, nomeUsuario, contexto, histo
   const regraResposta = respostaCurta
     ? "Responda somente o que foi perguntado, em uma frase curta. Não dê explicações adicionais."
     : "Explique com clareza, mas sem informações desnecessárias."
+  const ehContinuacao = CONTINUACAO_CURTA.test(normalizar(mensagem))
+  const contextoRecente = ehContinuacao
+    ? limparHistorico(historico)
+      .slice(-4)
+      .map((item) => `${item.autor === "usuario" ? "Usuário" : "Nexa"}: ${item.texto}`)
+      .join("\n")
+      .slice(0, 2400)
+    : ""
 
   // Payload mínimo, seguindo o quickstart oficial do Groq Compound.
   // Não envia histórico, dados de clientes, memórias, contexto interno nem opções extras.
@@ -1505,6 +1569,7 @@ Se não encontrar confirmação segura, responda exatamente: Não consegui confi
 Retorne SOMENTE JSON válido, sem markdown e sem links, no formato:
 {"resposta":"texto","pontos":[],"recomendacao":"","fundamentos":[],"confirmado":true}
 
+${contextoRecente ? `Contexto recente da conversa (use apenas para entender pronomes e continuações):\n${contextoRecente}\n` : ""}
 Pergunta: ${pergunta}`
 
   // Para pesquisa web, use apenas sistemas Compound. Modelos comuns não
@@ -1596,10 +1661,135 @@ async function gerarResposta(parametros) {
   return gerarRespostaPadrao(parametros)
 }
 
+function compactarResultadoParaConversa(resultado) {
+  const consulta = resultado?.consulta || null
+  return {
+    respostaBase: String(resultado?.resposta || "").slice(0, 1800),
+    pontos: Array.isArray(resultado?.pontos) ? resultado.pontos.slice(0, 8) : [],
+    recomendacao: String(resultado?.recomendacao || "").slice(0, 600),
+    acao: resultado?.acao || null,
+    consulta: consulta ? {
+      tipo: consulta.tipo,
+      titulo: consulta.titulo,
+      resumo: consulta.resumo,
+      total: consulta.total,
+      valorTotalFormatado: consulta.valorTotalFormatado,
+      cliente: consulta.cliente,
+      itens: Array.isArray(consulta.itens) ? consulta.itens.slice(0, 10) : [],
+    } : null,
+  }
+}
+
+async function naturalizarResultadoSistema({
+  mensagem,
+  nomeUsuario,
+  historico,
+  resultado,
+  origem = "texto",
+  paginaAtual = "",
+  clienteAtual = null,
+  atividade = "consulta",
+}) {
+  const base = {
+    ...resultado,
+    conversacionalV2: true,
+    atividade,
+  }
+
+  if (!NEXA_CONVERSACIONAL_V2_ATIVA || PROVEDOR_PADRAO !== "groq" || !process.env.GROQ_API_KEY) {
+    return {
+      ...base,
+      ...(origem === "voz" ? { fala: resultado?.fala || resultado?.resposta } : {}),
+    }
+  }
+
+  const historicoRecente = limparHistorico(historico).slice(-10)
+  const contextoConfirmado = compactarResultadoParaConversa(resultado)
+  const instrucaoAtividade = atividade === "navegacao"
+    ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
+    : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
+
+  const mensagens = [
+    {
+      role: "system",
+      content: `Você é a Nexa, colega digital do escritório contábil de ${nomeUsuario}.
+Fale como uma colega de equipe: natural, direta, cordial e contextual.
+${instrucaoAtividade}
+Você pode usar humor leve e inteligente quando couber, mas nunca em valores, prazos, obrigações ou riscos.
+Não mencione ferramenta, API, banco de dados, JSON, modelo ou processamento.
+Não invente nada e não altere números, nomes, datas ou status.
+Evite confirmações robóticas como “comando concluído”, “consulta realizada” e “tela aberta com segurança”.
+Responda em uma a três frases. Retorne SOMENTE JSON válido no formato {"resposta":"texto"}.`,
+    },
+    ...historicoRecente.map((item) => ({
+      role: item.autor === "usuario" ? "user" : "assistant",
+      content: item.texto,
+    })),
+    {
+      role: "user",
+      content: `MENSAGEM ATUAL:
+${String(mensagem || "").slice(0, 1000)}
+
+TELA ATUAL:
+${paginaAtual || "não informada"}
+
+CLIENTE ATUAL:
+${JSON.stringify(clienteAtual || null)}
+
+DADOS CONFIRMADOS / ACAO CONFIRMADA:
+${JSON.stringify(contextoConfirmado)}`,
+    },
+  ]
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
+
+  try {
+    const resposta = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: MODELO_PADRAO,
+        messages: mensagens,
+        max_tokens: 420,
+        temperature: 0.68,
+      }),
+    })
+
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) throw new Error(dados?.error?.message || `Groq respondeu com status ${resposta.status}`)
+
+    const interpretado = interpretarJson(extrairTextoGroq(dados))
+    const texto = String(interpretado.resposta || "").trim()
+    if (!texto) return base
+
+    return {
+      ...base,
+      resposta: texto,
+      ...(origem === "voz" ? { fala: texto } : {}),
+      modo: `${resultado?.modo || "sistema"}-conversacional-v2`,
+      modelo: `${MODELO_PADRAO} + Nexa Conversacional v2`,
+    }
+  } catch (error) {
+    console.warn("NATURALIZACAO CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
+    return {
+      ...base,
+      ...(origem === "voz" ? { fala: resultado?.fala || resultado?.resposta } : {}),
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 async function status(req, res) {
   const apiKey = process.env.GROQ_API_KEY
   const base = {
     provedorPrincipal: PROVEDOR_PADRAO,
+    conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
     groq: {
       configurada: Boolean(apiKey),
       online: false,
@@ -1716,6 +1906,7 @@ async function contexto(req, res) {
       respostaCurta,
       vocabularioAplicado: vocabulario.alterada,
       substituicoesVocabulario: vocabulario.substituicoes,
+      conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
       transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
       transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
       geradoEm: new Date().toISOString(),
@@ -1914,17 +2105,30 @@ async function conversar(req, res) {
       usuario: usuarioCompleto,
       origem,
       paginaAtual,
+      historico,
     })
 
     if (comandoNavegacao) {
+      const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
+      const respostaNavegacao = await naturalizarResultadoSistema({
+        mensagem,
+        nomeUsuario,
+        historico,
+        resultado: comandoNavegacao,
+        origem,
+        paginaAtual,
+        clienteAtual: clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null,
+        atividade: "navegacao",
+      })
+
       await salvarMensagemConversa({
         conversa,
         usuarioId: req.usuario.id,
         autor: "nexa",
-        texto: comandoNavegacao.resposta,
-        dados: comandoNavegacao,
+        texto: respostaNavegacao.resposta,
+        dados: respostaNavegacao,
       })
-      return res.json(anexarMetadadosConversa(comandoNavegacao, conversa))
+      return res.json(anexarMetadadosConversa(respostaNavegacao, conversa))
     }
 
     if (conversa.tipoContexto !== "interessado") {
@@ -1935,14 +2139,26 @@ async function conversar(req, res) {
       })
 
       if (consultaInteligente) {
+        const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
+        const respostaConsultaNatural = await naturalizarResultadoSistema({
+          mensagem,
+          nomeUsuario,
+          historico,
+          resultado: consultaInteligente,
+          origem,
+          paginaAtual,
+          clienteAtual: clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null,
+          atividade: "consulta",
+        })
+
         await salvarMensagemConversa({
           conversa,
           usuarioId: req.usuario.id,
           autor: "nexa",
-          texto: consultaInteligente.resposta,
-          dados: consultaInteligente,
+          texto: respostaConsultaNatural.resposta,
+          dados: respostaConsultaNatural,
         })
-        return res.json(anexarMetadadosConversa(consultaInteligente, conversa))
+        return res.json(anexarMetadadosConversa(respostaConsultaNatural, conversa))
       }
     }
 
@@ -1998,6 +2214,8 @@ async function conversar(req, res) {
       memoriasUsadas: memorias.length,
       vocabularioAplicado: vocabulario.alterada,
       substituicoesVocabulario: vocabulario.substituicoes,
+      conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
+      atividade: resultado.pesquisaWeb ? "pesquisa" : "conversa",
       transcricaoOriginal: vocabulario.alterada ? mensagemOriginal : undefined,
       transcricaoCorrigida: vocabulario.alterada ? mensagem : undefined,
       aviso: resultado.pesquisaWeb
