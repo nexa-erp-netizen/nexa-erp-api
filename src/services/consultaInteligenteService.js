@@ -210,8 +210,17 @@ function localizarCliente(clientes, texto, clienteId) {
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
 
-  if (candidatos.length > 1 && candidatos[0].score === candidatos[1].score) return { ambiguo: true, cliente: null }
-  return { ambiguo: false, cliente: candidatos[0]?.cliente || atual || null }
+  if (candidatos.length > 1 && candidatos[0].score === candidatos[1].score) {
+    return { ambiguo: true, cliente: null, explicito: true, atual }
+  }
+
+  const encontrado = candidatos[0]?.cliente || null
+  return {
+    ambiguo: false,
+    cliente: encontrado || atual || null,
+    explicito: Boolean(encontrado),
+    atual,
+  }
 }
 
 function pedidoPrioridadesHoje(texto) {
@@ -927,11 +936,9 @@ function fraseListaPrioridades(itens, novidades = []) {
     return "Hoje não encontrei pendências abertas nem novidades registradas no escritório."
   }
 
-  const principais = itens.slice(0, 6).map((item) => {
-    const valor = item.valor ? ` no valor de ${item.valor}` : ""
-    const prazo = item.status ? `, ${String(item.status).toLowerCase()}` : ""
-    return `${item.cliente} tem ${item.titulo}${valor}${prazo}`
-  })
+  const grupos = agruparPendenciasPorCliente(itens)
+  const principais = grupos.slice(0, 20).map((grupo) => `${grupo.cliente}: ${grupo.detalhe}`)
+  const gruposExtras = Math.max(0, grupos.length - principais.length)
   const recebimentos = novidades.filter((item) => item.tipoNovidade === "pagamento")
     .slice(0, 4)
     .map((item) => `${item.cliente} pagou ${item.valor || "um valor"} referente a ${item.titulo}`)
@@ -940,7 +947,7 @@ function fraseListaPrioridades(itens, novidades = []) {
     .map((item) => `${item.cliente} teve ${item.titulo} concluído`)
 
   const blocos = []
-  if (principais.length) blocos.push(`Prioridades abertas: ${principais.join("; ")}.`)
+  if (principais.length) blocos.push(`Prioridades abertas: ${principais.join("; ")}${gruposExtras ? `; e mais ${gruposExtras} cliente${gruposExtras === 1 ? "" : "s"}` : ""}.`)
   if (recebimentos.length) blocos.push(`Pagamentos recebidos hoje: ${recebimentos.join("; ")}.`)
   if (resolvidas.length) blocos.push(`Pendências resolvidas hoje: ${resolvidas.join("; ")}.`)
   if (itens.length) blocos.push(`A prioridade principal é ${itens[0].cliente}: ${itens[0].titulo}, porque ${String(itens[0].status || "exige atenção").toLowerCase()}.`)
@@ -1187,13 +1194,32 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
 
   const intencao = intencaoForcada || identificarIntencao(texto, localizado.cliente)
   if (!intencao) return null
+
+  // Consultas amplas devem olhar o escritório inteiro, mesmo quando uma Central
+  // de Cliente está aberta. O cliente atual só restringe a busca quando o nome
+  // foi citado na frase ou quando há referência explícita como “desse cliente”.
+  const referenciaAoClienteAtual = /(desse cliente|deste cliente|esse cliente|este cliente|dele|dela|dessa empresa|desta empresa|essa empresa|esta empresa)/.test(texto)
+  const intencoesGlobais = new Set([
+    "prioridades-hoje",
+    "pendencias-gerais",
+    "pagamentos-hoje",
+    "resolvidas-hoje",
+    "mensagens-pendentes",
+    "documentos-pendentes",
+    "atencao",
+    "escritorio",
+  ])
+  const clienteEscopo = intencoesGlobais.has(intencao)
+    ? (localizado.explicito || referenciaAoClienteAtual ? localizado.cliente : null)
+    : localizado.cliente
+
   if (intencao === "clientes") return consultaClientes(clientes, texto)
-  if (intencao === "prioridades-hoje") return consultaPrioridadesHoje(clientes, localizado.cliente)
-  if (intencao === "pendencias-gerais") return consultaPendenciasGerais(clientes, localizado.cliente)
-  if (intencao === "pagamentos-hoje") return consultaPagamentosHoje(clientes, localizado.cliente)
-  if (intencao === "resolvidas-hoje") return consultaResolvidasHoje(clientes, localizado.cliente)
-  if (intencao === "mensagens-pendentes") return consultaMensagensPendentes(clientes, localizado.cliente)
-  if (intencao === "documentos-pendentes") return consultaDocumentosPendentes(clientes, localizado.cliente)
+  if (intencao === "prioridades-hoje") return consultaPrioridadesHoje(clientes, clienteEscopo)
+  if (intencao === "pendencias-gerais") return consultaPendenciasGerais(clientes, clienteEscopo)
+  if (intencao === "pagamentos-hoje") return consultaPagamentosHoje(clientes, clienteEscopo)
+  if (intencao === "resolvidas-hoje") return consultaResolvidasHoje(clientes, clienteEscopo)
+  if (intencao === "mensagens-pendentes") return consultaMensagensPendentes(clientes, clienteEscopo)
+  if (intencao === "documentos-pendentes") return consultaDocumentosPendentes(clientes, clienteEscopo)
   if (intencao === "fiscal") return consultaFiscal(clientes, localizado.cliente, texto)
   if (intencao === "financeiro") return consultaFinanceiro(clientes, localizado.cliente, texto)
   if (intencao === "documentos") return consultaDocumentos(clientes, localizado.cliente, texto)

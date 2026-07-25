@@ -312,10 +312,15 @@ function temVerboNavegacao(texto) {
 function pareceComandoNavegacao(texto) {
   const paginaEncontrada = configuracaoPaginaNoTexto(texto)
   if (!paginaEncontrada) return false
-  if (paginaEncontrada.alias === texto) return true
-  if (/^(agora|depois|em seguida)\b/.test(texto)) return true
 
-  return temVerboNavegacao(texto)
+  // Frases curtas ditadas por voz costumam chegar com ponto ou interrogação no fim.
+  // Sem limpar essa pontuação, “Serviços e cobranças.” deixava de ser reconhecido
+  // como destino exato e podia cair na página geral de Serviços.
+  const textoSemPontuacaoFinal = String(texto || "").replace(/[.!?,;:]+$/g, "").trim()
+  if (paginaEncontrada.alias === textoSemPontuacaoFinal) return true
+  if (/^(agora|depois|em seguida)\b/.test(textoSemPontuacaoFinal)) return true
+
+  return temVerboNavegacao(textoSemPontuacaoFinal)
 }
 
 function perguntaLivreSemDestinoDeTela(texto) {
@@ -792,6 +797,9 @@ Nunca invente páginas ou clientes. Use somente os nomes canônicos fornecidos.
 REGRAS IMPORTANTES:
 - "abra o fiscal Multicópias" => navegar para "Fiscal" com o cliente Multicópias.
 - "agora vá para o cliente Maurício" => abrir a Central desse cliente: página "Clientes", alvo "central-cliente".
+- "serviços e cobranças" depois de abrir um cliente => página "Clientes", alvo "central-cliente", seção "servicos" e usar o cliente atual.
+- "abra serviços e cobranças do Matheus" => página "Clientes", alvo "central-cliente", seção "servicos" com Matheus.
+- Nunca envie “serviços e cobranças” para a página geral "Serviços".
 - "quero ver a movimentação do Maurício" => página "Movimentos Clientes" com Maurício.
 - "entre em ferramentas" => abrir o grupo "Ferramentas".
 - "abra o dashboard" => página "Dashboard".
@@ -811,7 +819,7 @@ CLIENTES CADASTRADOS: ${JSON.stringify(catalogoClientes)}
 FRASE DO USUÁRIO: ${String(mensagem || "").slice(0, 500)}
 
 Retorne SOMENTE JSON válido, sem markdown:
-{"intencao":"navegar|abrir-grupo|conversar|ambiguo","pagina":"nome canônico ou vazio","grupo":"nome canônico ou vazio","alvo":"pagina|central-cliente","clienteId":null,"clienteNome":"","usarClienteAtual":false,"resposta":""}`
+{"intencao":"navegar|abrir-grupo|conversar|ambiguo","pagina":"nome canônico ou vazio","grupo":"nome canônico ou vazio","alvo":"pagina|central-cliente","secao":"servicos ou vazio","clienteId":null,"clienteNome":"","usarClienteAtual":false,"resposta":""}`
 
   const controlador = new AbortController()
   const timeout = setTimeout(() => controlador.abort(), 14000)
@@ -863,11 +871,22 @@ Retorne SOMENTE JSON válido, sem markdown:
 
     if (intencao !== "navegar") return null
 
-    const pagina = normalizarNomeCanonico(interpretado.pagina, paginasPermitidas)
+    const pedidoServicosCobrancas = /(servicos? e cobrancas?|servicos? avulsos?|lancamento de servico avulso|lancar servico avulso)/.test(normalizar(mensagem))
+    let pagina = normalizarNomeCanonico(interpretado.pagina, paginasPermitidas)
+    if (pedidoServicosCobrancas) pagina = "Clientes"
     if (!pagina) return null
-    const clienteAcao = resolverClienteDaInterpretacao(clientes, interpretado, clienteAtual)
+
+    const interpretacaoCliente = pedidoServicosCobrancas && !interpretado.clienteId && !interpretado.clienteNome
+      ? { ...interpretado, usarClienteAtual: true }
+      : interpretado
+    const clienteAcao = resolverClienteDaInterpretacao(clientes, interpretacaoCliente, clienteAtual)
     let alvo = normalizar(interpretado.alvo) === "central-cliente" ? "central-cliente" : "pagina"
-    if (pagina === "Clientes" && clienteAcao && (alvo === "central-cliente" || interpretado.clienteId || interpretado.clienteNome)) {
+    let secao = normalizar(interpretado.secao) === "servicos" ? "servicos" : ""
+
+    if (pedidoServicosCobrancas) {
+      alvo = "central-cliente"
+      secao = "servicos"
+    } else if (pagina === "Clientes" && clienteAcao && (alvo === "central-cliente" || interpretado.clienteId || interpretado.clienteNome)) {
       alvo = "central-cliente"
     }
 
@@ -882,6 +901,7 @@ Retorne SOMENTE JSON válido, sem markdown:
       tipo: "navegar",
       pagina,
       alvo,
+      secao,
       segura: true,
       cliente: clienteAcao ? { id: clienteAcao.id, nome: nomeCliente(clienteAcao) } : null,
     }
@@ -1874,6 +1894,28 @@ function compactarResultadoParaConversa(resultado) {
   }
 }
 
+function clientesAusentesNaResposta({ texto, itens = [], limite = 20 }) {
+  const respostaNormalizada = normalizar(texto)
+  const nomes = [...new Set(
+    (Array.isArray(itens) ? itens : [])
+      .map((item) => String(item?.cliente || "").trim())
+      .filter(Boolean),
+  )].slice(0, limite)
+
+  return nomes.filter((nome) => {
+    const nomeNormalizado = normalizar(nome)
+    if (!nomeNormalizado) return false
+    if (respostaNormalizada.includes(nomeNormalizado)) return false
+
+    // Aceita também o primeiro nome significativo, útil quando a Nexa usa uma
+    // forma natural como “Matheus” em vez de repetir “Matheus Barreto”.
+    const token = nomeNormalizado
+      .split(/\s+/)
+      .find((parte) => parte.length >= 4 && !["cliente", "empresa", "comercio", "servicos", "ltda", "limitada"].includes(parte))
+    return !token || !new RegExp(`(^|\\s)${escaparRegex(token)}(?=\\s|$)`).test(respostaNormalizada)
+  })
+}
+
 async function naturalizarResultadoSistema({
   mensagem,
   nomeUsuario,
@@ -1971,6 +2013,24 @@ ${JSON.stringify(contextoConfirmado)}`,
     const interpretado = interpretarJson(extrairTextoGroq(dados))
     const texto = String(interpretado.resposta || "").trim()
     if (!texto) return base
+
+    // Em consultas completas, naturalidade nunca pode custar informação.
+    // Se o modelo omitir qualquer cliente retornado pelo ERP, usa a resposta
+    // determinística já montada pelo sistema, que contém a lista completa.
+    if (["pendencias-gerais", "prioridades-hoje"].includes(tipoConsulta)) {
+      const ausentes = clientesAusentesNaResposta({
+        texto,
+        itens: contextoConfirmado?.consulta?.itens || [],
+      })
+      if (ausentes.length) {
+        return {
+          ...base,
+          ...(origem === "voz" ? { fala: resultado?.fala || resultado?.resposta } : {}),
+          validacaoListaCompleta: true,
+          clientesQueSeriamOmitidos: ausentes,
+        }
+      }
+    }
 
     return {
       ...base,
