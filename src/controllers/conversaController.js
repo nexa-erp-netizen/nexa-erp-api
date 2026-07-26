@@ -48,7 +48,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
   { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
   { pagina: "WhatsApp Inteligente", aliases: ["whatsapp inteligente", "whatsapp"] },
-  { pagina: "Assistente do Dia", aliases: ["assistente do dia", "prioridades do dia", "iniciar meu dia", "comecar meu dia", "começar meu dia"] },
+  { pagina: "Assistente do Dia", aliases: ["assistente do dia", "prioridades do dia", "iniciar meu dia", "iniciar o dia", "começar o dia", "comecar o dia", "comecar meu dia", "começar meu dia"] },
   { pagina: "Laboratório Tributário", aliases: ["laboratorio tributario", "laboratorio"] },
   { pagina: "Certificados Digitais", aliases: ["certificados digitais", "certificados", "certificado digital"] },
   { pagina: "Procurações e-CAC", aliases: ["procuracoes e-cac", "procuracoes ecac", "procuracoes"] },
@@ -165,6 +165,13 @@ function pedidoResumoOperacionalDoDia(valor) {
   return /(?:^|\s)(?:me (?:de|dê|passe|mostre|fale)|faca|faça|quero|preciso de)?\s*(?:um\s+)?(?:relatorio|resumo|panorama)\s+(?:operacional\s+)?(?:de|do|para|pra)\s+(?:hoje|dia)\b/.test(texto)
     || /(?:^|\s)(?:relatorio|resumo)\s+de\s+hoje\b/.test(texto)
     || /(?:^|\s)o que (?:eu )?(?:tenho|preciso) (?:para )?(?:fazer|resolver) hoje\b/.test(texto)
+}
+
+function mensagemOperacionalDeterministica(valor) {
+  const texto = normalizar(valor).replace(/[.!?,;:]+$/g, "").trim()
+  if (!texto) return false
+  if (pedidoResumoOperacionalDoDia(texto)) return true
+  return /(iniciar (?:o|meu) dia|quais(?: sao)?(?: todas)?(?: as)? pendencias|todas(?: as)? pendencias|qual(?: e)?(?: a)? prioridade|prioridades? (?:de|do|para) hoje|quem pagou(?: hoje)?|pagamentos? recebidos?(?: hoje)?|pendencias? resolvidas?(?: hoje)?|mensagens? (?:pendentes?|de clientes?)|pedidos? de ajuda|documentos? (?:recebidos?|pendentes?|aguardando analise)|quem esta devendo|quem deve para o escritorio|quanto entrou hoje)/.test(texto)
 }
 
 function corrigirTranscricaoPeloContexto({ mensagem, historico = [], origem = "texto" }) {
@@ -1512,7 +1519,7 @@ ROTAS:
 INTENÇÕES DE CONSULTA PERMITIDAS:
 prioridades-hoje, pendencias-gerais, pagamentos-hoje, resolvidas-hoje, mensagens-pendentes, documentos-pendentes, financeiro, fiscal, documentos, certificados, procuracoes, clientes, cliente, atencao, escritorio.
 REGRAS IMPORTANTES:
-- “Quais são as pendências?” significa pendencias-gerais e deve incluir qualquer categoria, não apenas fiscal.
+- “Quais são as pendências?” significa pendencias-gerais e deve reunir somente trabalho aberto do escritório: fiscal, contábil, documentos recebidos de clientes aguardando análise, honorários e financeiro. Documentos enviados ao cliente ou disponíveis para baixar não são pendência do escritório.
 - “O que tenho para hoje?”, “resumo do dia” e “relatório para hoje” significam prioridades-hoje, sem abrir Relatórios.
 - “Quem pagou hoje?” significa pagamentos-hoje.
 - “Tem mensagem de cliente?” significa mensagens-pendentes.
@@ -1951,7 +1958,7 @@ async function naturalizarResultadoSistema({
     : consultaPrioridades
       ? "Os dados vieram do ERP. Faça o resumo do dia em duas partes: prioridades abertas e novidades de hoje. Cite cliente, pendência, valor e vencimento quando existirem. Informe claramente a prioridade principal. Inclua pagamentos e pendências resolvidas presentes em novidades. Não abra Relatórios."
       : consultaPendencias
-        ? "Os dados vieram do ERP. Relacione todos os clientes presentes nos itens, sem limitar a resposta à área fiscal. Para cada cliente, resuma as pendências de qualquer categoria e, ao final, informe qual é a prioridade principal. Não omita clientes."
+        ? "Os dados vieram do ERP. Relacione todos os clientes presentes nos itens. Considere somente fiscal, contábil, documentos recebidos dos clientes, honorários e financeiro. Documentos enviados ao cliente ou disponíveis para baixar não são pendência. Ao final, informe a prioridade principal. Não omita clientes."
         : consultaNovidades
           ? "Os dados vieram do ERP. Relacione todos os pagamentos ou pendências resolvidas presentes nos itens, com cliente, motivo e valor quando existir."
           : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
@@ -2397,13 +2404,16 @@ async function conversar(req, res) {
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
     const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
-    const rotaModelo = await rotearMensagemComModelo({
-      mensagem,
-      nomeUsuario,
-      historico,
-      paginaAtual,
-      clienteAtual: clienteAtualResumo,
-    })
+    const fluxoOperacionalDeterministico = mensagemOperacionalDeterministica(mensagem) || pareceComandoNavegacao(normalizar(mensagem))
+    const rotaModelo = fluxoOperacionalDeterministico
+      ? null
+      : await rotearMensagemComModelo({
+        mensagem,
+        nomeUsuario,
+        historico,
+        paginaAtual,
+        clienteAtual: clienteAtualResumo,
+      })
 
     let comandoNavegacao = null
     const deveTentarNavegacao = rotaModelo?.rota === "navegacao" || (!rotaModelo && pareceComandoNavegacao(normalizar(mensagem)))
@@ -2419,16 +2429,18 @@ async function conversar(req, res) {
     }
 
     if (comandoNavegacao) {
-      const respostaNavegacao = await naturalizarResultadoSistema({
-        mensagem,
-        nomeUsuario,
-        historico,
-        resultado: comandoNavegacao,
-        origem,
-        paginaAtual,
-        clienteAtual: clienteAtualResumo,
-        atividade: "navegacao",
-      })
+      const respostaNavegacao = fluxoOperacionalDeterministico
+        ? { ...comandoNavegacao, conversacionalV2: true, atividade: "navegacao" }
+        : await naturalizarResultadoSistema({
+          mensagem,
+          nomeUsuario,
+          historico,
+          resultado: comandoNavegacao,
+          origem,
+          paginaAtual,
+          clienteAtual: clienteAtualResumo,
+          atividade: "navegacao",
+        })
 
       await salvarMensagemConversa({
         conversa,
@@ -2478,16 +2490,18 @@ async function conversar(req, res) {
     }
 
     if (consultaInteligente) {
-      const respostaConsultaNatural = await naturalizarResultadoSistema({
-        mensagem,
-        nomeUsuario,
-        historico,
-        resultado: consultaInteligente,
-        origem,
-        paginaAtual,
-        clienteAtual: clienteAtualResumo,
-        atividade: "consulta",
-      })
+      const respostaConsultaNatural = fluxoOperacionalDeterministico
+        ? { ...consultaInteligente, conversacionalV2: true, atividade: "consulta", provedor: "sistema", modelo: "Nexa Operacional Determinística 1.0" }
+        : await naturalizarResultadoSistema({
+          mensagem,
+          nomeUsuario,
+          historico,
+          resultado: consultaInteligente,
+          origem,
+          paginaAtual,
+          clienteAtual: clienteAtualResumo,
+          atividade: "consulta",
+        })
 
       const respostaComRota = { ...respostaConsultaNatural, roteadorModelo: rotaModelo }
       await salvarMensagemConversa({
@@ -2581,9 +2595,12 @@ async function conversar(req, res) {
     return res.json(anexarMetadadosConversa(respostaFinal, conversa))
   } catch (error) {
     console.error("ERRO NA CONVERSA GENERATIVA DA NEXA:", error)
+    const falhaProvedor = Boolean(error.providerFailure)
     return res.status(error.statusCode || 500).json({
-      message: error.message || "Erro ao conversar com a Nexa",
-      providerFailure: Boolean(error.providerFailure),
+      message: falhaProvedor
+        ? "A conversa geral está temporariamente indisponível. As consultas e navegações da Nexa continuam funcionando normalmente."
+        : (error.message || "Não consegui concluir essa solicitação agora."),
+      providerFailure: falhaProvedor,
       provedor: PROVEDOR_PADRAO,
       conversaId: conversa?.id || null,
       conversaTitulo: conversa?.titulo || null,

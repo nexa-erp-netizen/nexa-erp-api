@@ -7,6 +7,7 @@ const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
+const MovimentoCliente = require("../models/MovimentoCliente")
 
 function normalizar(valor) {
   return String(valor || "")
@@ -564,13 +565,25 @@ async function consultaCliente(cliente) {
   })
 }
 
+function documentoRecebidoDoCliente(item) {
+  const origem = normalizar(item?.origem).replace(/\s+/g, " ")
+  const status = normalizar(item?.status).replace(/\s+/g, " ")
+  const texto = `${origem} ${status}`
+
+  // O que o escritório enviou ao cliente já é trabalho concluído do nosso lado.
+  if (/(escritorio\s*(?:→|->|para|ao)\s*cliente|disponivel para baixar|enviado ao cliente|entregue ao cliente|aguardando download|aguardando o cliente)/.test(texto)) {
+    return false
+  }
+
+  return /(cliente\s*(?:→|->|para|ao)\s*escritorio|entregue pelo cliente|enviado pelo cliente|recebido do cliente|origem cliente)/.test(texto)
+}
+
 function documentoExigeAtencao(item) {
-  const origem = normalizar(item?.origem)
   const status = normalizar(item?.status)
-  if (/(cancelad|arquivad|concluid|conferid|finalizad)/.test(status)) return false
-  const veioDoCliente = origem.includes("cliente") && origem.includes("escritorio")
-  const aguardandoEntrega = origem.includes("escritorio") && origem.includes("cliente") && !/(entregue|recebido pelo cliente)/.test(status)
-  return veioDoCliente || aguardandoEntrega || /(recebid|em analise|aguard|penden|entregue pelo cliente)/.test(status)
+  if (!documentoRecebidoDoCliente(item)) return false
+  if (documentoConcluido(status)) return false
+  if (/(cancelad|arquivad|rejeitad)/.test(status)) return false
+  return true
 }
 
 function solicitacaoAberta(item) {
@@ -585,6 +598,16 @@ function fiscalAbertoParaPrioridade(item) {
 
 function financeiroAbertoParaPrioridade(item) {
   return !encerrado(item?.status)
+}
+
+function servicoAbertoParaPrioridade(item) {
+  const status = normalizar(item?.status)
+  return !recebido(status) && !/(cancelad|excluid|arquivad)/.test(status)
+}
+
+function movimentoContabilAberto(item) {
+  const status = normalizar(item?.status)
+  return !status || status === "pendente" || /aguard/.test(status)
 }
 
 function prioridadePorPrazo(dias, { vencido = 110, hoje = 100, futuro = 80, semData = 65 } = {}) {
@@ -613,22 +636,29 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   const clienteEscolhidoId = cliente ? Number(cliente.id) : null
   const clienteEscolhidoNome = cliente ? normalizar(nomeCliente(cliente)) : null
 
-  const [fiscais, financeiros, servicos, documentos, solicitacoes, certificados, procuracoes, agenda] = await Promise.all([
-    Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
-    Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
-    ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
-    DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1000 }),
-    SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1000 }),
-    CertificadoDigital.findAll({ order: [["dataValidade", "ASC"]], limit: 800 }),
-    ProcuracaoEcac.findAll({ order: [["dataValidade", "ASC"]], limit: 800 }),
-    Agenda.findAll({ order: [["data", "ASC"]], limit: 800 }),
+  // A consulta geral de pendências deve refletir somente trabalho ainda aberto do escritório:
+  // fiscal, contábil, documentos recebidos de clientes, honorários e financeiro.
+  const [fiscais, financeiros, servicos, documentos, movimentosContabeis] = await Promise.all([
+    Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
+    Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
+    ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
+    DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
+    MovimentoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
   ])
 
   const itens = []
+  const resolverCadastro = (clienteId, clienteNome) => {
+    const porCodigo = Number(clienteId) > 0 ? porId.get(Number(clienteId)) : null
+    return porCodigo || porNome.get(normalizar(clienteNome)) || null
+  }
+  const registroPermitido = (clienteId, clienteNome) => {
+    if (Number(clienteId) > 0 && ids.has(Number(clienteId))) return true
+    return nomes.has(normalizar(clienteNome))
+  }
   const adicionar = ({ modulo, categoria, clienteNome, clienteId = null, titulo, detalhe = "", status = "Pendente", data = null, valor = null, prioridade = 60, pagina = "Clientes", referenciaId = null }) => {
-    const cadastro = clienteId ? porId.get(Number(clienteId)) : porNome.get(normalizar(clienteNome))
+    const cadastro = resolverCadastro(clienteId, clienteNome)
     const idResolvido = Number(clienteId || cadastro?.id || 0) || null
-    const nomeResolvido = clienteNome || (cadastro ? nomeCliente(cadastro) : "Cliente")
+    const nomeResolvido = cadastro ? nomeCliente(cadastro) : (clienteNome || "Cliente")
     if (clienteEscolhidoId && idResolvido && idResolvido !== clienteEscolhidoId) return
     if (clienteEscolhidoNome && !idResolvido && normalizar(nomeResolvido) !== clienteEscolhidoNome) return
     const valorNumero = valor === null || valor === undefined ? 0 : numeroMoeda(valor)
@@ -657,72 +687,33 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
       const dias = diasAte(item.vencimento)
       adicionar({
         modulo: "fiscal",
-        categoria: "Obrigação fiscal",
+        categoria: "Fiscal",
         clienteNome: item.cliente,
         titulo: item.obrigacao || "Obrigação fiscal",
         detalhe: `Competência ${item.competencia || "não informada"}${item.observacao ? ` • ${item.observacao}` : ""}`,
         status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
         data: item.vencimento,
         valor: item.valor,
-        prioridade: prioridadePorPrazo(dias, { vencido: 132, hoje: 126, futuro: 101, semData: 78 }),
+        prioridade: prioridadePorPrazo(dias, { vencido: 140, hoje: 134, futuro: 106, semData: 84 }),
         pagina: "Fiscal",
         referenciaId: item.id,
       })
     })
 
-  servicos
-    .filter((item) => ids.has(Number(item.clienteId)) && financeiroAbertoParaPrioridade(item))
+  movimentosContabeis
+    .filter((item) => nomes.has(normalizar(item.cliente)) && movimentoContabilAberto(item))
     .forEach((item) => {
-      const dias = diasAte(item.vencimento)
       adicionar({
-        modulo: "servico-cobranca",
-        categoria: "Cobrança do escritório",
+        modulo: "contabil",
+        categoria: "Contábil",
         clienteNome: item.cliente,
-        clienteId: item.clienteId,
-        titulo: item.descricao || "Serviço realizado",
-        detalhe: `${Number(item.quantidade || 1)}x • Serviço e cobrança`,
-        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
-        data: item.vencimento,
-        valor: item.valorTotal,
-        prioridade: prioridadePorPrazo(dias, { vencido: 116, hoje: 106, futuro: 83, semData: 73 }),
-        pagina: "Clientes",
-        referenciaId: item.id,
-      })
-    })
-
-  financeiros
-    .filter((item) => nomes.has(normalizar(item.cliente)) && financeiroAbertoParaPrioridade(item) && tipoFinanceiroRecebivel(item) && !origemEhServico(item))
-    .forEach((item) => {
-      const dias = diasAte(item.vencimento)
-      adicionar({
-        modulo: "financeiro",
-        categoria: /honor/.test(normalizar(item.descricao)) ? "Honorário" : "Cobrança financeira",
-        clienteNome: item.cliente,
-        clienteId: item.clienteId,
-        titulo: item.descricao || item.tipo || "Cobrança financeira",
-        detalhe: item.origem || item.tipo || "Financeiro do escritório",
-        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
-        data: item.vencimento,
+        titulo: item.descricao || "Movimento contábil aguardando conferência",
+        detalhe: item.planoContaNome || item.forma || "Movimento enviado pelo cliente",
+        status: item.status || "Pendente",
+        data: item.data || item.createdAt,
         valor: item.valor,
-        prioridade: prioridadePorPrazo(dias, { vencido: 114, hoje: 104, futuro: 81, semData: 71 }),
-        pagina: "Financeiro",
-        referenciaId: item.id,
-      })
-    })
-
-  solicitacoes
-    .filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAberta(item))
-    .forEach((item) => {
-      adicionar({
-        modulo: "solicitacao",
-        categoria: "Mensagem ou pedido de ajuda",
-        clienteNome: item.cliente,
-        titulo: item.titulo || "Solicitação do cliente",
-        detalhe: item.mensagem || item.categoria || "Solicitação pendente",
-        status: item.novaInteracao ? "Nova interação" : (item.status || "Pendente"),
-        data: item.dataResposta || item.createdAt,
-        prioridade: item.novaInteracao ? 122 : 98,
-        pagina: "Pendências Clientes",
+        prioridade: 112,
+        pagina: "Movimentos Clientes",
         referenciaId: item.id,
       })
     })
@@ -731,60 +722,59 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     .filter((item) => nomes.has(normalizar(item.cliente)) && documentoExigeAtencao(item))
     .forEach((item) => {
       adicionar({
-        modulo: "documento",
-        categoria: "Documento aguardando ação",
+        modulo: "documento-recebido",
+        categoria: "Documento recebido",
         clienteNome: item.cliente,
-        titulo: item.tipo || "Documento",
-        detalhe: item.observacao || item.origem || "Documento aguardando conferência ou entrega",
+        titulo: item.tipo || "Documento recebido do cliente",
+        detalhe: item.observacao || "Arquivo recebido e aguardando análise do escritório",
         status: item.status || "Aguardando análise",
         data: item.dataEnvio || item.createdAt,
-        prioridade: /recebid|entregue pelo cliente/.test(normalizar(item.status)) ? 108 : 88,
+        prioridade: 110,
         pagina: "Documentos Digitais",
         referenciaId: item.id,
       })
     })
 
-  for (const [lista, rotulo, pagina, campoAtivo] of [
-    [certificados, "Certificado digital", "Certificados Digitais", "ativo"],
-    [procuracoes, "Procuração e-CAC", "Procurações e-CAC", "ativa"],
-  ]) {
-    lista
-      .filter((item) => ids.has(Number(item.clienteId)) && item?.[campoAtivo] !== false)
-      .forEach((item) => {
-        const dias = diasAte(item.dataValidade)
-        if (dias === null || dias > 30) return
-        const cadastro = porId.get(Number(item.clienteId))
-        adicionar({
-          modulo: normalizar(rotulo).replace(/\s+/g, "-"),
-          categoria: "Identidade digital",
-          clienteNome: item.cliente || (cadastro ? nomeCliente(cadastro) : "Cliente"),
-          clienteId: item.clienteId,
-          titulo: rotulo,
-          detalhe: dias < 0 ? "Regularização necessária" : "Renovação programada",
-          status: textoPrazo(dias),
-          data: item.dataValidade,
-          prioridade: prioridadePorPrazo(dias, { vencido: 118, hoje: 110, futuro: 86, semData: 60 }),
-          pagina,
-          referenciaId: item.id,
-        })
-      })
-  }
-
-  agenda
-    .filter((item) => !item.cliente || nomes.has(normalizar(item.cliente)))
+  servicos
+    .filter((item) => registroPermitido(item.clienteId, item.cliente) && servicoAbertoParaPrioridade(item))
     .forEach((item) => {
-      const dias = diasAte(item.data)
-      if (dias === null || dias > 7) return
+      const dias = diasAte(item.vencimento)
       adicionar({
-        modulo: "agenda",
-        categoria: "Tarefa ou compromisso",
-        clienteNome: item.cliente || "Escritório",
-        titulo: item.titulo || "Compromisso",
-        detalhe: item.tipo || "Agenda",
-        status: textoPrazo(dias),
-        data: item.data,
-        prioridade: prioridadePorPrazo(dias, { vencido: 108, hoje: 102, futuro: 76, semData: 55 }),
-        pagina: "Agenda",
+        modulo: "servico-cobranca",
+        categoria: "Financeiro do escritório",
+        clienteNome: item.cliente,
+        clienteId: item.clienteId,
+        titulo: item.descricao || "Serviço realizado",
+        detalhe: `${Number(item.quantidade || 1)}x • Serviço e cobrança`,
+        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
+        data: item.vencimento,
+        valor: item.valorTotal,
+        prioridade: prioridadePorPrazo(dias, { vencido: 118, hoje: 108, futuro: 84, semData: 74 }),
+        pagina: "Clientes",
+        referenciaId: item.id,
+      })
+    })
+
+  financeiros
+    .filter((item) => registroPermitido(item.clienteId, item.cliente)
+      && financeiroAbertoParaPrioridade(item)
+      && tipoFinanceiroRecebivel(item)
+      && !origemEhServico(item))
+    .forEach((item) => {
+      const dias = diasAte(item.vencimento)
+      const ehHonorario = /honor/.test(`${normalizar(item.descricao)} ${normalizar(item.origem)} ${normalizar(item.centroCusto)}`)
+      adicionar({
+        modulo: ehHonorario ? "honorario" : "financeiro",
+        categoria: ehHonorario ? "Honorário" : "Financeiro do escritório",
+        clienteNome: item.cliente,
+        clienteId: item.clienteId,
+        titulo: item.descricao || item.tipo || (ehHonorario ? "Honorário" : "Cobrança financeira"),
+        detalhe: item.origem || item.centroCusto || item.tipo || "Financeiro do escritório",
+        status: item.vencimento ? textoPrazo(dias) : (item.status || "Pendente"),
+        data: item.vencimento,
+        valor: item.valor,
+        prioridade: prioridadePorPrazo(dias, { vencido: ehHonorario ? 120 : 116, hoje: ehHonorario ? 110 : 106, futuro: 82, semData: 72 }),
+        pagina: "Financeiro",
         referenciaId: item.id,
       })
     })
@@ -1091,23 +1081,23 @@ async function consultaDocumentosPendentes(clientes, cliente = null) {
     id: item.id,
     cliente: item.cliente,
     titulo: item.tipo || "Documento",
-    detalhe: item.observacao || item.origem || "Documento aguardando ação",
+    detalhe: item.observacao || "Documento recebido do cliente e aguardando análise",
     status: item.status || "Aguardando análise",
     data: item.dataEnvio || item.createdAt,
     dataFormatada: formatarData(item.dataEnvio || item.createdAt),
     paginaSugerida: "Documentos Digitais",
   }))
   const resposta = exibidos.length
-    ? `Há ${exibidos.length} documento${exibidos.length === 1 ? "" : "s"} aguardando ação no escritório: ${exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`).join("; ")}.`
-    : "Não há documentos aguardando conferência ou entrega no escritório."
+    ? `Há ${exibidos.length} documento${exibidos.length === 1 ? "" : "s"} recebido${exibidos.length === 1 ? "" : "s"} de clientes aguardando análise: ${exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`).join("; ")}.`
+    : "Não há documentos recebidos de clientes aguardando análise no escritório."
   return respostaConsulta({
     resposta,
     fala: resposta,
     pontos: exibidos.map((item) => `${item.cliente}: ${item.titulo} — ${item.status}`),
     consulta: {
       tipo: "documentos-pendentes",
-      titulo: "Documentos aguardando ação",
-      resumo: `${exibidos.length} documento${exibidos.length === 1 ? "" : "s"}.`,
+      titulo: "Documentos recebidos aguardando análise",
+      resumo: `${exibidos.length} documento${exibidos.length === 1 ? "" : "s"} recebido${exibidos.length === 1 ? "" : "s"} de clientes.`,
       total: exibidos.length,
       itens: exibidos,
       paginaSugerida: "Documentos Digitais",
