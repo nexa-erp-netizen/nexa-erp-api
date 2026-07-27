@@ -7,10 +7,10 @@ const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
-const MovimentoCliente = require("../models/MovimentoCliente")
 const {
   financeiroAbertoParaPrioridade,
-  movimentoContabilAberto,
+  servicoAbertoParaPrioridade,
+  solicitacaoAbertaParaPrioridade,
 } = require("./pendenciaFiltersService")
 
 function normalizar(valor) {
@@ -590,19 +590,9 @@ function documentoExigeAtencao(item) {
   return true
 }
 
-function solicitacaoAberta(item) {
-  const status = normalizar(item?.status)
-  return !encerrado(status) && !/(cancelad|arquivad)/.test(status)
-}
-
 function fiscalAbertoParaPrioridade(item) {
   const status = normalizar(item?.status)
   return !encerrado(status) && !/(pago pelo escritorio|pago pelo escritório)/.test(status)
-}
-
-function servicoAbertoParaPrioridade(item) {
-  const status = normalizar(item?.status)
-  return !recebido(status) && !/(cancelad|excluid|arquivad)/.test(status)
 }
 
 function prioridadePorPrazo(dias, { vencido = 110, hoje = 100, futuro = 80, semData = 65 } = {}) {
@@ -631,17 +621,19 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   const clienteEscolhidoId = cliente ? Number(cliente.id) : null
   const clienteEscolhidoNome = cliente ? normalizar(nomeCliente(cliente)) : null
 
-  // A consulta geral de pendências deve refletir somente trabalho ainda aberto do escritório:
-  // fiscal, contábil, documentos recebidos de clientes, honorários e financeiro.
-  const [fiscais, financeiros, servicos, documentos, movimentosContabeis] = await Promise.all([
+  // Usa as mesmas fontes operacionais do Assistente do Dia. MovimentoCliente não
+  // entra aqui: ele é histórico financeiro/contábil e não representa, por si só,
+  // uma ação pendente do escritório.
+  const [fiscais, financeiros, servicos, documentos, solicitacoes] = await Promise.all([
     Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
-    MovimentoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
+    SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
   ])
 
   const itens = []
+  const chavesAdicionadas = new Set()
   const resolverCadastro = (clienteId, clienteNome) => {
     const porCodigo = Number(clienteId) > 0 ? porId.get(Number(clienteId)) : null
     return porCodigo || porNome.get(normalizar(clienteNome)) || null
@@ -656,6 +648,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     const nomeResolvido = cadastro ? nomeCliente(cadastro) : (clienteNome || "Cliente")
     if (clienteEscolhidoId && idResolvido && idResolvido !== clienteEscolhidoId) return
     if (clienteEscolhidoNome && !idResolvido && normalizar(nomeResolvido) !== clienteEscolhidoNome) return
+    const chave = `${modulo}:${referenciaId || "sem-id"}:${idResolvido || normalizar(nomeResolvido)}`
+    if (chavesAdicionadas.has(chave)) return
+    chavesAdicionadas.add(chave)
     const valorNumero = valor === null || valor === undefined ? 0 : numeroMoeda(valor)
     itens.push({
       id: `${modulo}-${referenciaId || itens.length + 1}`,
@@ -695,20 +690,21 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
       })
     })
 
-  movimentosContabeis
-    .filter((item) => nomes.has(normalizar(item.cliente)) && movimentoContabilAberto(item))
+  solicitacoes
+    .filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAbertaParaPrioridade(item))
     .forEach((item) => {
+      const dias = diasAte(item.vencimento || item.prazo)
       adicionar({
-        modulo: "contabil",
-        categoria: "Contábil",
+        modulo: "solicitacao-cliente",
+        categoria: "Atendimento",
         clienteNome: item.cliente,
-        titulo: item.descricao || "Movimento contábil aguardando conferência",
-        detalhe: item.planoContaNome || item.forma || "Movimento enviado pelo cliente",
+        clienteId: item.clienteId,
+        titulo: item.titulo || item.categoria || "Solicitação do cliente",
+        detalhe: item.descricao || item.mensagem || "Solicitação aguardando ação do escritório",
         status: item.status || "Pendente",
-        data: item.data || item.createdAt,
-        valor: item.valor,
-        prioridade: 112,
-        pagina: "Movimentos Clientes",
+        data: item.vencimento || item.prazo || item.createdAt,
+        prioridade: prioridadePorPrazo(dias, { vencido: 126, hoje: 116, futuro: 88, semData: 82 }),
+        pagina: "Pendências Clientes",
         referenciaId: item.id,
       })
     })

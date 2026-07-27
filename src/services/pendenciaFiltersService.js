@@ -40,7 +40,21 @@ function movimentoContabilAberto(item) {
   return true
 }
 
+function servicoAbertoParaPrioridade(item) {
+  const status = normalizar(item?.status)
+  if (/(recebid|pago|quitad|concluid|finalizad|cancelad|excluid|arquivad)/.test(status)) return false
+  return /(pendente|em aberto|a receber|aguardando|vencid|atrasad)/.test(status)
+}
+
+function solicitacaoAbertaParaPrioridade(item) {
+  const status = normalizar(item?.status)
+  if (/(concluid|finalizad|cancelad|arquivad|atendid|resolvid)/.test(status)) return false
+  return /(pendente|em aberto|aguardando|recebid|nova|aberta)/.test(status)
+}
+
 module.exports = {
   financeiroAbertoParaPrioridade,
   movimentoContabilAberto,
+  servicoAbertoParaPrioridade,
+  solicitacaoAbertaParaPrioridade,
 }

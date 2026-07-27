@@ -4,6 +4,8 @@ const assert = require("node:assert/strict")
 const {
   financeiroAbertoParaPrioridade,
   movimentoContabilAberto,
+  servicoAbertoParaPrioridade,
+  solicitacaoAbertaParaPrioridade,
 } = require("../src/services/pendenciaFiltersService")
 
 test("mantém honorário realmente pendente", () => {
@@ -78,4 +80,21 @@ test("exclui movimentos já conferidos ou recebidos", () => {
     descricao: "Honorário",
     status: "Recebido",
   }), false)
+})
+
+test("mantém serviço realizado ainda não recebido", () => {
+  assert.equal(servicoAbertoParaPrioridade({
+    descricao: "Serviço realizado para Matheus Barreto",
+    status: "Pendente",
+  }), true)
+})
+
+test("exclui serviço já recebido ou cancelado", () => {
+  assert.equal(servicoAbertoParaPrioridade({ status: "Recebido" }), false)
+  assert.equal(servicoAbertoParaPrioridade({ status: "Cancelado" }), false)
+})
+
+test("mantém solicitação aberta e exclui solicitação encerrada", () => {
+  assert.equal(solicitacaoAbertaParaPrioridade({ status: "Pendente" }), true)
+  assert.equal(solicitacaoAbertaParaPrioridade({ status: "Concluída" }), false)
 })
