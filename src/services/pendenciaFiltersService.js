@@ -33,6 +33,12 @@ function financeiroDoEscritorioParaPrioridade(item) {
     item?.centroCusto,
   ].map(normalizar).join(" ")
 
+  // Obrigações fiscais já são carregadas pela fonte Fiscal. Mesmo que um
+  // lançamento legado traga "serviço" na origem, ele não pode ser somado
+  // novamente pelo Financeiro.
+  if (/(^|\s)fiscal:\d+|obrigacao fiscal|guia fiscal/.test(texto)) return false
+  if (/(^|\s)(das|darf|inss|fgts)(\s|$)/.test(normalizar(item?.descricao))) return false
+
   return /(servico|honorario)/.test(texto)
 }
 

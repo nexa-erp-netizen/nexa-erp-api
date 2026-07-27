@@ -126,6 +126,12 @@ test("financeiro geral só acrescenta honorários e serviços do escritório", (
     origem: "Honorários",
     status: "Pendente",
   }), true)
+  assert.equal(financeiroDoEscritorioParaPrioridade({
+    descricao: "DAS",
+    origem: "Serviço Fiscal",
+    referenciaOrigem: "fiscal:91",
+    status: "Pendente",
+  }), false)
 })
 
 test("mantém solicitação aberta e exclui solicitação encerrada", () => {

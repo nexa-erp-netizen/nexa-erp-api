@@ -615,11 +615,12 @@ function origemEhServico(item) {
 }
 
 async function carregarPendenciasOperacionais(clientes, cliente = null) {
-  const permitidos = clientes.filter(clienteAtivo)
-  const nomes = nomesPermitidos(permitidos)
-  const ids = new Set(permitidos.map((item) => Number(item.id)))
-  const porId = new Map(permitidos.map((item) => [Number(item.id), item]))
-  const porNome = new Map(permitidos.map((item) => [normalizar(nomeCliente(item)), item]))
+  const ativos = clientes.filter(clienteAtivo)
+  const nomesAtivos = nomesPermitidos(ativos)
+  const nomesCadastrados = nomesPermitidos(clientes)
+  const idsCadastrados = new Set(clientes.map((item) => Number(item.id)))
+  const porId = new Map(clientes.map((item) => [Number(item.id), item]))
+  const porNome = new Map(clientes.map((item) => [normalizar(nomeCliente(item)), item]))
   const clienteEscolhidoId = cliente ? Number(cliente.id) : null
   const clienteEscolhidoNome = cliente ? normalizar(nomeCliente(cliente)) : null
 
@@ -641,9 +642,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     const porCodigo = Number(clienteId) > 0 ? porId.get(Number(clienteId)) : null
     return porCodigo || porNome.get(normalizar(clienteNome)) || null
   }
-  const registroPermitido = (clienteId, clienteNome) => {
-    if (Number(clienteId) > 0 && ids.has(Number(clienteId))) return true
-    return nomes.has(normalizar(clienteNome))
+  const clienteCadastrado = (clienteId, clienteNome) => {
+    if (Number(clienteId) > 0 && idsCadastrados.has(Number(clienteId))) return true
+    return nomesCadastrados.has(normalizar(clienteNome))
   }
   const adicionar = ({ modulo, categoria, clienteNome, clienteId = null, titulo, detalhe = "", status = "Pendente", data = null, valor = null, prioridade = 60, pagina = "Clientes", referenciaId = null }) => {
     const cadastro = resolverCadastro(clienteId, clienteNome)
@@ -682,7 +683,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   }
 
   deduplicarFiscaisAbertos(
-    fiscais.filter((item) => nomes.has(normalizar(item.cliente)) && fiscalAbertoParaPrioridade(item))
+    fiscais.filter((item) => nomesAtivos.has(normalizar(item.cliente)) && fiscalAbertoParaPrioridade(item))
   )
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
@@ -702,7 +703,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     })
 
   solicitacoes
-    .filter((item) => nomes.has(normalizar(item.cliente)) && solicitacaoAbertaParaPrioridade(item))
+    .filter((item) => nomesAtivos.has(normalizar(item.cliente)) && solicitacaoAbertaParaPrioridade(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento || item.prazo)
       adicionar({
@@ -721,7 +722,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     })
 
   documentos
-    .filter((item) => nomes.has(normalizar(item.cliente)) && documentoExigeAtencao(item))
+    .filter((item) => nomesAtivos.has(normalizar(item.cliente)) && documentoExigeAtencao(item))
     .forEach((item) => {
       adicionar({
         modulo: "documento-recebido",
@@ -738,7 +739,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     })
 
   servicos
-    .filter((item) => registroPermitido(item.clienteId, item.cliente) && servicoAbertoParaPrioridade(item))
+    // Cobranças continuam exigíveis mesmo quando o cliente é avulso, pausado
+    // ou inativo. Por isso, aqui entram todos os clientes cadastrados.
+    .filter((item) => clienteCadastrado(item.clienteId, item.cliente) && servicoAbertoParaPrioridade(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
       adicionar({
@@ -758,7 +761,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     })
 
   financeiros
-    .filter((item) => registroPermitido(item.clienteId, item.cliente)
+    // Honorários e serviços a receber também não desaparecem quando o cliente
+    // deixa de integrar a carteira ativa.
+    .filter((item) => clienteCadastrado(item.clienteId, item.cliente)
       && financeiroDoEscritorioParaPrioridade(item)
       && tipoFinanceiroRecebivel(item)
     )
