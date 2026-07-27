@@ -3,6 +3,7 @@ const assert = require("node:assert/strict")
 
 const {
   financeiroAbertoParaPrioridade,
+  financeiroDoEscritorioParaPrioridade,
   movimentoContabilAberto,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
@@ -99,11 +100,32 @@ test("mantém serviço realizado ainda não recebido", () => {
 
 test("exclui serviço já recebido ou cancelado", () => {
   assert.equal(servicoAbertoParaPrioridade({ status: "Recebido" }), false)
+  assert.equal(servicoAbertoParaPrioridade({ status: "Cancelado" }), false)
+})
+
+test("mantém serviço pendente mesmo com data de recebimento antiga", () => {
   assert.equal(servicoAbertoParaPrioridade({
     status: "Pendente",
     dataRecebimento: "2026-07-24",
+  }), true)
+})
+
+test("financeiro geral só acrescenta honorários e serviços do escritório", () => {
+  assert.equal(financeiroDoEscritorioParaPrioridade({
+    descricao: "DAS | DAS 05/2026",
+    origem: "Fiscal",
+    status: "Pendente",
   }), false)
-  assert.equal(servicoAbertoParaPrioridade({ status: "Cancelado" }), false)
+  assert.equal(financeiroDoEscritorioParaPrioridade({
+    descricao: "Declaração MEI",
+    origem: "Serviço do Cliente",
+    status: "Pendente",
+  }), true)
+  assert.equal(financeiroDoEscritorioParaPrioridade({
+    descricao: "Honorários contábeis",
+    origem: "Honorários",
+    status: "Pendente",
+  }), true)
 })
 
 test("mantém solicitação aberta e exclui solicitação encerrada", () => {

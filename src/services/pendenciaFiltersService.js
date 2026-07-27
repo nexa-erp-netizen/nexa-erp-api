@@ -23,6 +23,19 @@ function financeiroAbertoParaPrioridade(item) {
   return true
 }
 
+function financeiroDoEscritorioParaPrioridade(item) {
+  if (!financeiroAbertoParaPrioridade(item)) return false
+
+  const texto = [
+    item?.descricao,
+    item?.origem,
+    item?.referenciaOrigem,
+    item?.centroCusto,
+  ].map(normalizar).join(" ")
+
+  return /(servico|honorario)/.test(texto)
+}
+
 function movimentoContabilAberto(item) {
   const status = normalizar(item?.status)
   const texto = [
@@ -42,12 +55,12 @@ function movimentoContabilAberto(item) {
 
 function servicoAbertoParaPrioridade(item) {
   const status = normalizar(item?.status)
-  if (item?.dataRecebimento) return false
   if (/(recebid|cancelad|excluid|arquivad)/.test(status)) return false
 
-  // Em Serviço e Cobrança, "Concluído"/"Pago" podem representar o serviço
-  // realizado, não o recebimento do escritório. A baixa financeira só ocorre
-  // com status Recebido (ou com dataRecebimento preenchida).
+  // A tela Serviços e Cobranças considera o status atual como fonte da verdade.
+  // Registros antigos podem manter dataRecebimento mesmo depois de voltarem para
+  // Pendente; nesse caso a tela mostra Atrasado e a Nexa deve fazer o mesmo.
+  // A baixa só ocorre quando o status atual é Recebido.
   return true
 }
 
@@ -75,6 +88,7 @@ function deduplicarFiscaisAbertos(itens) {
 
 module.exports = {
   financeiroAbertoParaPrioridade,
+  financeiroDoEscritorioParaPrioridade,
   movimentoContabilAberto,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,

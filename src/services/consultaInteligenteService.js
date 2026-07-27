@@ -9,6 +9,7 @@ const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
 const {
   financeiroAbertoParaPrioridade,
+  financeiroDoEscritorioParaPrioridade,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
   deduplicarFiscaisAbertos,
@@ -758,8 +759,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
 
   financeiros
     .filter((item) => registroPermitido(item.clienteId, item.cliente)
-      && financeiroAbertoParaPrioridade(item)
-      && tipoFinanceiroRecebivel(item))
+      && financeiroDoEscritorioParaPrioridade(item)
+      && tipoFinanceiroRecebivel(item)
+    )
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
       const ehHonorario = /honor/.test(`${normalizar(item.descricao)} ${normalizar(item.origem)} ${normalizar(item.centroCusto)}`)
