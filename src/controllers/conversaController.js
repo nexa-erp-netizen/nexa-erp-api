@@ -10,6 +10,7 @@ const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
 const { detectarConsultaInteligente } = require("../services/consultaInteligenteService")
+const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
   detectarPedidoMemoria,
   registrarMemoria,
@@ -2404,7 +2405,10 @@ async function conversar(req, res) {
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
     const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
-    const fluxoOperacionalDeterministico = mensagemOperacionalDeterministica(mensagem) || pareceComandoNavegacao(normalizar(mensagem))
+    const decisaoOperacional = classificarMensagemOperacional(mensagem)
+    const fluxoOperacionalDeterministico = Boolean(decisaoOperacional)
+      || mensagemOperacionalDeterministica(mensagem)
+      || pareceComandoNavegacao(normalizar(mensagem))
     const rotaModelo = fluxoOperacionalDeterministico
       ? null
       : await rotearMensagemComModelo({
@@ -2416,16 +2420,21 @@ async function conversar(req, res) {
       })
 
     let comandoNavegacao = null
-    const deveTentarNavegacao = rotaModelo?.rota === "navegacao" || (!rotaModelo && pareceComandoNavegacao(normalizar(mensagem)))
+    const deveTentarNavegacao = decisaoOperacional?.tipo === "navegacao"
+      || rotaModelo?.rota === "navegacao"
+      || (!rotaModelo && pareceComandoNavegacao(normalizar(mensagem)))
     if (deveTentarNavegacao) {
-      comandoNavegacao = await detectarComandoNavegacao({
+      const parametrosNavegacao = {
         mensagem,
         clienteId,
         usuario: usuarioCompleto,
         origem,
         paginaAtual,
         historico,
-      })
+      }
+      comandoNavegacao = decisaoOperacional?.tipo === "navegacao"
+        ? await detectarComandoNavegacaoDeterministico(parametrosNavegacao)
+        : await detectarComandoNavegacao(parametrosNavegacao)
     }
 
     if (comandoNavegacao) {
@@ -2449,7 +2458,11 @@ async function conversar(req, res) {
         texto: respostaNavegacao.resposta,
         dados: { ...respostaNavegacao, roteadorModelo: rotaModelo },
       })
-      return res.json(anexarMetadadosConversa({ ...respostaNavegacao, roteadorModelo: rotaModelo }, conversa))
+      return res.json(anexarMetadadosConversa({
+        ...respostaNavegacao,
+        roteadorModelo: rotaModelo,
+        roteadorOperacional: decisaoOperacional,
+      }, conversa))
     }
 
     if (rotaModelo?.rota === "esclarecer" && rotaModelo.resposta) {
@@ -2479,13 +2492,15 @@ async function conversar(req, res) {
 
     let consultaInteligente = null
     const deveTentarConsulta = conversa.tipoContexto !== "interessado"
-      && (rotaModelo?.rota === "consulta" || !rotaModelo)
+      && (decisaoOperacional?.tipo === "consulta" || rotaModelo?.rota === "consulta" || !rotaModelo)
     if (deveTentarConsulta) {
       consultaInteligente = await detectarConsultaInteligente({
         mensagem,
         clienteId,
         usuario: usuarioCompleto,
-        intencaoForcada: rotaModelo?.rota === "consulta" ? rotaModelo.intencao : null,
+        intencaoForcada: decisaoOperacional?.tipo === "consulta"
+          ? decisaoOperacional.intencao
+          : (rotaModelo?.rota === "consulta" ? rotaModelo.intencao : null),
       })
     }
 
@@ -2503,7 +2518,11 @@ async function conversar(req, res) {
           atividade: "consulta",
         })
 
-      const respostaComRota = { ...respostaConsultaNatural, roteadorModelo: rotaModelo }
+      const respostaComRota = {
+        ...respostaConsultaNatural,
+        roteadorModelo: rotaModelo,
+        roteadorOperacional: decisaoOperacional,
+      }
       await salvarMensagemConversa({
         conversa,
         usuarioId: req.usuario.id,
