@@ -600,13 +600,6 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
 
   let clienteAcao = clienteReferencia
 
-  // Durante uma conversa de voz, o cliente aberto anteriormente permanece como contexto.
-  // Assim, frases naturais como “quero a movimentação agora” usam o mesmo cliente,
-  // mesmo sem repetir “dela”, “dessa empresa” ou o nome completo.
-  if (!clienteAcao && clienteAtual && PAGINAS_COM_FILTRO_CLIENTE.has(pagina)) {
-    clienteAcao = clienteAtual
-  }
-
   if (alvo === "central-cliente" && !clienteAcao) {
     clienteAcao = clienteAtual
   }
