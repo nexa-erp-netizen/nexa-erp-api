@@ -635,6 +635,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
 
   const itens = []
   const chavesAdicionadas = new Set()
+  const chavesSemanticas = new Set()
   const resolverCadastro = (clienteId, clienteNome) => {
     const porCodigo = Number(clienteId) > 0 ? porId.get(Number(clienteId)) : null
     return porCodigo || porNome.get(normalizar(clienteNome)) || null
@@ -650,8 +651,15 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     if (clienteEscolhidoId && idResolvido && idResolvido !== clienteEscolhidoId) return
     if (clienteEscolhidoNome && !idResolvido && normalizar(nomeResolvido) !== clienteEscolhidoNome) return
     const chave = `${modulo}:${referenciaId || "sem-id"}:${idResolvido || normalizar(nomeResolvido)}`
-    if (chavesAdicionadas.has(chave)) return
+    const chaveSemantica = [
+      idResolvido || normalizar(nomeResolvido),
+      normalizar(titulo),
+      String(data || "").slice(0, 10),
+      valor === null || valor === undefined ? "" : numeroMoeda(valor).toFixed(2),
+    ].join("|")
+    if (chavesAdicionadas.has(chave) || chavesSemanticas.has(chaveSemantica)) return
     chavesAdicionadas.add(chave)
+    chavesSemanticas.add(chaveSemantica)
     const valorNumero = valor === null || valor === undefined ? 0 : numeroMoeda(valor)
     itens.push({
       id: `${modulo}-${referenciaId || itens.length + 1}`,
@@ -751,13 +759,16 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   financeiros
     .filter((item) => registroPermitido(item.clienteId, item.cliente)
       && financeiroAbertoParaPrioridade(item)
-      && tipoFinanceiroRecebivel(item)
-      && !origemEhServico(item))
+      && tipoFinanceiroRecebivel(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
       const ehHonorario = /honor/.test(`${normalizar(item.descricao)} ${normalizar(item.origem)} ${normalizar(item.centroCusto)}`)
+      const ehServico = origemEhServico(item)
       adicionar({
-        modulo: ehHonorario ? "honorario" : "financeiro",
+        // O financeiro sincronizado funciona como fallback quando o registro de
+        // ServiçoAvulso não for recuperado. A chave semântica acima impede que o
+        // mesmo serviço apareça duas vezes quando as duas fontes estiverem presentes.
+        modulo: ehServico ? "servico-cobranca" : (ehHonorario ? "honorario" : "financeiro"),
         categoria: ehHonorario ? "Honorário" : "Financeiro do escritório",
         clienteNome: item.cliente,
         clienteId: item.clienteId,
@@ -767,7 +778,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
         data: item.vencimento,
         valor: item.valor,
         prioridade: prioridadePorPrazo(dias, { vencido: ehHonorario ? 120 : 116, hoje: ehHonorario ? 110 : 106, futuro: 82, semData: 72 }),
-        pagina: "Financeiro",
+        pagina: ehServico ? "Clientes" : "Financeiro",
         referenciaId: item.id,
       })
     })
