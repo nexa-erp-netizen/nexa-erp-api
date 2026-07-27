@@ -42,8 +42,13 @@ function movimentoContabilAberto(item) {
 
 function servicoAbertoParaPrioridade(item) {
   const status = normalizar(item?.status)
-  if (/(recebid|pago|quitad|concluid|finalizad|cancelad|excluid|arquivad)/.test(status)) return false
-  return /(pendente|em aberto|a receber|aguardando|vencid|atrasad)/.test(status)
+  if (item?.dataRecebimento) return false
+  if (/(recebid|cancelad|excluid|arquivad)/.test(status)) return false
+
+  // Em Serviço e Cobrança, "Concluído"/"Pago" podem representar o serviço
+  // realizado, não o recebimento do escritório. A baixa financeira só ocorre
+  // com status Recebido (ou com dataRecebimento preenchida).
+  return true
 }
 
 function solicitacaoAbertaParaPrioridade(item) {
@@ -52,9 +57,26 @@ function solicitacaoAbertaParaPrioridade(item) {
   return /(pendente|em aberto|aguardando|recebid|nova|aberta)/.test(status)
 }
 
+function deduplicarFiscaisAbertos(itens) {
+  const chaves = new Set()
+  return itens.filter((item) => {
+    const chave = [
+      normalizar(item?.cliente),
+      normalizar(item?.obrigacao),
+      normalizar(item?.competencia),
+      String(item?.vencimento || "").slice(0, 10),
+    ].join("|")
+
+    if (chaves.has(chave)) return false
+    chaves.add(chave)
+    return true
+  })
+}
+
 module.exports = {
   financeiroAbertoParaPrioridade,
   movimentoContabilAberto,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
+  deduplicarFiscaisAbertos,
 }

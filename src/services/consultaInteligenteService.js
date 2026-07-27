@@ -11,6 +11,7 @@ const {
   financeiroAbertoParaPrioridade,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
+  deduplicarFiscaisAbertos,
 } = require("./pendenciaFiltersService")
 
 function normalizar(valor) {
@@ -671,8 +672,9 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     })
   }
 
-  fiscais
-    .filter((item) => nomes.has(normalizar(item.cliente)) && fiscalAbertoParaPrioridade(item))
+  deduplicarFiscaisAbertos(
+    fiscais.filter((item) => nomes.has(normalizar(item.cliente)) && fiscalAbertoParaPrioridade(item))
+  )
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
       adicionar({

@@ -6,6 +6,7 @@ const {
   movimentoContabilAberto,
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
+  deduplicarFiscaisAbertos,
 } = require("../src/services/pendenciaFiltersService")
 
 test("mantém honorário realmente pendente", () => {
@@ -87,14 +88,49 @@ test("mantém serviço realizado ainda não recebido", () => {
     descricao: "Serviço realizado para Matheus Barreto",
     status: "Pendente",
   }), true)
+  assert.equal(servicoAbertoParaPrioridade({
+    descricao: "Declaração MEI",
+    status: "Pago",
+    vencimento: "2026-07-10",
+    valorTotal: 180,
+    dataRecebimento: null,
+  }), true)
 })
 
 test("exclui serviço já recebido ou cancelado", () => {
   assert.equal(servicoAbertoParaPrioridade({ status: "Recebido" }), false)
+  assert.equal(servicoAbertoParaPrioridade({
+    status: "Pendente",
+    dataRecebimento: "2026-07-24",
+  }), false)
   assert.equal(servicoAbertoParaPrioridade({ status: "Cancelado" }), false)
 })
 
 test("mantém solicitação aberta e exclui solicitação encerrada", () => {
   assert.equal(solicitacaoAbertaParaPrioridade({ status: "Pendente" }), true)
   assert.equal(solicitacaoAbertaParaPrioridade({ status: "Concluída" }), false)
+})
+
+test("remove duplicidade da mesma obrigação fiscal", () => {
+  const fiscais = deduplicarFiscaisAbertos([
+    {
+      id: 22,
+      cliente: "Daiane",
+      obrigacao: "DAS",
+      competencia: "06/2026",
+      vencimento: "2026-07-20",
+      status: "Aguardando pagamento",
+    },
+    {
+      id: 21,
+      cliente: "Daiane",
+      obrigacao: "DAS",
+      competencia: "06/2026",
+      vencimento: "2026-07-20",
+      status: "Pendente",
+    },
+  ])
+
+  assert.equal(fiscais.length, 1)
+  assert.equal(fiscais[0].id, 22)
 })
