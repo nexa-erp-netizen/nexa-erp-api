@@ -9,7 +9,7 @@ const ServicoAvulso = require("../models/ServicoAvulso")
 const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
-const { detectarConsultaInteligente } = require("../services/consultaInteligenteService")
+const { detectarConsultaInteligente, responderConfirmacaoCliente } = require("../services/consultaInteligenteService")
 const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
   detectarPedidoMemoria,
@@ -1315,6 +1315,15 @@ async function salvarMensagemConversa({ conversa, usuarioId, autor, texto, dados
   return mensagem
 }
 
+async function ultimaConfirmacaoClientePendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.confirmacaoClientePendente || null
+}
+
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
   return {
     ...resposta,
@@ -2394,6 +2403,29 @@ async function conversar(req, res) {
         dados: selecaoResolvida,
       })
       return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
+    }
+
+    const confirmacaoCliente = await ultimaConfirmacaoClientePendente(conversa.id, req.usuario.id)
+    const confirmacaoResolvida = await responderConfirmacaoCliente({
+      confirmacao: confirmacaoCliente,
+      mensagem,
+      usuario: usuarioCompleto,
+    })
+    if (confirmacaoResolvida) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: confirmacaoResolvida.resposta,
+        dados: confirmacaoResolvida,
+      })
+      return res.json(anexarMetadadosConversa({
+        ...confirmacaoResolvida,
+        conversacionalV2: true,
+        atividade: "consulta",
+        provedor: "sistema",
+        modelo: "Nexa Confirmação Contextual 1.0",
+      }, conversa))
     }
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null

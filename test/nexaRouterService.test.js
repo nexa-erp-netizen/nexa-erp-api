@@ -4,6 +4,8 @@ const assert = require("node:assert/strict")
 const { classificarMensagemOperacional } = require("../src/services/nexaRouterService")
 
 const consultas = [
+  ["Preciso do CPF do cliente Hamilton", "cliente"],
+  ["Qual o telefone de Hamilton Michael dos Santos?", "cliente"],
   ["Quais são as prioridades de hoje?", "prioridades-hoje"],
   ["Iniciar meu dia", "prioridades-hoje"],
   ["Mostre todas as pendências.", "pendencias-gerais"],

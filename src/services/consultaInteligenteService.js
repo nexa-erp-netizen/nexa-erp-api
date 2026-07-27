@@ -132,7 +132,7 @@ function formatarMoeda(valor) {
   return Number(valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
 }
 
-function respostaConsulta({ resposta, fala = "", pontos = [], recomendacao = "", consulta }) {
+function respostaConsulta({ resposta, fala = "", pontos = [], recomendacao = "", consulta, ...metadados }) {
   return {
     resposta,
     ...(fala ? { fala } : {}),
@@ -143,6 +143,7 @@ function respostaConsulta({ resposta, fala = "", pontos = [], recomendacao = "",
     provedor: "sistema",
     modelo: "Nexa Consultas 4.2.2",
     consulta,
+    ...metadados,
     respondidoEm: new Date().toISOString(),
     aviso: "Consulta segura realizada. Nenhum dado foi alterado.",
   }
@@ -264,18 +265,20 @@ function consultaSolicitada(texto, cliente = null, clienteId = null) {
     || pedidoMensagensAbertas(texto)
     || pedidoDocumentosPendentes(texto)
   if (pedidoOperacionalDireto) return true
+  if (/(cpf|cnpj|telefone|celular|whatsapp|email|e-mail|enderec|cep|data de nascimento)/.test(texto)
+    && /(cliente|empresa|cadastro|\bdo\b|\bda\b)/.test(texto)) return true
 
   const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
   const referenciaSistema = /(na nexa|no sistema|cadastrad|registrad|lancad|meus? clientes?|minhas? pendencias?|do escritorio|da carteira|cliente selecionado|desse cliente|deste cliente)/.test(texto)
   const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao|devendo|\bdeve\b|quanto deve)/.test(texto)
-  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das|mensag|solicitac)/.test(texto)
+  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das|mensag|solicitac|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento)/.test(texto)
   const fraseEscritorio = /(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)
   const fraseAtencao = /(clientes?).*(atencao|prioridade|critico|pendenc)|precisam de atencao|precisa de atencao/.test(texto)
   const listaClientes = /(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes|meus? clientes?)/.test(texto)
   const clienteIdentificado = Boolean(cliente || clienteId)
   const dadoDoCliente = clienteIdentificado
     && verboConsulta
-    && /(como esta|situacao|resumo|dados|regime|ramo|cnpj|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia|mensag|solicitac)/.test(texto)
+    && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia|mensag|solicitac)/.test(texto)
 
   return fraseEscritorio || fraseAtencao || listaClientes || dadoDoCliente
     || (verboConsulta && objetoOperacional && (referenciaSistema || estadoOperacional))
@@ -296,8 +299,76 @@ function identificarIntencao(texto, cliente) {
   if (/(financeir|honor|cobranc|receber|pagar|inadimpl|valor pendente|pagament|devendo|\bdeve\b|quanto deve|o que deve|ainda deve)/.test(texto)) return "financeiro"
   if (/(fiscal|obrig|das|imposto|tribut|vencimento)/.test(texto)) return "fiscal"
   if (/(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes)/.test(texto)) return "clientes"
-  if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cnpj)/.test(texto)) return "cliente"
+  if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento)/.test(texto)) return "cliente"
   return null
+}
+
+function campoCadastroSolicitado(texto) {
+  texto = normalizar(texto)
+  if (/\bcpf\b/.test(texto)) return "cpf"
+  if (/\bcnpj\b/.test(texto)) return "cnpj"
+  if (/(telefone|celular|whatsapp)/.test(texto)) return "telefone"
+  if (/(e-mail|email)/.test(texto)) return "email"
+  if (/\bcep\b/.test(texto)) return "cep"
+  if (/(enderec|onde (?:ele|ela|o cliente|a cliente) mora)/.test(texto)) return "endereco"
+  if (/(data de nascimento|nascimento|aniversario)/.test(texto)) return "dataNascimento"
+  if (/(regime tributario|qual (?:e )?o regime|\bregime\b)/.test(texto)) return "regime"
+  if (/(ramo de atividade|atividade do cliente|\bramo\b)/.test(texto)) return "ramoAtividade"
+  return null
+}
+
+function nomeFoiInformadoPorCompleto(texto, cliente) {
+  const nome = normalizar(nomeCliente(cliente))
+  return Boolean(nome && texto.includes(nome))
+}
+
+function rotuloCampoCadastro(campo) {
+  return {
+    cpf: "CPF",
+    cnpj: "CNPJ",
+    telefone: "telefone",
+    email: "e-mail",
+    cep: "CEP",
+    endereco: "endereço",
+    dataNascimento: "data de nascimento",
+    regime: "regime tributário",
+    ramoAtividade: "ramo de atividade",
+  }[campo] || "dado solicitado"
+}
+
+function valorCampoCadastro(cliente, campo) {
+  if (campo !== "endereco") return cliente?.[campo] || null
+  const partes = [
+    cliente?.endereco,
+    cliente?.numero,
+    cliente?.complemento,
+    cliente?.bairro,
+    cliente?.cidade,
+    cliente?.estado,
+    cliente?.cep ? `CEP ${cliente.cep}` : null,
+  ].filter(Boolean)
+  return partes.length ? partes.join(", ") : null
+}
+
+function respostaDadoCadastral(cliente, campo) {
+  const nome = nomeCliente(cliente)
+  const rotulo = rotuloCampoCadastro(campo)
+  const valor = valorCampoCadastro(cliente, campo)
+  const resposta = valor
+    ? `O ${rotulo} de ${nome} é ${valor}.`
+    : `O ${rotulo} de ${nome} não está informado no cadastro.`
+  return respostaConsulta({
+    resposta,
+    consulta: {
+      tipo: "dado-cliente",
+      titulo: `Cadastro de ${nome}`,
+      resumo: resposta,
+      total: valor ? 1 : 0,
+      itens: valor ? [{ id: cliente.id, clienteId: cliente.id, cliente: nome, titulo: rotulo, detalhe: String(valor) }] : [],
+      paginaSugerida: "Clientes",
+      acaoSugerida: acaoPagina("Clientes", { id: cliente.id, nome }, "central-cliente"),
+    },
+  })
 }
 
 function nomesPermitidos(clientes) {
@@ -1198,6 +1269,31 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
     })
   }
 
+  const campoCadastro = campoCadastroSolicitado(texto)
+  if (campoCadastro && localizado.cliente) {
+    const clienteFoiConfirmado = Boolean(clienteId && String(clienteId) === String(localizado.cliente.id))
+    if (localizado.explicito && !clienteFoiConfirmado && !nomeFoiInformadoPorCompleto(texto, localizado.cliente)) {
+      const nome = nomeCliente(localizado.cliente)
+      return respostaConsulta({
+        resposta: `Seria ${nome}?`,
+        confirmacaoClientePendente: {
+          clienteId: localizado.cliente.id,
+          clienteNome: nome,
+          campo: campoCadastro,
+          pedidoOriginal: String(mensagem || "").trim(),
+        },
+        consulta: {
+          tipo: "confirmacao-cliente",
+          titulo: "Confirmar cliente",
+          resumo: `Confirme se o cliente é ${nome}.`,
+          total: 1,
+          itens: [{ id: localizado.cliente.id, clienteId: localizado.cliente.id, cliente: nome, titulo: nome }],
+        },
+      })
+    }
+    return respostaDadoCadastral(localizado.cliente, campoCadastro)
+  }
+
   const intencao = intencaoForcada || identificarIntencao(texto, localizado.cliente)
   if (!intencao) return null
 
@@ -1237,4 +1333,38 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   return null
 }
 
-module.exports = { detectarConsultaInteligente }
+async function responderConfirmacaoCliente({ confirmacao, mensagem, usuario }) {
+  if (!confirmacao || typeof confirmacao !== "object") return null
+  const texto = normalizar(mensagem).replace(/[.!?]+$/g, "").trim()
+  const confirmou = /^(sim|isso|correto|exato|exatamente|confirmo|confirmado|seria|e ele|e ela|esse|essa|pode|pode ser)$/.test(texto)
+  const negou = /^(nao|negativo|nao e|outro|outra|cancele|cancelar)$/.test(texto)
+  if (!confirmou && !negou) return null
+
+  if (negou) {
+    return respostaConsulta({
+      resposta: "Certo. Qual é o nome completo ou o código do cliente?",
+      confirmacaoClienteCancelada: true,
+      consulta: { tipo: "confirmacao-cliente-cancelada", titulo: "Informar outro cliente", resumo: "Aguardando identificação do cliente.", total: 0, itens: [] },
+    })
+  }
+
+  const clientes = await carregarClientes(usuario)
+  const cliente = clientes.find((item) => String(item.id) === String(confirmacao.clienteId))
+  if (!cliente) {
+    return respostaConsulta({
+      resposta: "Esse cliente não está mais disponível para consulta.",
+      confirmacaoClienteCancelada: true,
+      consulta: { tipo: "cliente-indisponivel", titulo: "Cliente indisponível", resumo: "Não foi possível concluir a consulta.", total: 0, itens: [] },
+    })
+  }
+
+  const campo = campoCadastroSolicitado(normalizar(confirmacao.pedidoOriginal)) || String(confirmacao.campo || "")
+  if (!campo) return null
+  return { ...respostaDadoCadastral(cliente, campo), confirmacaoClienteConcluida: true, clienteIdConfirmado: cliente.id }
+}
+
+module.exports = {
+  detectarConsultaInteligente,
+  responderConfirmacaoCliente,
+  campoCadastroSolicitado,
+}

@@ -10,6 +10,13 @@ function normalizar(valor) {
 
 const INTENCOES_CONSULTA = [
   {
+    intencao: "cliente",
+    padroes: [
+      /\b(?:cpf|cnpj|telefone|celular|whatsapp|e-mail|email|endereco|cep|data de nascimento) (?:do|da|de) (?:cliente |empresa )?[a-z]/,
+      /\b(?:preciso|quero|informe|mostre|consulte|procure|busque|qual|me passe|passe) (?:do |da |o |a )*(?:cpf|cnpj|telefone|celular|whatsapp|e-mail|email|endereco|cep|data de nascimento)\b/,
+    ],
+  },
+  {
     intencao: "prioridades-hoje",
     padroes: [
       /\b(iniciar (?:o|meu) dia)\b/,
