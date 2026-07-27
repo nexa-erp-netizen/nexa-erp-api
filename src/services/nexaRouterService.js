@@ -73,7 +73,7 @@ const INTENCOES_CONSULTA = [
 ]
 
 const VERBO_NAVEGACAO = /\b(abra|abre|abrir|acesse|acessar|entre|entrar|va|vai|volte|voltar|retorne|retornar|navegue|ir|me leve|mostre a tela)\b/
-const DESTINO_NAVEGACAO = /\b(dashboard|inicio|home|fiscal|financeiro|clientes?|central do cliente|servicos? e cobrancas?|servicos? avulsos?|movimentos?|lancamentos? contabeis?|documentos? digitais?|agenda|relatorios?|usuarios?|backup|sobre|portal do cliente)\b/
+const DESTINO_NAVEGACAO = /\b(dashboard|inicio|home|fiscal|financeiro|clientes?|central do cliente|cadastro (?:dele|dela|desse cliente|deste cliente|desse cliente|dessa empresa|desta empresa)|servicos? e cobrancas?|servicos? avulsos?|movimentos?|lancamentos? contabeis?|documentos? digitais?|agenda|relatorios?|usuarios?|backup|sobre|portal do cliente)\b/
 const CODIGO_CLIENTE = /\bcli[- ]?0*\d+\b/
 const REFERENCIA_CLIENTE = /\b(?:abra|abre|abrir|acesse|entre|entrar|va para|ir para)\s+(?:o cliente|a cliente|o cadastro de|a empresa)?\s*[a-z][a-z0-9 '&.-]{1,80}(?:\s+e\s+(?:abra|entre|va|acesse))?/
 

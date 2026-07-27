@@ -359,6 +359,8 @@ function respostaDadoCadastral(cliente, campo) {
     : `O ${rotulo} de ${nome} não está informado no cadastro.`
   return respostaConsulta({
     resposta,
+    clienteIdConfirmado: cliente.id,
+    clienteNomeConfirmado: nome,
     consulta: {
       tipo: "dado-cliente",
       titulo: `Cadastro de ${nome}`,

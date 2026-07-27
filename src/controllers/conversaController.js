@@ -570,7 +570,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
 
   const referenciaContextual = /(esse cliente|este cliente|o mesmo cliente|do mesmo cliente|desse cliente|deste cliente|cliente selecionado|essa empresa|esta empresa|a mesma empresa|da mesma empresa|dessa empresa|desta empresa|desta mesma empresa|dela|dele)/.test(texto)
   const clienteReferencia = localizado.cliente || (referenciaContextual ? clienteAtual : null)
-  const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*cliente|dados.*cliente)/.test(texto)
+  const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*(?:cliente|dele|dela|deste|desse|desta|dessa)|dados.*(?:cliente|dele|dela|deste|desse|desta|dessa))/.test(texto)
   const mencionaClienteSingular = contemPalavra(texto, "cliente")
 
   const paginaEncontrada = paginaEncontradaInicial
