@@ -8,6 +8,7 @@ const {
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
   deduplicarFiscaisAbertos,
+  deduplicarPendenciasOperacionais,
 } = require("../src/services/pendenciaFiltersService")
 
 test("mantém honorário realmente pendente", () => {
@@ -137,6 +138,39 @@ test("financeiro geral só acrescenta honorários e serviços do escritório", (
 test("mantém solicitação aberta e exclui solicitação encerrada", () => {
   assert.equal(solicitacaoAbertaParaPrioridade({ status: "Pendente" }), true)
   assert.equal(solicitacaoAbertaParaPrioridade({ status: "Concluída" }), false)
+})
+
+test("exclui prioridade automática que repete uma obrigação fiscal", () => {
+  assert.equal(solicitacaoAbertaParaPrioridade({
+    titulo: "Prioridade de Daiane Dallazen Vitor",
+    descricao: "DAS vencido há 7 dias",
+    origem: "Assistente do Dia",
+    status: "Pendente",
+  }), false)
+})
+
+test("unifica serviço e financeiro sincronizado da mesma cobrança", () => {
+  const itens = deduplicarPendenciasOperacionais([
+    {
+      clienteId: 5,
+      cliente: "Matheus Barreto",
+      titulo: "Declaração MEI",
+      valorNumero: 180,
+      data: "2026-07-10",
+      modulo: "servico-cobranca",
+    },
+    {
+      clienteId: 5,
+      cliente: "Matheus Barreto",
+      titulo: "2x Declaração MEI",
+      valorNumero: 180,
+      data: "2026-07-10",
+      modulo: "servico-cobranca",
+    },
+  ])
+
+  assert.equal(itens.length, 1)
+  assert.equal(itens[0].titulo, "Declaração MEI")
 })
 
 test("remove duplicidade da mesma obrigação fiscal", () => {

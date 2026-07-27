@@ -13,6 +13,7 @@ const {
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
   deduplicarFiscaisAbertos,
+  deduplicarPendenciasOperacionais,
 } = require("./pendenciaFiltersService")
 
 function normalizar(valor) {
@@ -790,7 +791,8 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
       })
     })
 
-  return itens.sort((a, b) => b.prioridade - a.prioridade || String(a.data || "9999").localeCompare(String(b.data || "9999")) || a.cliente.localeCompare(b.cliente))
+  return deduplicarPendenciasOperacionais(itens)
+    .sort((a, b) => b.prioridade - a.prioridade || String(a.data || "9999").localeCompare(String(b.data || "9999")) || a.cliente.localeCompare(b.cliente))
 }
 
 async function carregarNovidadesHoje(clientes, cliente = null) {
@@ -913,7 +915,10 @@ function agruparPendenciasPorCliente(itens) {
       const detalhes = grupo.itens.slice(0, 6).map((item) => {
         const valor = item.valor ? `, ${item.valor}` : ""
         const data = item.data ? `, ${item.status.toLowerCase()}` : ""
-        return `${item.titulo}${valor}${data}`
+        const pagamento = ["Financeiro do escritório", "Honorário"].includes(item.categoria)
+          ? "Pendência de pagamento: "
+          : ""
+        return `${pagamento}${item.titulo}${valor}${data}`
       })
       const extras = grupo.itens.length - detalhes.length
       return {

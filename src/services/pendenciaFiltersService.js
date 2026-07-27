@@ -72,7 +72,18 @@ function servicoAbertoParaPrioridade(item) {
 
 function solicitacaoAbertaParaPrioridade(item) {
   const status = normalizar(item?.status)
+  const texto = [
+    item?.titulo,
+    item?.categoria,
+    item?.descricao,
+    item?.mensagem,
+    item?.origem,
+  ].map(normalizar).join(" ")
+
   if (/(concluid|finalizad|cancelad|arquivad|atendid|resolvid)/.test(status)) return false
+  // Resumos/prioridades gerados pelo próprio Assistente do Dia são histórico
+  // de acompanhamento. A obrigação original já entra pela fonte Fiscal.
+  if (/(prioridade de|assistente do dia|prioridade principal)/.test(texto)) return false
   return /(pendente|em aberto|aguardando|recebid|nova|aberta)/.test(status)
 }
 
@@ -92,6 +103,40 @@ function deduplicarFiscaisAbertos(itens) {
   })
 }
 
+function tituloCanonicoPendencia(titulo) {
+  return normalizar(titulo)
+    .replace(/^\d+\s*x\s+/, "")
+    .replace(/^pendencia de pagamento\s*[-—:]\s*/, "")
+    .split("|")[0]
+    .replace(/\b(?:competencia\s*)?\d{2}\/\d{4}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function deduplicarPendenciasOperacionais(itens) {
+  const vistos = new Map()
+
+  for (const item of itens) {
+    const cliente = item.clienteId || normalizar(item.cliente)
+    const titulo = tituloCanonicoPendencia(item.titulo)
+    const valor = Number(item.valorNumero || 0).toFixed(2)
+    const data = String(item.data || "").slice(0, 10)
+    const chave = `${cliente}|${titulo}|${valor}|${data}`
+    const anterior = vistos.get(chave)
+
+    if (!anterior) {
+      vistos.set(chave, item)
+      continue
+    }
+
+    if (anterior.modulo === "financeiro" && item.modulo !== "financeiro") {
+      vistos.set(chave, item)
+    }
+  }
+
+  return [...vistos.values()]
+}
+
 module.exports = {
   financeiroAbertoParaPrioridade,
   financeiroDoEscritorioParaPrioridade,
@@ -99,4 +144,6 @@ module.exports = {
   servicoAbertoParaPrioridade,
   solicitacaoAbertaParaPrioridade,
   deduplicarFiscaisAbertos,
+  deduplicarPendenciasOperacionais,
+  tituloCanonicoPendencia,
 }
