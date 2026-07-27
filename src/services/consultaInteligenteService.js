@@ -8,6 +8,10 @@ const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
 const MovimentoCliente = require("../models/MovimentoCliente")
+const {
+  financeiroAbertoParaPrioridade,
+  movimentoContabilAberto,
+} = require("./pendenciaFiltersService")
 
 function normalizar(valor) {
   return String(valor || "")
@@ -596,18 +600,9 @@ function fiscalAbertoParaPrioridade(item) {
   return !encerrado(status) && !/(pago pelo escritorio|pago pelo escritório)/.test(status)
 }
 
-function financeiroAbertoParaPrioridade(item) {
-  return !encerrado(item?.status)
-}
-
 function servicoAbertoParaPrioridade(item) {
   const status = normalizar(item?.status)
   return !recebido(status) && !/(cancelad|excluid|arquivad)/.test(status)
-}
-
-function movimentoContabilAberto(item) {
-  const status = normalizar(item?.status)
-  return !status || status === "pendente" || /aguard/.test(status)
 }
 
 function prioridadePorPrazo(dias, { vencido = 110, hoje = 100, futuro = 80, semData = 65 } = {}) {
