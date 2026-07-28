@@ -7,6 +7,12 @@ const Cliente = sequelize.define("Cliente", {
     allowNull: false,
   },
 
+  ativo: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  },
+
   cpf: {
     type: DataTypes.STRING,
     allowNull: false,

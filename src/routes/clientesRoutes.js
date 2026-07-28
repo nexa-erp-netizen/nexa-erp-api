@@ -13,6 +13,7 @@ const router = express.Router()
 function limparDadosCliente(body) {
   return {
     ...body,
+    ativo: body.ativo !== false,
     dataNascimento: body.dataNascimento || null,
     email: body.email || null,
     cnpj: body.cnpj || null,
