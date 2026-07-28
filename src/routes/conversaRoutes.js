@@ -5,6 +5,7 @@ const {
   conversar,
   contexto,
   status,
+  painelDiario,
 } = require("../controllers/conversaController")
 const {
   listarConversas,
@@ -48,5 +49,6 @@ router.delete("/memorias/:id", autenticar, excluirMemoria)
 router.post("/", autenticar, conversar)
 router.post("/contexto", autenticar, contexto)
 router.get("/status", autenticar, status)
+router.get("/painel-diario", autenticar, painelDiario)
 
 module.exports = router

@@ -2214,6 +2214,29 @@ async function contexto(req, res) {
   }
 }
 
+async function painelDiario(req, res) {
+  try {
+    const usuario = await Usuario.findByPk(req.usuario.id)
+    if (!usuario) return res.status(401).json({ message: "Usuário não encontrado" })
+
+    const resultado = await detectarConsultaInteligente({
+      mensagem: "Quais são todas as prioridades de hoje?",
+      usuario,
+      intencaoForcada: "prioridades-hoje",
+    })
+
+    return res.json({
+      total: Number(resultado?.consulta?.total || 0),
+      itens: Array.isArray(resultado?.consulta?.itens) ? resultado.consulta.itens : [],
+      prioridadePrincipal: resultado?.consulta?.prioridadePrincipal || null,
+      geradoEm: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error("ERRO AO CARREGAR PAINEL DIÁRIO DA NEXA:", error)
+    return res.status(500).json({ message: "Erro ao carregar pendências do painel diário" })
+  }
+}
+
 async function conversar(req, res) {
   let conversa = null
 
@@ -2651,4 +2674,4 @@ async function conversar(req, res) {
     })
   }
 }
-module.exports = { conversar, contexto, status }
+module.exports = { conversar, contexto, status, painelDiario }
