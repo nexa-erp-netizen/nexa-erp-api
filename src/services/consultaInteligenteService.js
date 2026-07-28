@@ -28,6 +28,11 @@ function nomeCliente(cliente) {
   return cliente?.nome || cliente?.razaoSocial || cliente?.nomeFantasia || "Cliente"
 }
 
+function codigoCliente(cliente) {
+  const id = Number(cliente?.id)
+  return Number.isInteger(id) && id > 0 ? `CLI-${String(id).padStart(4, "0")}` : ""
+}
+
 function encerrado(status) {
   const texto = normalizar(status)
   return ["pago", "recebido", "concluido", "entregue", "quitado", "conferido", "finalizado", "cancelado", "arquivado"].includes(texto)
@@ -220,7 +225,17 @@ function localizarCliente(clientes, texto, clienteId) {
     .sort((a, b) => b.score - a.score)
 
   if (candidatos.length > 1 && candidatos[0].score === candidatos[1].score) {
-    return { ambiguo: true, cliente: null, explicito: true, atual }
+    const melhorScore = candidatos[0].score
+    return {
+      ambiguo: true,
+      cliente: null,
+      candidatos: candidatos
+        .filter((item) => item.score === melhorScore)
+        .map((item) => item.cliente)
+        .slice(0, 8),
+      explicito: true,
+      atual,
+    }
   }
 
   const encontrado = candidatos[0]?.cliente || null
@@ -1265,9 +1280,40 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   const localizado = localizarCliente(clientes, texto, clienteId)
   if (!intencaoForcada && !consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
   if (localizado.ambiguo) {
+    const campo = campoCadastroSolicitado(texto)
+    const candidatos = (localizado.candidatos || []).map((cliente, indice) => ({
+      id: cliente.id,
+      clienteId: cliente.id,
+      cliente: nomeCliente(cliente),
+      nome: nomeCliente(cliente),
+      codigo: codigoCliente(cliente),
+      titulo: `${indice + 1}. ${nomeCliente(cliente)}`,
+      detalhe: codigoCliente(cliente),
+    }))
+    const opcoes = candidatos
+      .slice(0, 4)
+      .map((item, indice) => `${indice + 1}) ${item.nome} (${item.codigo})`)
+      .join("; ")
+    const resposta = campo
+      ? `Encontrei mais de um cliente compatível: ${opcoes}. Qual deles?`
+      : `Encontrei mais de um cliente compatível: ${opcoes}. Informe o nome completo ou o código do cliente.`
     return respostaConsulta({
-      resposta: "Encontrei mais de um cliente compatível. Informe o nome completo ou o código do cliente.",
-      consulta: { tipo: "cliente-ambiguo", titulo: "Cliente não identificado", resumo: "Preciso de um nome mais específico.", total: 0, itens: [] },
+      resposta,
+      ...(campo ? {
+        confirmacaoClientePendente: {
+          tipo: "selecao",
+          candidatos: candidatos.map(({ id, nome, codigo }) => ({ id, nome, codigo })),
+          campo,
+          pedidoOriginal: String(mensagem || "").trim(),
+        },
+      } : {}),
+      consulta: {
+        tipo: "cliente-ambiguo",
+        titulo: "Escolher cliente",
+        resumo: "Selecione o cliente correto antes de consultar o cadastro.",
+        total: candidatos.length,
+        itens: candidatos,
+      },
     })
   }
 
@@ -1340,9 +1386,76 @@ async function responderConfirmacaoCliente({ confirmacao, mensagem, usuario }) {
   const texto = normalizar(mensagem).replace(/[.!?]+$/g, "").trim()
   const confirmou = /^(sim|isso|correto|exato|exatamente|confirmo|confirmado|seria|e ele|e ela|esse|essa|pode|pode ser)$/.test(texto)
   const negou = /^(nao|negativo|nao e|outro|outra|cancele|cancelar)$/.test(texto)
-  if (!confirmou && !negou) return null
+  const candidatosPendentes = Array.isArray(confirmacao.candidatos)
+    ? confirmacao.candidatos
+      .map((item) => ({ id: Number(item?.id), nome: String(item?.nome || ""), codigo: String(item?.codigo || "") }))
+      .filter((item) => Number.isInteger(item.id) && item.id > 0)
+    : []
+  const ehSelecao = confirmacao.tipo === "selecao" && candidatosPendentes.length > 1
 
-  if (negou) {
+  let clienteSelecionadoId = null
+  if (ehSelecao) {
+    const ordinal = texto.match(/\b(?:o|a)?\s*(primeir[oa]|segund[oa]|terceir[oa]|quart[oa])\b/)
+    const porOrdinal = ordinal
+      ? { primeiro: 0, primeira: 0, segundo: 1, segunda: 1, terceiro: 2, terceira: 2, quarto: 3, quarta: 3 }[ordinal[1]]
+      : null
+    const codigo = texto.match(/\bcli\s*[-#]?\s*0*(\d+)\b/)
+      || texto.match(/\b(?:codigo|id)\s*(?:do cliente)?\s*#?\s*0*(\d+)\b/)
+    if (codigo) {
+      const id = Number(codigo[1])
+      if (candidatosPendentes.some((item) => item.id === id)) clienteSelecionadoId = id
+    } else if (porOrdinal !== null && candidatosPendentes[porOrdinal]) {
+      clienteSelecionadoId = candidatosPendentes[porOrdinal].id
+    } else if (/^(o outro|a outra|outro cliente|outra cliente)$/.test(texto) && candidatosPendentes.length === 2) {
+      clienteSelecionadoId = candidatosPendentes[1].id
+    } else {
+      const porNome = candidatosPendentes.map((item) => {
+        const nome = normalizar(item.nome)
+        const pontos = texto.includes(nome)
+          ? 1000 + nome.length
+          : nome.split(/\s+/).reduce((total, parte) => total + (parte.length >= 4 && texto.includes(parte) ? parte.length : 0), 0)
+        return { id: item.id, pontos }
+      }).filter((item) => item.pontos > 0).sort((a, b) => b.pontos - a.pontos)
+      if (porNome.length && (porNome.length === 1 || porNome[0].pontos > porNome[1].pontos)) {
+        clienteSelecionadoId = porNome[0].id
+      }
+    }
+
+    if (!clienteSelecionadoId) {
+      if (/^(nao|nenhum|nenhuma|cancele|cancelar)$/.test(texto)) {
+        return respostaConsulta({
+          resposta: "Certo. Qual é o nome completo ou o código do cliente?",
+          confirmacaoClienteCancelada: true,
+          consulta: { tipo: "confirmacao-cliente-cancelada", titulo: "Informar outro cliente", resumo: "Aguardando identificação do cliente.", total: 0, itens: [] },
+        })
+      }
+      const opcoes = candidatosPendentes
+        .slice(0, 4)
+        .map((item, indice) => `${indice + 1}) ${item.nome} (${item.codigo || codigoCliente(item)})`)
+        .join("; ")
+      return respostaConsulta({
+        resposta: `Não consegui identificar qual deles. Diga “o primeiro”, “o segundo”, o nome completo ou o código: ${opcoes}.`,
+        confirmacaoClientePendente: confirmacao,
+        consulta: {
+          tipo: "cliente-ambiguo",
+          titulo: "Escolher cliente",
+          resumo: "Aguardando uma opção sem ambiguidade.",
+          total: candidatosPendentes.length,
+          itens: candidatosPendentes.map((item, indice) => ({
+            id: item.id,
+            clienteId: item.id,
+            cliente: item.nome,
+            titulo: `${indice + 1}. ${item.nome}`,
+            detalhe: item.codigo,
+          })),
+        },
+      })
+    }
+  } else if (!confirmou && !negou) {
+    return null
+  }
+
+  if (!ehSelecao && negou) {
     return respostaConsulta({
       resposta: "Certo. Qual é o nome completo ou o código do cliente?",
       confirmacaoClienteCancelada: true,
@@ -1351,7 +1464,9 @@ async function responderConfirmacaoCliente({ confirmacao, mensagem, usuario }) {
   }
 
   const clientes = await carregarClientes(usuario)
-  const cliente = clientes.find((item) => String(item.id) === String(confirmacao.clienteId))
+  const idConfirmado = clienteSelecionadoId || Number(confirmacao.clienteId)
+  const idsPermitidos = ehSelecao ? new Set(candidatosPendentes.map((item) => item.id)) : null
+  const cliente = clientes.find((item) => Number(item.id) === idConfirmado && (!idsPermitidos || idsPermitidos.has(Number(item.id))))
   if (!cliente) {
     return respostaConsulta({
       resposta: "Esse cliente não está mais disponível para consulta.",
@@ -1362,7 +1477,12 @@ async function responderConfirmacaoCliente({ confirmacao, mensagem, usuario }) {
 
   const campo = campoCadastroSolicitado(normalizar(confirmacao.pedidoOriginal)) || String(confirmacao.campo || "")
   if (!campo) return null
-  return { ...respostaDadoCadastral(cliente, campo), confirmacaoClienteConcluida: true, clienteIdConfirmado: cliente.id }
+  return {
+    ...respostaDadoCadastral(cliente, campo),
+    confirmacaoClienteConcluida: true,
+    clienteIdConfirmado: cliente.id,
+    clienteNomeConfirmado: nomeCliente(cliente),
+  }
 }
 
 module.exports = {
