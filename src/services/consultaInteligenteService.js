@@ -7,6 +7,7 @@ const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
+const { consultarDocumentos, parecePedidoDeLeitura } = require("./leituraDocumentosService")
 const {
   financeiroAbertoParaPrioridade,
   financeiroDoEscritorioParaPrioridade,
@@ -200,7 +201,8 @@ function ordenarData(itens, campo) {
 }
 
 async function carregarClientes(usuario) {
-  let clientes = await Cliente.findAll({ order: [["nome", "ASC"]] })
+  const where = usuario?.empresaId ? { empresaId: usuario.empresaId } : {}
+  let clientes = await Cliente.findAll({ where, order: [["nome", "ASC"]] })
   if (usuario?.perfil === "Cliente" && usuario?.clienteVinculado) {
     const permitido = normalizar(usuario.clienteVinculado)
     clientes = clientes.filter((cliente) => normalizar(nomeCliente(cliente)) === permitido)
@@ -1315,6 +1317,10 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
         itens: candidatos,
       },
     })
+  }
+
+  if (localizado.cliente && parecePedidoDeLeitura(mensagem)) {
+    return consultarDocumentos({ mensagem, cliente: localizado.cliente })
   }
 
   const campoCadastro = campoCadastroSolicitado(texto)
