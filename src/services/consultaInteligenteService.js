@@ -7,7 +7,7 @@ const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
-const { consultarDocumentos, parecePedidoDeLeitura } = require("./leituraDocumentosService")
+const { consultarDocumentosComDrive, parecePedidoDeLeitura } = require("./leituraDocumentosService")
 const {
   financeiroAbertoParaPrioridade,
   financeiroDoEscritorioParaPrioridade,
@@ -1320,7 +1320,7 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   }
 
   if (localizado.cliente && parecePedidoDeLeitura(mensagem)) {
-    return consultarDocumentos({ mensagem, cliente: localizado.cliente })
+    return consultarDocumentosComDrive({ mensagem, cliente: localizado.cliente, usuarioId: usuario?.id })
   }
 
   const campoCadastro = campoCadastroSolicitado(texto)

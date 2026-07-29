@@ -28,6 +28,8 @@ const CertificadoDigital = require("./src/models/CertificadoDigital")
 const ProcuracaoEcac = require("./src/models/ProcuracaoEcac")
 const HistoricoEcac = require("./src/models/HistoricoEcac")
 const VocabularioVozNexa = require("./src/models/VocabularioVozNexa")
+const GoogleDriveConexao = require("./src/models/GoogleDriveConexao")
+const GoogleDrivePastaCliente = require("./src/models/GoogleDrivePastaCliente")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
@@ -57,6 +59,7 @@ const memoriaRoutes = require("./src/routes/memoriaRoutes")
 const recomendacoesRoutes = require("./src/routes/recomendacoesRoutes")
 const consultoriaTributariaRoutes = require("./src/routes/consultoriaTributariaRoutes")
 const conversaRoutes = require("./src/routes/conversaRoutes")
+const googleDriveRoutes = require("./src/routes/googleDriveRoutes")
 
 const app = express()
 
@@ -103,6 +106,7 @@ app.use("/memoria", memoriaRoutes)
 app.use("/recomendacoes", recomendacoesRoutes)
 app.use("/consultoria-tributaria", consultoriaTributariaRoutes)
 app.use("/conversa", conversaRoutes)
+app.use("/google-drive", googleDriveRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {

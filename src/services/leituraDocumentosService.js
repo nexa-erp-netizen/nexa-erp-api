@@ -1,6 +1,8 @@
 const path = require("path")
 const supabase = require("../config/supabase")
 const DocumentoDigital = require("../models/DocumentoDigital")
+const GoogleDrivePastaCliente = require("../models/GoogleDrivePastaCliente")
+const { listarArquivosDaPasta, baixarArquivoDrive } = require("./googleDriveService")
 
 const BUCKET = "nexa-anexos"
 const LIMITE_ARQUIVO = 12 * 1024 * 1024
@@ -193,9 +195,103 @@ async function consultarDocumentos({ mensagem, cliente }) {
   }
 }
 
+async function consultarDrive({ mensagem, cliente, usuarioId }) {
+  if (!usuarioId) return null
+  const vinculo = await GoogleDrivePastaCliente.findOne({
+    where: { usuarioId, clienteId: cliente.id },
+  })
+  if (!vinculo) return null
+
+  const palavras = palavrasBusca(mensagem)
+  const arquivos = await listarArquivosDaPasta(usuarioId, vinculo.pastaDriveId, 200)
+  const candidatos = arquivos
+    .map((arquivo) => ({
+      arquivo,
+      pontos: palavras.reduce((total, palavra) => total + (normalizar(arquivo.name).includes(palavra) ? 1 : 0), 0),
+    }))
+    .sort((a, b) => b.pontos - a.pontos)
+    .slice(0, 15)
+
+  const formatosIgnorados = []
+  for (const candidato of candidatos) {
+    try {
+      if (Number(candidato.arquivo.size || 0) > LIMITE_ARQUIVO) continue
+      const { buffer, nome } = await baixarArquivoDrive(usuarioId, candidato.arquivo)
+      const texto = await extrairTexto(buffer, nome)
+      const dado = localizarDado(texto, mensagem)
+      const trecho = trechoRelevante(texto, mensagem)
+      if (!dado && !trecho) continue
+
+      const resposta = dado
+        ? `Encontrei o ${dado.tipo} no arquivo “${candidato.arquivo.name}” do Google Drive: ${dado.valor}.`
+        : `Encontrei esta informação no arquivo “${candidato.arquivo.name}” do Google Drive: ${trecho}`
+      return {
+        resposta,
+        fala: dado ? `Encontrei no Google Drive. O ${dado.tipo} é ${dado.valor}.` : `Encontrei a informação no Google Drive.`,
+        pontos: [{ titulo: "Fonte no Google Drive", detalhe: candidato.arquivo.name, status: vinculo.pastaDriveNome }],
+        recomendacao: "",
+        fundamentos: [`Conteúdo lido no arquivo “${candidato.arquivo.name}”, dentro da pasta vinculada a ${cliente.nome}.`],
+        modo: "leitura-google-drive",
+        provedor: "sistema",
+        modelo: "Nexa Drive 1.0",
+        clienteIdConfirmado: cliente.id,
+        clienteNomeConfirmado: cliente.nome,
+        consulta: {
+          tipo: "conteudo-documento-drive",
+          titulo: "Leitura no Google Drive",
+          resumo: resposta,
+          total: 1,
+          itens: [{
+            id: candidato.arquivo.id,
+            clienteId: cliente.id,
+            cliente: cliente.nome,
+            titulo: candidato.arquivo.name,
+            detalhe: trecho || dado?.valor,
+            url: candidato.arquivo.webViewLink,
+          }],
+          fonte: { arquivoId: candidato.arquivo.id, nome: candidato.arquivo.name, url: candidato.arquivo.webViewLink },
+        },
+        respondidoEm: new Date().toISOString(),
+        aviso: "Consulta somente leitura. Nenhum arquivo do Drive foi alterado.",
+      }
+    } catch (error) {
+      if (/Formato ainda não compatível/.test(error.message)) formatosIgnorados.push(candidato.arquivo.name)
+      else console.warn("NEXA_LEITURA_DRIVE:", candidato.arquivo.name, error.message)
+    }
+  }
+
+  return {
+    resposta: `Não encontrei essa informação nos arquivos legíveis da pasta “${vinculo.pastaDriveNome}”.${formatosIgnorados.length ? " Alguns arquivos precisam de OCR." : ""}`,
+    pontos: [],
+    recomendacao: "",
+    fundamentos: [`A Nexa pesquisou somente a pasta do Google Drive vinculada a ${cliente.nome}.`],
+    modo: "leitura-google-drive",
+    provedor: "sistema",
+    modelo: "Nexa Drive 1.0",
+    clienteIdConfirmado: cliente.id,
+    clienteNomeConfirmado: cliente.nome,
+    consulta: { tipo: "conteudo-documento-drive", titulo: "Leitura no Google Drive", resumo: "Informação não encontrada.", total: 0, itens: [] },
+    respondidoEm: new Date().toISOString(),
+    aviso: "Consulta somente leitura. Nenhum arquivo do Drive foi alterado.",
+  }
+}
+
+async function consultarDocumentosComDrive({ mensagem, cliente, usuarioId }) {
+  const local = await consultarDocumentos({ mensagem, cliente })
+  if (local?.consulta?.total) return local
+  try {
+    const drive = await consultarDrive({ mensagem, cliente, usuarioId })
+    return drive || local
+  } catch (error) {
+    console.warn("NEXA_DRIVE_INDISPONIVEL:", error.message)
+    return local
+  }
+}
+
 module.exports = {
   parecePedidoDeLeitura,
   consultarDocumentos,
+  consultarDocumentosComDrive,
   extrairTexto,
   localizarDado,
 }
