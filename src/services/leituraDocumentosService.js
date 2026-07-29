@@ -23,6 +23,14 @@ function parecePedidoDeLeitura(mensagem) {
   return mencionaDocumento && querConteudo
 }
 
+function parecePedidoDeListagem(mensagem) {
+  const texto = normalizar(mensagem)
+  const mencionaArquivo = /(document|arquivo|anexo|pdf|imagem|foto)/.test(texto)
+  const pedeLista = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|disponiveis)/.test(texto)
+  const pedeDadoInterno = /(cpf|cnpj|faturamento|receita|valor|endereco|conteudo|consta|informado|leia|extraia)/.test(texto)
+  return mencionaArquivo && pedeLista && !pedeDadoInterno
+}
+
 function anexosDoDocumento(documento) {
   const dados = documento?.toJSON ? documento.toJSON() : documento
   const anexos = Array.isArray(dados?.anexos) ? dados.anexos : []
@@ -204,6 +212,58 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
 
   const palavras = palavrasBusca(mensagem)
   const arquivos = await listarArquivosDaPasta(usuarioId, vinculo.pastaDriveId, 200)
+
+  if (parecePedidoDeListagem(mensagem)) {
+    const ordenados = [...arquivos].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "pt-BR", { sensitivity: "base" })
+    )
+    const nomes = ordenados.map((arquivo) => arquivo.name)
+    const total = nomes.length
+    const limiteResposta = 40
+    const nomesVisiveis = nomes.slice(0, limiteResposta)
+    const restante = Math.max(0, total - nomesVisiveis.length)
+    const lista = nomesVisiveis.map((nome) => `• ${nome}`).join("\n")
+    const complemento = restante ? `\n• ... e mais ${restante} arquivo${restante === 1 ? "" : "s"}.` : ""
+    const resposta = total
+      ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta “${vinculo.pastaDriveNome}”:\n${lista}${complemento}`
+      : `A pasta “${vinculo.pastaDriveNome}” está vinculada, mas não contém arquivos.`
+
+    return {
+      resposta,
+      fala: total
+        ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta do Google Drive.`
+        : "A pasta vinculada do Google Drive não contém arquivos.",
+      pontos: ordenados.slice(0, 12).map((arquivo) => ({
+        titulo: arquivo.name,
+        detalhe: "Google Drive",
+        status: vinculo.pastaDriveNome,
+      })),
+      recomendacao: "",
+      fundamentos: [`Listagem somente leitura da pasta do Google Drive vinculada a ${cliente.nome}.`],
+      modo: "listagem-google-drive",
+      provedor: "sistema",
+      modelo: "Nexa Drive 1.0",
+      clienteIdConfirmado: cliente.id,
+      clienteNomeConfirmado: cliente.nome,
+      consulta: {
+        tipo: "lista-documentos-drive",
+        titulo: "Documentos no Google Drive",
+        resumo: resposta,
+        total,
+        itens: ordenados.map((arquivo) => ({
+          id: arquivo.id,
+          clienteId: cliente.id,
+          cliente: cliente.nome,
+          titulo: arquivo.name,
+          detalhe: arquivo.mimeType,
+          url: arquivo.webViewLink,
+        })),
+      },
+      respondidoEm: new Date().toISOString(),
+      aviso: "Consulta somente leitura. Nenhum arquivo do Drive foi alterado.",
+    }
+  }
+
   const candidatos = arquivos
     .map((arquivo) => ({
       arquivo,
@@ -290,6 +350,7 @@ async function consultarDocumentosComDrive({ mensagem, cliente, usuarioId }) {
 
 module.exports = {
   parecePedidoDeLeitura,
+  parecePedidoDeListagem,
   consultarDocumentos,
   consultarDocumentosComDrive,
   extrairTexto,
