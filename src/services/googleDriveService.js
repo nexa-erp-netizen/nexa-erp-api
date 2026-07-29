@@ -78,12 +78,14 @@ async function salvarAutorizacao({ usuarioId, code }) {
   }
 
   client.setCredentials(tokens)
-  const oauth2 = google.oauth2({ version: "v2", auth: client })
-  const { data: perfil } = await oauth2.userinfo.get()
+  const drive = google.drive({ version: "v3", auth: client })
+  const { data: perfilDrive } = await drive.about.get({
+    fields: "user(emailAddress)",
+  })
 
   const [conexao] = await GoogleDriveConexao.upsert({
     usuarioId,
-    emailGoogle: perfil.email || null,
+    emailGoogle: perfilDrive.user?.emailAddress || null,
     refreshTokenCriptografado: criptografar(tokens.refresh_token),
     conectadoEm: new Date(),
   }, { returning: true })
