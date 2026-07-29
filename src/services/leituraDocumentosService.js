@@ -37,7 +37,9 @@ function parecePedidoAoGoogleDrive(mensagem) {
   const mencionaPasta = /\bpasta\b/.test(texto)
   const mencionaDocumento = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante)/.test(texto)
   const pedeAcao = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|procure|pesquise|leia|encontre|extraia|consta|informado|qual|quanto)/.test(texto)
-  return (mencionaDrive || mencionaPasta) && mencionaDocumento && pedeAcao
+  return mencionaDocumento
+    && pedeAcao
+    && (mencionaDrive || mencionaPasta || parecePedidoDeLeitura(mensagem) || parecePedidoDeListagem(mensagem))
 }
 
 function anexosDoDocumento(documento) {
