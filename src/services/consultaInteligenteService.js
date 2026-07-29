@@ -1482,7 +1482,29 @@ async function responderConfirmacaoCliente({ confirmacao, mensagem, usuario }) {
   }
 
   const campo = campoCadastroSolicitado(normalizar(confirmacao.pedidoOriginal)) || String(confirmacao.campo || "")
-  if (!campo) return null
+  if (!campo) {
+    const pedidoOriginal = normalizar(confirmacao.pedidoOriginal)
+    const pediuAbrirCliente = /^(?:abra|abre|abrir|acesse|acessar|entre|entrar|mostre|mostrar|exiba|ver)\b/.test(pedidoOriginal)
+      && /\b(?:cliente|cadastro|central)\b/.test(pedidoOriginal)
+
+    if (!pediuAbrirCliente) return null
+
+    return respostaConsulta({
+      resposta: `Cliente ${nomeCliente(cliente)} aberto.`,
+      fala: `Certo, abri ${nomeCliente(cliente)}.`,
+      acao: {
+        tipo: "navegar",
+        pagina: "Clientes",
+        alvo: "central-cliente",
+        secao: "",
+        segura: true,
+        cliente: { id: cliente.id, nome: nomeCliente(cliente) },
+      },
+      confirmacaoClienteConcluida: true,
+      clienteIdConfirmado: cliente.id,
+      clienteNomeConfirmado: nomeCliente(cliente),
+    })
+  }
   return {
     ...respostaDadoCadastral(cliente, campo),
     confirmacaoClienteConcluida: true,
