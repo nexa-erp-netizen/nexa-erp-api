@@ -12,6 +12,10 @@ const MensagemNexa = require("../models/MensagemNexa")
 const { detectarConsultaInteligente, responderConfirmacaoCliente } = require("../services/consultaInteligenteService")
 const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
+  consultarDocumentosComDrive,
+  parecePedidoAoGoogleDrive,
+} = require("../services/leituraDocumentosService")
+const {
   detectarPedidoMemoria,
   registrarMemoria,
   esquecerMemoria,
@@ -2453,6 +2457,42 @@ async function conversar(req, res) {
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
     const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
+
+    if (clienteAtualBanco && parecePedidoAoGoogleDrive(mensagem)) {
+      const resultadoDrive = await consultarDocumentosComDrive({
+        mensagem,
+        cliente: clienteAtualBanco,
+        usuarioId: req.usuario.id,
+      })
+
+      const respostaDrive = resultadoDrive || {
+        resposta: `O cliente ${nomeCliente(clienteAtualBanco)} está aberto, mas ainda não possui uma pasta do Google Drive vinculada.`,
+        pontos: [],
+        recomendacao: "Vincule a pasta em Configurações → Google Drive.",
+        fundamentos: ["A consulta foi direcionada obrigatoriamente à integração do Google Drive."],
+        modo: "google-drive-sem-vinculo",
+        provedor: "sistema",
+        modelo: "Nexa Drive 1.1",
+        clienteIdConfirmado: clienteAtualBanco.id,
+        clienteNomeConfirmado: nomeCliente(clienteAtualBanco),
+        respondidoEm: new Date().toISOString(),
+        aviso: "Nenhuma resposta genérica de IA foi utilizada.",
+      }
+
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaDrive.resposta,
+        dados: respostaDrive,
+      })
+      return res.json(anexarMetadadosConversa({
+        ...respostaDrive,
+        conversacionalV2: true,
+        atividade: "consulta",
+      }, conversa))
+    }
+
     const decisaoOperacional = classificarMensagemOperacional(mensagem)
     const fluxoOperacionalDeterministico = Boolean(decisaoOperacional)
       || mensagemOperacionalDeterministica(mensagem)

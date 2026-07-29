@@ -31,6 +31,15 @@ function parecePedidoDeListagem(mensagem) {
   return mencionaArquivo && pedeLista && !pedeDadoInterno
 }
 
+function parecePedidoAoGoogleDrive(mensagem) {
+  const texto = normalizar(mensagem)
+  const mencionaDrive = /\bgoogle\s*drive\b|\bdrive\b/.test(texto)
+  const mencionaPasta = /\bpasta\b/.test(texto)
+  const mencionaDocumento = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante)/.test(texto)
+  const pedeAcao = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|procure|pesquise|leia|encontre|extraia|consta|informado|qual|quanto)/.test(texto)
+  return (mencionaDrive || mencionaPasta) && mencionaDocumento && pedeAcao
+}
+
 function anexosDoDocumento(documento) {
   const dados = documento?.toJSON ? documento.toJSON() : documento
   const anexos = Array.isArray(dados?.anexos) ? dados.anexos : []
@@ -351,6 +360,7 @@ async function consultarDocumentosComDrive({ mensagem, cliente, usuarioId }) {
 module.exports = {
   parecePedidoDeLeitura,
   parecePedidoDeListagem,
+  parecePedidoAoGoogleDrive,
   consultarDocumentos,
   consultarDocumentosComDrive,
   extrairTexto,
