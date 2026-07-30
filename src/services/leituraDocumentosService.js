@@ -34,7 +34,7 @@ function parecePedidoDeListagem(mensagem) {
 function parecePedidoDeAbertura(mensagem) {
   const texto = normalizar(mensagem)
   const querAbrir = /\b(abra|abre|abrir|visualize|visualizar|veja|ver|exiba|exibir|mostre|mostrar)\b/.test(texto)
-  const mencionaArquivo = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia)/.test(texto)
+  const mencionaArquivo = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia|\brg\b|\bcpf\b|\bcnh\b|identidade|habilitacao)/.test(texto)
   return querAbrir && mencionaArquivo
 }
 
@@ -42,7 +42,7 @@ function parecePedidoAoGoogleDrive(mensagem) {
   const texto = normalizar(mensagem)
   const mencionaDrive = /\bgoogle\s*drive\b|\bdrive\b/.test(texto)
   const mencionaPasta = /\bpasta\b/.test(texto)
-  const mencionaDocumento = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia)/.test(texto)
+  const mencionaDocumento = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia|\brg\b|\bcpf\b|\bcnh\b|identidade|habilitacao)/.test(texto)
   const pedeAcao = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|procure|pesquise|leia|encontre|extraia|consta|informado|qual|quanto|abra|abre|abrir|visualize|visualizar|veja|ver|exiba|exibir)/.test(texto)
   return mencionaDocumento
     && pedeAcao
@@ -124,6 +124,62 @@ function palavrasBusca(mensagem) {
   return normalizar(mensagem)
     .split(/[^a-z0-9]+/)
     .filter((palavra) => palavra.length >= 4 && !ignorar.has(palavra))
+}
+
+function tokensNomeArquivo(nome) {
+  return new Set(
+    normalizar(nome)
+      .replace(/\.[a-z0-9]{1,8}$/i, "")
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  )
+}
+
+function termosBuscaAbertura(mensagem, cliente) {
+  const texto = normalizar(mensagem)
+  const palavrasCliente = new Set(
+    normalizar(cliente?.nome || cliente?.razaoSocial || cliente?.nomeFantasia)
+      .split(/[^a-z0-9]+/)
+      .filter((palavra) => palavra.length >= 2),
+  )
+  const ignorar = new Set([
+    "abra", "abre", "abrir", "visualize", "visualizar", "veja", "ver", "exiba",
+    "exibir", "mostre", "mostrar", "documento", "documentos", "arquivo", "arquivos",
+    "pdf", "cliente", "dele", "dela", "do", "da", "de", "em",
+  ])
+
+  const termos = texto
+    .split(/[^a-z0-9]+/)
+    .filter((palavra) => palavra.length >= 2 && !ignorar.has(palavra) && !palavrasCliente.has(palavra))
+
+  if (/\brg\b/.test(texto)) termos.push("rg", "identidade")
+  if (/\bcnh\b/.test(texto)) termos.push("cnh", "habilitacao")
+  if (/\bcpf\b/.test(texto)) termos.push("cpf")
+
+  return [...new Set(termos)]
+}
+
+function pontuarArquivoParaAbertura(arquivo, mensagem, cliente) {
+  const texto = normalizar(mensagem)
+  const nome = normalizar(arquivo.name)
+  const tokens = tokensNomeArquivo(arquivo.name)
+  const termos = termosBuscaAbertura(mensagem, cliente)
+  let pontos = termos.reduce((total, termo) => {
+    if (tokens.has(termo)) return total + 10
+    if (termo.length >= 4 && nome.includes(termo)) return total + 3
+    return total
+  }, 0)
+
+  if (/\brg\b/.test(texto) && (tokens.has("rg") || tokens.has("identidade"))) pontos += 30
+  if (/\bcnh\b/.test(texto) && (tokens.has("cnh") || tokens.has("habilitacao"))) pontos += 30
+  if (/\bcpf\b/.test(texto) && tokens.has("cpf")) pontos += 30
+
+  const querPdf = /\bpdf\b/.test(texto)
+  const ehPdf = String(arquivo.mimeType || "").toLowerCase() === "application/pdf"
+    || /\.pdf$/i.test(String(arquivo.name || ""))
+  if (querPdf) pontos += ehPdf ? 12 : -20
+
+  return pontos
 }
 
 function trechoRelevante(texto, mensagem) {
@@ -228,17 +284,13 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
   })
   if (!vinculo) return null
 
-  const palavras = palavrasBusca(mensagem)
   const arquivos = await listarArquivosDaPasta(usuarioId, vinculo.pastaDriveId, 200)
 
   if (parecePedidoDeAbertura(mensagem)) {
     const candidatosAbertura = arquivos
       .map((arquivo) => ({
         arquivo,
-        pontos: palavras.reduce(
-          (total, palavra) => total + (normalizar(arquivo.name).includes(palavra) ? 1 : 0),
-          0,
-        ),
+        pontos: pontuarArquivoParaAbertura(arquivo, mensagem, cliente),
       }))
       .sort((a, b) => b.pontos - a.pontos)
     const melhor = candidatosAbertura.find((item) => item.pontos > 0 && item.arquivo.webViewLink)
