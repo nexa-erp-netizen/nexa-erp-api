@@ -315,8 +315,8 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
 
     const arquivo = melhor.arquivo
     return {
-      resposta: `Abri o documento “${arquivo.name}” em uma nova guia.`,
-      fala: "Documento aberto.",
+      resposta: `Localizei o documento “${arquivo.name}”.`,
+      fala: "Documento localizado.",
       pontos: [{ titulo: arquivo.name, detalhe: "Google Drive", status: vinculo.pastaDriveNome }],
       recomendacao: "",
       fundamentos: [`Arquivo localizado na pasta do Google Drive vinculada a ${cliente.nome}.`],
@@ -334,7 +334,7 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
       consulta: {
         tipo: "abrir-documento-drive",
         titulo: "Abrir documento",
-        resumo: `Documento “${arquivo.name}” aberto.`,
+        resumo: `Documento “${arquivo.name}” localizado para abertura.`,
         total: 1,
         itens: [{
           id: arquivo.id,
