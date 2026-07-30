@@ -26,13 +26,18 @@ function parecePedidoDeLeitura(mensagem) {
 function parecePedidoDeListagem(mensagem) {
   const texto = normalizar(mensagem)
   const mencionaArquivo = /(document|arquivo|anexo|pdf|imagem|foto)/.test(texto)
-  const pedeLista = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|disponiveis)/.test(texto)
+  const listaExplicita = /\b(liste|listar|listagem|relacao|relacione)\b/.test(texto)
+  const perguntaExistencia = /\b(quais|quantos|existem|tem|ha|disponiveis)\b/.test(texto)
+  const visualizacaoGenerica = /\b(mostre|mostrar|exiba|exibir|ver)\b/.test(texto)
+    && /\b(documentos|arquivos|anexos|pdfs|imagens|fotos)\b/.test(texto)
+  const pedeLista = listaExplicita || perguntaExistencia || visualizacaoGenerica
   const pedeDadoInterno = /(cpf|cnpj|faturamento|receita|valor|endereco|conteudo|consta|informado|leia|extraia)/.test(texto)
   return mencionaArquivo && pedeLista && !pedeDadoInterno
 }
 
 function parecePedidoDeAbertura(mensagem) {
   const texto = normalizar(mensagem)
+  if (parecePedidoDeListagem(mensagem)) return false
   const querAbrir = /\b(abra|abre|abrir|visualize|visualizar|veja|ver|exiba|exibir|mostre|mostrar)\b/.test(texto)
   const mencionaArquivo = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia|\brg\b|\bcpf\b|\bcnh\b|identidade|habilitacao)/.test(texto)
   return querAbrir && mencionaArquivo
@@ -43,7 +48,7 @@ function parecePedidoAoGoogleDrive(mensagem) {
   const mencionaDrive = /\bgoogle\s*drive\b|\bdrive\b/.test(texto)
   const mencionaPasta = /\bpasta\b/.test(texto)
   const mencionaDocumento = /(document|arquivo|anexo|pdf|imagem|foto|contrato|declarac|recibo|comprovante|pericia|\brg\b|\bcpf\b|\bcnh\b|identidade|habilitacao)/.test(texto)
-  const pedeAcao = /(quais|quantos|liste|listar|mostre|mostrar|existem|tem|ha|procure|pesquise|leia|encontre|extraia|consta|informado|qual|quanto|abra|abre|abrir|visualize|visualizar|veja|ver|exiba|exibir)/.test(texto)
+  const pedeAcao = /(quais|quantos|liste|listar|listagem|relacao|relacione|mostre|mostrar|existem|tem|ha|procure|pesquise|leia|encontre|extraia|consta|informado|qual|quanto|abra|abre|abrir|visualize|visualizar|veja|ver|exiba|exibir)/.test(texto)
   return mencionaDocumento
     && pedeAcao
     && (mencionaDrive || mencionaPasta || parecePedidoDeLeitura(mensagem) || parecePedidoDeListagem(mensagem) || parecePedidoDeAbertura(mensagem))
@@ -286,6 +291,56 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
 
   const arquivos = await listarArquivosDaPasta(usuarioId, vinculo.pastaDriveId, 200)
 
+  // Pedidos de lista têm precedência sobre abertura. Isso evita que frases
+  // como "ver documentos" tentem abrir um arquivo chamado "documentos".
+  if (parecePedidoDeListagem(mensagem)) {
+    const ordenados = [...arquivos].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), "pt-BR", { sensitivity: "base" })
+    )
+    const nomes = ordenados.map((arquivo) => arquivo.name)
+    const total = nomes.length
+    const resposta = total
+      ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta “${vinculo.pastaDriveNome}”. Clique no nome de um documento para abri-lo.`
+      : `A pasta “${vinculo.pastaDriveNome}” está vinculada, mas não contém arquivos.`
+
+    return {
+      resposta,
+      fala: total
+        ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta do Google Drive.`
+        : "A pasta vinculada do Google Drive não contém arquivos.",
+      pontos: ordenados.slice(0, 12).map((arquivo) => ({
+        titulo: arquivo.name,
+        detalhe: "Google Drive",
+        status: vinculo.pastaDriveNome,
+      })),
+      recomendacao: "",
+      fundamentos: [`Listagem somente leitura da pasta do Google Drive vinculada a ${cliente.nome}.`],
+      modo: "listagem-google-drive",
+      provedor: "sistema",
+      modelo: "Nexa Drive 1.0",
+      clienteIdConfirmado: cliente.id,
+      clienteNomeConfirmado: cliente.nome,
+      consulta: {
+        tipo: "lista-documentos-drive",
+        titulo: "Documentos no Google Drive",
+        resumo: total
+          ? `${total} arquivo${total === 1 ? "" : "s"} disponível${total === 1 ? "" : "is"} para abrir.`
+          : "Nenhum arquivo encontrado.",
+        total,
+        itens: ordenados.map((arquivo) => ({
+          id: arquivo.id,
+          clienteId: cliente.id,
+          cliente: cliente.nome,
+          titulo: arquivo.name,
+          detalhe: arquivo.mimeType,
+          url: arquivo.webViewLink,
+        })),
+      },
+      respondidoEm: new Date().toISOString(),
+      aviso: "Consulta somente leitura. Nenhum arquivo do Drive foi alterado.",
+    }
+  }
+
   if (parecePedidoDeAbertura(mensagem)) {
     const candidatosAbertura = arquivos
       .map((arquivo) => ({
@@ -350,57 +405,7 @@ async function consultarDrive({ mensagem, cliente, usuarioId }) {
     }
   }
 
-  if (parecePedidoDeListagem(mensagem)) {
-    const ordenados = [...arquivos].sort((a, b) =>
-      String(a.name || "").localeCompare(String(b.name || ""), "pt-BR", { sensitivity: "base" })
-    )
-    const nomes = ordenados.map((arquivo) => arquivo.name)
-    const total = nomes.length
-    const limiteResposta = 40
-    const nomesVisiveis = nomes.slice(0, limiteResposta)
-    const restante = Math.max(0, total - nomesVisiveis.length)
-    const lista = nomesVisiveis.map((nome) => `• ${nome}`).join("\n")
-    const complemento = restante ? `\n• ... e mais ${restante} arquivo${restante === 1 ? "" : "s"}.` : ""
-    const resposta = total
-      ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta “${vinculo.pastaDriveNome}”:\n${lista}${complemento}`
-      : `A pasta “${vinculo.pastaDriveNome}” está vinculada, mas não contém arquivos.`
-
-    return {
-      resposta,
-      fala: total
-        ? `Encontrei ${total} arquivo${total === 1 ? "" : "s"} na pasta do Google Drive.`
-        : "A pasta vinculada do Google Drive não contém arquivos.",
-      pontos: ordenados.slice(0, 12).map((arquivo) => ({
-        titulo: arquivo.name,
-        detalhe: "Google Drive",
-        status: vinculo.pastaDriveNome,
-      })),
-      recomendacao: "",
-      fundamentos: [`Listagem somente leitura da pasta do Google Drive vinculada a ${cliente.nome}.`],
-      modo: "listagem-google-drive",
-      provedor: "sistema",
-      modelo: "Nexa Drive 1.0",
-      clienteIdConfirmado: cliente.id,
-      clienteNomeConfirmado: cliente.nome,
-      consulta: {
-        tipo: "lista-documentos-drive",
-        titulo: "Documentos no Google Drive",
-        resumo: resposta,
-        total,
-        itens: ordenados.map((arquivo) => ({
-          id: arquivo.id,
-          clienteId: cliente.id,
-          cliente: cliente.nome,
-          titulo: arquivo.name,
-          detalhe: arquivo.mimeType,
-          url: arquivo.webViewLink,
-        })),
-      },
-      respondidoEm: new Date().toISOString(),
-      aviso: "Consulta somente leitura. Nenhum arquivo do Drive foi alterado.",
-    }
-  }
-
+  const palavras = palavrasBusca(mensagem)
   const candidatos = arquivos
     .map((arquivo) => ({
       arquivo,
