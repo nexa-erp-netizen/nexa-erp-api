@@ -38,9 +38,18 @@ function autenticar(req, res, next) {
 
 function autorizarPerfis(...perfisPermitidos) {
   return (req, res, next) => {
+    const normalizarPerfil = (valor) => String(valor || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase()
+
+    const perfilAtual = normalizarPerfil(req.usuario?.perfil)
+    const permitidos = perfisPermitidos.map(normalizarPerfil)
+
     if (
       !req.usuario ||
-      !perfisPermitidos.includes(req.usuario.perfil)
+      !permitidos.includes(perfilAtual)
     ) {
       return res.status(403).json({
         message: "Acesso não autorizado",
