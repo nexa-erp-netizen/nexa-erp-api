@@ -30,6 +30,8 @@ const HistoricoEcac = require("./src/models/HistoricoEcac")
 const VocabularioVozNexa = require("./src/models/VocabularioVozNexa")
 const GoogleDriveConexao = require("./src/models/GoogleDriveConexao")
 const GoogleDrivePastaCliente = require("./src/models/GoogleDrivePastaCliente")
+const CredencialAcessoFiscal = require("./src/models/CredencialAcessoFiscal")
+const HistoricoCredencialFiscal = require("./src/models/HistoricoCredencialFiscal")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
@@ -60,6 +62,7 @@ const recomendacoesRoutes = require("./src/routes/recomendacoesRoutes")
 const consultoriaTributariaRoutes = require("./src/routes/consultoriaTributariaRoutes")
 const conversaRoutes = require("./src/routes/conversaRoutes")
 const googleDriveRoutes = require("./src/routes/googleDriveRoutes")
+const credenciaisFiscaisRoutes = require("./src/routes/credenciaisFiscaisRoutes")
 
 const app = express()
 
@@ -107,6 +110,7 @@ app.use("/recomendacoes", recomendacoesRoutes)
 app.use("/consultoria-tributaria", consultoriaTributariaRoutes)
 app.use("/conversa", conversaRoutes)
 app.use("/google-drive", googleDriveRoutes)
+app.use("/credenciais-fiscais", credenciaisFiscaisRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
