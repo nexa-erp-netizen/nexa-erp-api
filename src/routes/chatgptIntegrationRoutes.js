@@ -2,6 +2,10 @@ const express = require("express")
 const AuditoriaIntegracaoChatGPT = require("../models/AuditoriaIntegracaoChatGPT")
 const { autenticarIntegracaoChatGPT } = require("../middlewares/chatgptIntegrationAuth")
 const { detectarConsultaInteligente } = require("../services/consultaInteligenteService")
+const {
+  buscarDocumentosChatGPT,
+  baixarDocumentoChatGPT,
+} = require("../services/chatgptDocumentosService")
 
 const router = express.Router()
 router.use(autenticarIntegracaoChatGPT)
@@ -105,6 +109,77 @@ router.get("/pendencias", (req, res) => {
     return res.status(400).json({ ok: false, resposta: "clienteId inválido." })
   }
   return responderRest(req, res, "listar_pendencias_nexa", { clienteId })
+})
+
+router.get("/documentos", async (req, res) => {
+  const inicio = Date.now()
+  const parametros = {
+    clienteId: req.query?.clienteId ? Number(req.query.clienteId) : null,
+    busca: String(req.query?.busca || "").trim().slice(0, 200),
+  }
+  let sucesso = false
+  let erro = null
+  try {
+    const resultado = await buscarDocumentosChatGPT({
+      usuarioId: req.usuario.id,
+      clienteId: parametros.clienteId,
+      busca: parametros.busca,
+    })
+    sucesso = true
+    return res.json({ ok: true, ...resultado })
+  } catch (e) {
+    erro = e
+    return res.status(e.status || 500).json({ ok: false, resposta: e.message || "Falha ao localizar documentos." })
+  } finally {
+    AuditoriaIntegracaoChatGPT.create({
+      ferramenta: "buscar_documentos_drive",
+      parametros,
+      sucesso,
+      statusHttp: res.statusCode,
+      duracaoMs: Date.now() - inicio,
+      usuarioId: req.usuario?.id || null,
+      empresaId: req.usuario?.empresaId || null,
+      ip: req.ip || null,
+      erro: erro ? String(erro.message || erro).slice(0, 1000) : null,
+    }).catch((auditError) => console.error("Falha ao auditar integração ChatGPT:", auditError.message))
+  }
+})
+
+router.get("/documentos/baixar", async (req, res) => {
+  const inicio = Date.now()
+  const parametros = {
+    clienteId: req.query?.clienteId ? Number(req.query.clienteId) : null,
+    arquivoId: String(req.query?.arquivoId || "").trim().slice(0, 200),
+  }
+  let sucesso = false
+  let erro = null
+  try {
+    if (!parametros.arquivoId) return res.status(400).json({ ok: false, resposta: "arquivoId é obrigatório." })
+    const resultado = await baixarDocumentoChatGPT({ usuarioId: req.usuario.id, ...parametros })
+    sucesso = true
+    return res.json({
+      ok: true,
+      resposta: `Documento de ${resultado.clienteNome} enviado com segurança.`,
+      clienteId: resultado.clienteId,
+      clienteNome: resultado.clienteNome,
+      openaiFileResponse: [resultado.arquivo],
+    })
+  } catch (e) {
+    erro = e
+    return res.status(e.status || 500).json({ ok: false, resposta: e.message || "Falha ao enviar o documento." })
+  } finally {
+    AuditoriaIntegracaoChatGPT.create({
+      ferramenta: "baixar_documento_drive",
+      parametros,
+      sucesso,
+      statusHttp: res.statusCode,
+      duracaoMs: Date.now() - inicio,
+      usuarioId: req.usuario?.id || null,
+      empresaId: req.usuario?.empresaId || null,
+      ip: req.ip || null,
+      erro: erro ? String(erro.message || erro).slice(0, 1000) : null,
+    }).catch((auditError) => console.error("Falha ao auditar integração ChatGPT:", auditError.message))
+  }
 })
 
 function respostaJson(id, result) { return { jsonrpc: "2.0", id, result } }
