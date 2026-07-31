@@ -241,6 +241,62 @@ function localizarCliente(clientes, texto, clienteId) {
   }
 
   const encontrado = candidatos[0]?.cliente || null
+
+  // Dados cadastrais podem ser sensíveis. Quando a frase contém um nome após
+  // "do/da/de", esse nome precisa prevalecer sobre o cliente aberto na tela.
+  // Nunca é seguro responder com o cadastro atual só porque o nome digitado
+  // (por exemplo, "Jinatan") não teve correspondência literal.
+  const referencia = texto.match(/\b(?:cpf|cnpj|telefone|celular|whatsapp|email|e-mail|endereco|cep|nascimento)\b[^\n]*?\b(?:do|da|de)\s+(?:cliente\s+|empresa\s+)?([a-z][a-z\s'-]{2,})/i)
+  const nomeReferenciado = normalizar(referencia?.[1] || "")
+    .replace(/[?.!,;:]+$/g, "")
+    .trim()
+  const referenciaGenerica = /^(?:ele|ela|cliente|empresa|mesmo cliente|mesma empresa|cliente selecionado)$/.test(nomeReferenciado)
+
+  if (!encontrado && nomeReferenciado && !referenciaGenerica) {
+    const distancia = (a, b) => {
+      const anterior = Array.from({ length: b.length + 1 }, (_, indice) => indice)
+      for (let i = 1; i <= a.length; i += 1) {
+        const atualLinha = [i]
+        for (let j = 1; j <= b.length; j += 1) {
+          atualLinha[j] = Math.min(
+            atualLinha[j - 1] + 1,
+            anterior[j] + 1,
+            anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+          )
+        }
+        for (let j = 0; j < atualLinha.length; j += 1) anterior[j] = atualLinha[j]
+      }
+      return anterior[b.length]
+    }
+
+    const termos = nomeReferenciado.split(/\s+/).filter((termo) => termo.length >= 4 && !ignoradas.has(termo))
+    const aproximados = clientes
+      .map((cliente) => {
+        const tokensNome = normalizar(nomeCliente(cliente)).split(/\s+/).filter((token) => token.length >= 4)
+        const menorDistancia = termos.reduce((melhor, termo) => Math.min(
+          melhor,
+          ...tokensNome.map((token) => distancia(termo, token)),
+        ), Number.MAX_SAFE_INTEGER)
+        return { cliente, distancia: menorDistancia }
+      })
+      .filter((item) => item.distancia <= 1)
+      .sort((a, b) => a.distancia - b.distancia)
+
+    if (aproximados.length === 1) {
+      return { ambiguo: false, cliente: null, sugerido: aproximados[0].cliente, explicito: true, atual, nomeReferenciado }
+    }
+
+    return {
+      ambiguo: aproximados.length > 1,
+      cliente: null,
+      candidatos: aproximados.map((item) => item.cliente).slice(0, 8),
+      explicito: true,
+      atual,
+      nomeReferenciado,
+      referenciaNaoLocalizada: aproximados.length === 0,
+    }
+  }
+
   return {
     ambiguo: false,
     cliente: encontrado || atual || null,
@@ -1281,8 +1337,43 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   const clientes = await carregarClientes(usuario)
   const localizado = localizarCliente(clientes, texto, clienteId)
   if (!intencaoForcada && !consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
+  const campoCadastro = campoCadastroSolicitado(texto)
+
+  if (campoCadastro && localizado.sugerido) {
+    const nome = nomeCliente(localizado.sugerido)
+    return respostaConsulta({
+      resposta: `Você quis dizer ${nome}?`,
+      confirmacaoClientePendente: {
+        clienteId: localizado.sugerido.id,
+        clienteNome: nome,
+        campo: campoCadastro,
+        pedidoOriginal: String(mensagem || "").trim(),
+      },
+      consulta: {
+        tipo: "confirmacao-cliente",
+        titulo: "Confirmar cliente",
+        resumo: `Confirme se o cliente é ${nome}.`,
+        total: 1,
+        itens: [{ id: localizado.sugerido.id, clienteId: localizado.sugerido.id, cliente: nome, titulo: nome }],
+      },
+    })
+  }
+
+  if (campoCadastro && localizado.referenciaNaoLocalizada) {
+    return respostaConsulta({
+      resposta: `Não encontrei um cliente correspondente a “${localizado.nomeReferenciado}”. Informe o nome completo ou selecione o cliente correto.`,
+      consulta: {
+        tipo: "cliente-nao-encontrado",
+        titulo: "Cliente não identificado",
+        resumo: "Nenhum dado cadastral foi exibido porque o cliente não foi identificado com segurança.",
+        total: 0,
+        itens: [],
+      },
+    })
+  }
+
   if (localizado.ambiguo) {
-    const campo = campoCadastroSolicitado(texto)
+    const campo = campoCadastro
     const candidatos = (localizado.candidatos || []).map((cliente, indice) => ({
       id: cliente.id,
       clienteId: cliente.id,
@@ -1323,7 +1414,6 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
     return consultarDocumentosComDrive({ mensagem, cliente: localizado.cliente, usuarioId: usuario?.id })
   }
 
-  const campoCadastro = campoCadastroSolicitado(texto)
   if (campoCadastro && localizado.cliente) {
     const clienteFoiConfirmado = Boolean(clienteId && String(clienteId) === String(localizado.cliente.id))
     if (localizado.explicito && !clienteFoiConfirmado && !nomeFoiInformadoPorCompleto(texto, localizado.cliente)) {

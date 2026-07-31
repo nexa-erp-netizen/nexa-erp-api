@@ -20,6 +20,12 @@ const hamilton = {
   estado: "PR",
 }
 
+const jonatan = {
+  id: 23,
+  nome: "Jonatan Ferreira Lima",
+  cpf: "987.654.321-00",
+}
+
 function comClientes(clientes, executar) {
   const original = Cliente.findAll
   Cliente.findAll = async () => clientes
@@ -90,5 +96,32 @@ test("nome completo informa o dado diretamente", async () => {
 
     assert.match(resultado.resposta, /99999-0000/)
     assert.equal(resultado.confirmacaoClientePendente, undefined)
+  })
+})
+
+test("nome digitado errado nunca usa o CPF do cliente selecionado", async () => {
+  await comClientes([hamilton, jonatan], async () => {
+    const resultado = await detectarConsultaInteligente({
+      mensagem: "Qual CPF do Jinatan?",
+      clienteId: hamilton.id,
+      usuario: { perfil: "Administrador" },
+    })
+
+    assert.equal(resultado.resposta, "Você quis dizer Jonatan Ferreira Lima?")
+    assert.equal(resultado.confirmacaoClientePendente.clienteId, jonatan.id)
+    assert.doesNotMatch(resultado.resposta, /123\.456\.789-00|987\.654\.321-00/)
+  })
+})
+
+test("nome inexistente bloqueia a exibição do CPF do cliente selecionado", async () => {
+  await comClientes([hamilton, jonatan], async () => {
+    const resultado = await detectarConsultaInteligente({
+      mensagem: "Qual CPF do Roberto?",
+      clienteId: hamilton.id,
+      usuario: { perfil: "Administrador" },
+    })
+
+    assert.equal(resultado.consulta.tipo, "cliente-nao-encontrado")
+    assert.doesNotMatch(resultado.resposta, /123\.456\.789-00|987\.654\.321-00/)
   })
 })
