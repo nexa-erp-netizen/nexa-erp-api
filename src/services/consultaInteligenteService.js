@@ -246,7 +246,10 @@ function localizarCliente(clientes, texto, clienteId) {
   // "do/da/de", esse nome precisa prevalecer sobre o cliente aberto na tela.
   // Nunca é seguro responder com o cadastro atual só porque o nome digitado
   // (por exemplo, "Jinatan") não teve correspondência literal.
-  const referencia = texto.match(/\b(?:cpf|cnpj|telefone|celular|whatsapp|email|e-mail|endereco|cep|nascimento)\b[^\n]*?\b(?:do|da|de)\s+(?:cliente\s+|empresa\s+)?([a-z][a-z\s'-]{2,})/i)
+  const referenciaContextual = /\b(?:cpf|cnpj|telefone|celular|whatsapp|email|e-mail|endereco|cep|nascimento)\b[^\n]*?\b(?:dele|dela|desse cliente|dessa cliente|deste cliente|desta cliente|do cliente selecionado|da cliente selecionada)\b/i.test(texto)
+  const referencia = referenciaContextual
+    ? null
+    : texto.match(/\b(?:cpf|cnpj|telefone|celular|whatsapp|email|e-mail|endereco|cep|nascimento)\b[^\n]*?\b(?:do|da|de)\s+(?:cliente\s+|empresa\s+)?([a-z][a-z\s'-]{2,})/i)
   const nomeReferenciado = normalizar(referencia?.[1] || "")
     .replace(/[?.!,;:]+$/g, "")
     .trim()
