@@ -201,8 +201,11 @@ function ordenarData(itens, campo) {
 }
 
 async function carregarClientes(usuario) {
-  const where = usuario?.empresaId ? { empresaId: usuario.empresaId } : {}
-  let clientes = await Cliente.findAll({ where, order: [["nome", "ASC"]] })
+  // Deve seguir a mesma regra de acesso da rota GET /clientes. Há cadastros
+  // legados com empresaId nulo que aparecem normalmente na Central do Cliente;
+  // filtrar por empresaId somente aqui fazia a Nexa dizer que esses clientes
+  // não existiam, embora estivessem abertos na tela.
+  let clientes = await Cliente.findAll({ order: [["nome", "ASC"]] })
   if (usuario?.perfil === "Cliente" && usuario?.clienteVinculado) {
     const permitido = normalizar(usuario.clienteVinculado)
     clientes = clientes.filter((cliente) => normalizar(nomeCliente(cliente)) === permitido)
