@@ -5,9 +5,36 @@ const { detectarConsultaInteligente } = require("../services/consultaInteligente
 const {
   buscarDocumentosChatGPT,
   baixarDocumentoChatGPT,
+  gerarTokenVisualizacao,
+  validarTokenVisualizacao,
+  visualizarImagemTemporaria,
 } = require("../services/chatgptDocumentosService")
 
 const router = express.Router()
+
+// O navegador abre esta rota sem o Bearer da Action. O token assinado expira em 5 minutos
+// e o arquivo ainda é revalidado dentro da pasta vinculada ao cliente antes da transmissão.
+router.get("/documentos/visualizar", async (req, res) => {
+  try {
+    const dados = validarTokenVisualizacao(String(req.query?.token || ""))
+    const resultado = await visualizarImagemTemporaria(dados)
+    const nomeSeguro = String(resultado.nome || "imagem").replace(/[\r\n"]/g, "_")
+    res.set({
+      "Cache-Control": "private, no-store, max-age=0",
+      "Content-Type": resultado.arquivo.mimeType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${nomeSeguro}"`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self'; sandbox",
+    })
+    return res.send(resultado.buffer)
+  } catch (e) {
+    const status = e.name === "TokenExpiredError" ? 410 : (e.status || 403)
+    return res.status(status).type("text/plain").send(status === 410
+      ? "Este link expirou. Solicite o documento novamente à Nexa."
+      : "Link inválido ou documento não autorizado.")
+  }
+})
+
 router.use(autenticarIntegracaoChatGPT)
 
 const ferramentas = [
@@ -157,6 +184,23 @@ router.get("/documentos/baixar", async (req, res) => {
     if (!parametros.arquivoId) return res.status(400).json({ ok: false, resposta: "arquivoId é obrigatório." })
     const resultado = await baixarDocumentoChatGPT({ usuarioId: req.usuario.id, ...parametros })
     sucesso = true
+    if (resultado.imagem) {
+      const token = gerarTokenVisualizacao({
+        usuarioId: req.usuario.id,
+        clienteId: resultado.clienteId,
+        arquivoId: resultado.arquivoId,
+      })
+      const origem = String(process.env.NEXA_API_PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "")
+      return res.json({
+        ok: true,
+        resposta: `Imagem de ${resultado.clienteNome} disponível por 5 minutos no link protegido.`,
+        clienteId: resultado.clienteId,
+        clienteNome: resultado.clienteNome,
+        nome: resultado.nome,
+        urlTemporaria: `${origem}${req.baseUrl}/documentos/visualizar?token=${encodeURIComponent(token)}`,
+        expiraEmSegundos: 300,
+      })
+    }
     return res.json({
       ok: true,
       resposta: `Documento de ${resultado.clienteNome} enviado com segurança.`,
