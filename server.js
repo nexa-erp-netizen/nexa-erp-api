@@ -30,6 +30,9 @@ const HistoricoEcac = require("./src/models/HistoricoEcac")
 const VocabularioVozNexa = require("./src/models/VocabularioVozNexa")
 const GoogleDriveConexao = require("./src/models/GoogleDriveConexao")
 const GoogleDrivePastaCliente = require("./src/models/GoogleDrivePastaCliente")
+require("./src/models/NFeConfiguracao")
+require("./src/models/ProdutoNFe")
+require("./src/models/NFe")
 require("./src/models/AuditoriaIntegracaoChatGPT")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
@@ -62,6 +65,7 @@ const consultoriaTributariaRoutes = require("./src/routes/consultoriaTributariaR
 const conversaRoutes = require("./src/routes/conversaRoutes")
 const googleDriveRoutes = require("./src/routes/googleDriveRoutes")
 const chatgptIntegrationRoutes = require("./src/routes/chatgptIntegrationRoutes")
+const nfeRoutes = require("./src/routes/nfeRoutes")
 
 const app = express()
 
@@ -110,6 +114,7 @@ app.use("/consultoria-tributaria", consultoriaTributariaRoutes)
 app.use("/conversa", conversaRoutes)
 app.use("/google-drive", googleDriveRoutes)
 app.use("/integracoes/chatgpt", chatgptIntegrationRoutes)
+app.use("/nfe", nfeRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
