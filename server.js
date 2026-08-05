@@ -33,6 +33,9 @@ const GoogleDrivePastaCliente = require("./src/models/GoogleDrivePastaCliente")
 require("./src/models/NFeConfiguracao")
 require("./src/models/ProdutoNFe")
 require("./src/models/NFe")
+require("./src/models/NFSeConfiguracao")
+require("./src/models/ServicoNFSe")
+require("./src/models/NFSe")
 require("./src/models/AuditoriaIntegracaoChatGPT")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
@@ -66,6 +69,7 @@ const conversaRoutes = require("./src/routes/conversaRoutes")
 const googleDriveRoutes = require("./src/routes/googleDriveRoutes")
 const chatgptIntegrationRoutes = require("./src/routes/chatgptIntegrationRoutes")
 const nfeRoutes = require("./src/routes/nfeRoutes")
+const nfseRoutes = require("./src/routes/nfseRoutes")
 
 const app = express()
 
@@ -115,6 +119,7 @@ app.use("/conversa", conversaRoutes)
 app.use("/google-drive", googleDriveRoutes)
 app.use("/integracoes/chatgpt", chatgptIntegrationRoutes)
 app.use("/nfe", nfeRoutes)
+app.use("/nfse", nfseRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
