@@ -4,7 +4,8 @@ const sequelize = require("../config/database")
 const NFSe = sequelize.define("NFSe", {
   clienteId: { type: DataTypes.INTEGER, allowNull: false },
   numero: { type: DataTypes.INTEGER, allowNull: true },
-  serie: { type: DataTypes.STRING, allowNull: false, defaultValue: "1" },
+  numeroDps: { type: DataTypes.INTEGER, allowNull: true },
+  serieDps: { type: DataTypes.STRING, allowNull: false, defaultValue: "70000" },
   ambiente: { type: DataTypes.STRING, allowNull: false, defaultValue: "homologacao" },
   status: { type: DataTypes.STRING, allowNull: false, defaultValue: "rascunho" },
   tomador: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
