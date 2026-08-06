@@ -70,6 +70,7 @@ const googleDriveRoutes = require("./src/routes/googleDriveRoutes")
 const chatgptIntegrationRoutes = require("./src/routes/chatgptIntegrationRoutes")
 const nfeRoutes = require("./src/routes/nfeRoutes")
 const nfseRoutes = require("./src/routes/nfseRoutes")
+const credenciaisFiscaisRoutes = require("./src/routes/credenciaisFiscaisRoutes")
 
 const app = express()
 
@@ -120,6 +121,7 @@ app.use("/google-drive", googleDriveRoutes)
 app.use("/integracoes/chatgpt", chatgptIntegrationRoutes)
 app.use("/nfe", nfeRoutes)
 app.use("/nfse", nfseRoutes)
+app.use("/credenciais-fiscais", credenciaisFiscaisRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {

@@ -4,6 +4,7 @@ const Credencial = require("../models/CredencialAcessoFiscal")
 const Historico = require("../models/HistoricoCredencialFiscal")
 const { autenticar, autorizarPerfis } = require("../middlewares/authMiddleware")
 const { criptografar, chaveConfigurada } = require("../services/cofreCredenciaisService")
+const { salvarCertificado, removerCertificado, armazenadoNoSupabase } = require("../services/certificadoStorageService")
 
 const router = express.Router()
 const somenteAdministrador = [autenticar, autorizarPerfis("Administrador")]
@@ -31,6 +32,7 @@ function publico(item) {
     identificador: dados.identificador || null,
     possuiSegredo: Boolean(dados.segredoCriptografado),
     possuiArquivo: Boolean(dados.arquivoCriptografado),
+    arquivoNoSupabase: armazenadoNoSupabase(dados.arquivoCriptografado),
     nomeArquivo: dados.nomeArquivo || null,
     status: dados.status,
     ultimaValidacao: dados.ultimaValidacao,
@@ -72,13 +74,17 @@ router.post("/", ...somenteAdministrador, upload.single("certificado"), async (r
       return res.status(400).json({ message: "Informe o segredo do acesso." })
     }
 
+    let referenciaArquivo = null
+    if (req.file) {
+      referenciaArquivo = await salvarCertificado({ clienteId, nomeArquivo: req.file.originalname, buffer: req.file.buffer })
+    }
     const item = await Credencial.create({
       clienteId,
       cliente,
       metodo,
       identificador: String(req.body.identificador || "").trim() || null,
       segredoCriptografado: criptografar(req.body.segredo),
-      arquivoCriptografado: req.file ? criptografar(req.file.buffer) : null,
+      arquivoCriptografado: referenciaArquivo,
       nomeArquivo: req.file?.originalname || null,
       mimeArquivo: req.file?.mimetype || null,
       status: "Configurado",
@@ -88,7 +94,7 @@ router.post("/", ...somenteAdministrador, upload.single("certificado"), async (r
     })
     await Historico.create({
       credencialId: item.id, clienteId, cliente, metodo, acao: "Cadastro",
-      usuario: usuario(req), detalhes: "Credencial armazenada no cofre criptografado.",
+      usuario: usuario(req), detalhes: req.file ? "Certificado A1 criptografado e armazenado no cofre privado." : "Credencial armazenada no cofre criptografado.",
     })
     res.status(201).json(publico(item))
   } catch (error) {
@@ -118,6 +124,12 @@ router.delete("/:id", ...somenteAdministrador, async (req, res) => {
     metodo: item.metodo, acao: "Exclusão", usuario: usuario(req),
     detalhes: "Credencial removida do cofre.",
   })
+  try {
+    await removerCertificado(item.arquivoCriptografado)
+  } catch (error) {
+    console.error("ERRO AO REMOVER CERTIFICADO DO STORAGE:", error)
+    return res.status(502).json({ message: "Não foi possível remover o certificado do armazenamento privado." })
+  }
   await item.destroy()
   res.json({ message: "Credencial removida." })
 })
