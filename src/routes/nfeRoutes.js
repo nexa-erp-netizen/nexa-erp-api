@@ -56,20 +56,32 @@ function prepararNota(body) {
 }
 
 router.get("/configuracoes/:clienteId", async (req, res) => {
-  const [configuracao] = await NFeConfiguracao.findOrCreate({ where: { clienteId: Number(req.params.clienteId) }, defaults: { clienteId: Number(req.params.clienteId) } })
-  res.json(configuracao)
+  const clienteId = Number(req.params.clienteId)
+  const [[configuracao], cliente] = await Promise.all([
+    NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } }),
+    Cliente.findByPk(clienteId),
+  ])
+  if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
+  res.json({ ...configuracao.toJSON(), inscricaoEstadual: texto(cliente.inscricaoEstadual) })
 })
 
 router.put("/configuracoes/:clienteId", async (req, res) => {
   const clienteId = Number(req.params.clienteId)
-  const [configuracao] = await NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } })
+  const inscricaoEstadual = texto(req.body.inscricaoEstadual).replace(/\D/g, "")
+  if (!inscricaoEstadual) return res.status(400).json({ message: "Informe a Inscrição Estadual do emitente." })
+  const [[configuracao], cliente] = await Promise.all([
+    NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } }),
+    Cliente.findByPk(clienteId),
+  ])
+  if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
+  await cliente.update({ inscricaoEstadual })
   await configuracao.update({
     ambiente: "homologacao", serie: Math.max(1, Number(req.body.serie || 1)), proximoNumero: Math.max(1, Number(req.body.proximoNumero || 1)),
     crt: texto(req.body.crt) || null, naturezaOperacao: texto(req.body.naturezaOperacao) || "Venda de mercadoria",
     certificadoDigitalId: null,
     provedor: null, ativo: false,
   })
-  res.json(configuracao)
+  res.json({ ...configuracao.toJSON(), inscricaoEstadual })
 })
 
 router.get("/diagnostico/:clienteId", async (req, res) => {

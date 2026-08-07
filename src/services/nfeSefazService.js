@@ -1,8 +1,31 @@
 const https = require("https")
+const fs = require("fs")
+const tls = require("tls")
 const { carregarCertificado } = require("./certificadoStorageService")
 const { descriptografar } = require("./cofreCredenciaisService")
 
 const ENDPOINT_HOMOLOGACAO_PR = "https://homologacao.nfe.sefa.pr.gov.br/nfe/NFeStatusServico4"
+
+function certificadosConfiaveis() {
+  const certificados = [...tls.rootCertificates]
+  const caminhosSistema = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
+  for (const caminho of caminhosSistema) {
+    try {
+      if (fs.existsSync(caminho)) certificados.push(fs.readFileSync(caminho, "utf8"))
+    } catch (error) {
+      console.warn(`Não foi possível carregar a cadeia TLS do sistema em ${caminho}:`, error.message)
+    }
+  }
+  if (process.env.SEFAZ_CA_BUNDLE) {
+    const valor = process.env.SEFAZ_CA_BUNDLE.trim()
+    try {
+      certificados.push(valor.includes("BEGIN CERTIFICATE") ? valor : fs.readFileSync(valor, "utf8"))
+    } catch (error) {
+      throw new Error(`A cadeia adicional da SEFAZ não pôde ser carregada: ${error.message}`)
+    }
+  }
+  return certificados
+}
 
 function extrair(xml, tag) {
   const encontrado = String(xml || "").match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "i"))
@@ -23,6 +46,7 @@ async function consultarStatusServicoPR(credencial) {
   const url = new URL(ENDPOINT_HOMOLOGACAO_PR)
   return new Promise((resolve, reject) => {
     const requisicao = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "POST", pfx, passphrase: senha, minVersion: "TLSv1.2", timeout: 20000,
+      ca: certificadosConfiaveis(), rejectUnauthorized: true,
       headers: { "Content-Type": 'application/soap+xml; charset=utf-8; action="http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4/nfeStatusServicoNF"', "Content-Length": Buffer.byteLength(corpo) } }, (resposta) => {
       const partes = []
       resposta.on("data", (parte) => partes.push(parte))
