@@ -104,11 +104,39 @@ router.post("/importar/:clienteId", autenticar, somenteEscritorio, upload.array(
 router.put("/:id", autenticar, somenteEscritorio, async (req, res) => {
   const guia = await DasMei.findByPk(req.params.id)
   if (!guia) return res.status(404).json({ message: "Guia não encontrada" })
-  const permitidos = ["status"]
+  const permitidos = ["competencia", "vencimento", "valor", "status"]
   const alteracoes = Object.fromEntries(permitidos.filter((campo) => campo in req.body).map((campo) => [campo, req.body[campo] || null]))
-  alteracoes.historico = [...(guia.historico || []), { em: new Date().toISOString(), acao: "Dados de envio atualizados" }]
+  if (alteracoes.vencimento) alteracoes.dataProgramadaEnvio = dataEnvioDia15(alteracoes.vencimento)
+  alteracoes.historico = [...(guia.historico || []), {
+    em: new Date().toISOString(),
+    acao: "Guia editada",
+    anterior: { competencia: guia.competencia, vencimento: guia.vencimento, valor: guia.valor },
+    atualizado: {
+      competencia: alteracoes.competencia ?? guia.competencia,
+      vencimento: alteracoes.vencimento ?? guia.vencimento,
+      valor: alteracoes.valor ?? guia.valor,
+    },
+  }]
   await guia.update(alteracoes)
   res.json(guia)
+})
+
+router.post("/publicar-portal", autenticar, somenteEscritorio, async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : []
+  if (!ids.length) return res.status(400).json({ message: "Selecione ao menos uma competência." })
+
+  const guias = await DasMei.findAll({ where: { id: ids } })
+  if (guias.length !== ids.length) return res.status(404).json({ message: "Uma ou mais guias não foram encontradas." })
+
+  const agora = new Date()
+  await Promise.all(guias.map((guia) => guia.update({
+    publicadoNoPortal: true,
+    publicadoEm: agora,
+    status: guia.status === "Paga" ? "Paga" : "Enviada",
+    historico: [...(guia.historico || []), { em: agora.toISOString(), acao: "Guia publicada nas Pendências do Portal do Cliente" }],
+  })))
+
+  res.json({ publicados: guias.length })
 })
 
 router.post("/:id/registrar-envio", autenticar, somenteEscritorio, async (req, res) => {

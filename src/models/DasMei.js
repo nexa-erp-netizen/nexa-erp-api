@@ -14,6 +14,8 @@ const DasMei = sequelize.define("DasMei", {
   nomeArquivo: { type: DataTypes.STRING, allowNull: false },
   hashArquivo: { type: DataTypes.STRING(64), allowNull: false },
   dataProgramadaEnvio: { type: DataTypes.DATEONLY, allowNull: true },
+  publicadoNoPortal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  publicadoEm: { type: DataTypes.DATE, allowNull: true },
   status: {
     type: DataTypes.ENUM("Programada", "Pronta para envio", "Enviada", "Paga"),
     allowNull: false,

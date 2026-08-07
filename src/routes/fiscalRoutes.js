@@ -198,22 +198,13 @@ router.get("/", autenticar, async (req, res) => {
     const cliente = await Cliente.findOne({ where: { nome: req.usuario.clienteVinculado } })
     if (!cliente) return res.json(obrigacoes)
 
-    const partesHoje = new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "America/Sao_Paulo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).formatToParts(new Date())
-    const parte = (tipo) => partesHoje.find((item) => item.type === tipo)?.value
-    const hoje = `${parte("year")}-${parte("month")}-${parte("day")}`
-
     const guias = await DasMei.findAll({
       where: { clienteId: cliente.id },
       order: [["vencimento", "ASC"]],
     })
 
     const guiasLiberadas = guias
-      .filter((guia) => guia.dataProgramadaEnvio && String(guia.dataProgramadaEnvio) <= hoje)
+      .filter((guia) => guia.publicadoNoPortal)
       .map((guia) => ({
         id: `das-mei-${guia.id}`,
         dasMeiId: guia.id,
