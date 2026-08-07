@@ -8,6 +8,7 @@ const NFeConfiguracao = sequelize.define("NFeConfiguracao", {
   proximoNumero: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
   crt: { type: DataTypes.STRING, allowNull: true },
   naturezaOperacao: { type: DataTypes.STRING, allowNull: true, defaultValue: "Venda de mercadoria" },
+  codigoMunicipio: { type: DataTypes.STRING, allowNull: true },
   certificadoDigitalId: { type: DataTypes.INTEGER, allowNull: true },
   provedor: { type: DataTypes.STRING, allowNull: true },
   ativo: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },

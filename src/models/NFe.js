@@ -18,6 +18,11 @@ const NFe = sequelize.define("NFe", {
   protocolo: { type: DataTypes.STRING, allowNull: true },
   xmlUrl: { type: DataTypes.TEXT, allowNull: true },
   danfeUrl: { type: DataTypes.TEXT, allowNull: true },
+  xmlEnvio: { type: DataTypes.TEXT, allowNull: true },
+  xmlAutorizado: { type: DataTypes.TEXT, allowNull: true },
+  danfePdf: { type: DataTypes.TEXT, allowNull: true },
+  codigoStatus: { type: DataTypes.STRING, allowNull: true },
+  motivoStatus: { type: DataTypes.TEXT, allowNull: true },
   erroEmissao: { type: DataTypes.TEXT, allowNull: true },
   emitidaEm: { type: DataTypes.DATE, allowNull: true },
 })

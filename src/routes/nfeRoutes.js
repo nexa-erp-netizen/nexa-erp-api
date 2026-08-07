@@ -4,8 +4,9 @@ const CredencialAcessoFiscal = require("../models/CredencialAcessoFiscal")
 const NFeConfiguracao = require("../models/NFeConfiguracao")
 const ProdutoNFe = require("../models/ProdutoNFe")
 const NFe = require("../models/NFe")
+const sequelize = require("../config/database")
 const { autenticar } = require("../middlewares/authMiddleware")
-const { consultarStatusServicoPR, ENDPOINT_HOMOLOGACAO_PR } = require("../services/nfeSefazService")
+const { consultarStatusServicoPR, autorizarNFePR, gerarDanfePdf, ENDPOINT_HOMOLOGACAO_PR } = require("../services/nfeSefazService")
 
 const router = express.Router()
 router.use(autenticar)
@@ -57,10 +58,7 @@ function prepararNota(body) {
 
 router.get("/configuracoes/:clienteId", async (req, res) => {
   const clienteId = Number(req.params.clienteId)
-  const [[configuracao], cliente] = await Promise.all([
-    NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } }),
-    Cliente.findByPk(clienteId),
-  ])
+  const [[configuracao], cliente] = await Promise.all([NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } }), Cliente.findByPk(clienteId)])
   if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
   res.json({ ...configuracao.toJSON(), inscricaoEstadual: texto(cliente.inscricaoEstadual) })
 })
@@ -69,15 +67,14 @@ router.put("/configuracoes/:clienteId", async (req, res) => {
   const clienteId = Number(req.params.clienteId)
   const inscricaoEstadual = texto(req.body.inscricaoEstadual).replace(/\D/g, "")
   if (!inscricaoEstadual) return res.status(400).json({ message: "Informe a Inscrição Estadual do emitente." })
-  const [[configuracao], cliente] = await Promise.all([
-    NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } }),
-    Cliente.findByPk(clienteId),
-  ])
+  const [configuracao] = await NFeConfiguracao.findOrCreate({ where: { clienteId }, defaults: { clienteId } })
+  const cliente = await Cliente.findByPk(clienteId)
   if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
   await cliente.update({ inscricaoEstadual })
   await configuracao.update({
     ambiente: "homologacao", serie: Math.max(1, Number(req.body.serie || 1)), proximoNumero: Math.max(1, Number(req.body.proximoNumero || 1)),
     crt: texto(req.body.crt) || null, naturezaOperacao: texto(req.body.naturezaOperacao) || "Venda de mercadoria",
+    codigoMunicipio: texto(req.body.codigoMunicipio).replace(/\D/g, "") || null,
     certificadoDigitalId: null,
     provedor: null, ativo: false,
   })
@@ -96,10 +93,10 @@ router.get("/diagnostico/:clienteId", async (req, res) => {
   if (!cliente.inscricaoEstadual) pendencias.push("Informe a inscrição estadual do emitente.")
   if (!cliente.cep || !cliente.endereco || !cliente.numero || !cliente.cidade || !cliente.estado) pendencias.push("Complete o endereço do emitente.")
   if (!configuracao?.crt) pendencias.push("Configure o CRT do emitente.")
+  if (!configuracao?.codigoMunicipio || configuracao.codigoMunicipio.length !== 7) pendencias.push("Informe o código IBGE do município do emitente.")
   if (!certificado?.arquivoCriptografado || !certificado?.segredoCriptografado) pendencias.push("Envie o certificado A1 e a senha no Cofre de acessos fiscais.")
   if (!produtos) pendencias.push("Cadastre ao menos um produto fiscal.")
-  pendencias.push("A transmissão será liberada após montar e validar o XML assinado da NF-e 4.00.")
-  res.json({ prontoParaRascunho: pendencias.length === 1, prontoParaEmitir: false, ambiente: "homologacao", uf: "PR", endpointStatus: ENDPOINT_HOMOLOGACAO_PR, certificadoA1: certificado ? { id: certificado.id, nomeArquivo: certificado.nomeArquivo, configurado: Boolean(certificado.arquivoCriptografado && certificado.segredoCriptografado) } : null, pendencias })
+  res.json({ prontoParaRascunho: pendencias.length === 0, prontoParaEmitir: pendencias.length === 0, ambiente: "homologacao", uf: "PR", endpointStatus: ENDPOINT_HOMOLOGACAO_PR, certificadoA1: certificado ? { id: certificado.id, nomeArquivo: certificado.nomeArquivo, configurado: Boolean(certificado.arquivoCriptografado && certificado.segredoCriptografado) } : null, pendencias })
 })
 
 router.post("/diagnostico/:clienteId/status-sefaz", async (req, res) => {
@@ -129,7 +126,7 @@ router.put("/produtos/:id", async (req, res) => {
 
 router.get("/notas", async (req, res) => {
   const where = req.query.clienteId ? { clienteId: Number(req.query.clienteId) } : {}
-  res.json(await NFe.findAll({ where, order: [["createdAt", "DESC"]] }))
+  res.json(await NFe.findAll({ where, attributes: { exclude: ["xmlEnvio", "xmlAutorizado", "danfePdf"] }, order: [["createdAt", "DESC"]] }))
 })
 router.post("/notas", async (req, res) => {
   const dados = prepararNota(req.body)
@@ -139,9 +136,61 @@ router.post("/notas", async (req, res) => {
 })
 router.put("/notas/:id", async (req, res) => {
   const nota = await NFe.findByPk(req.params.id); if (!nota) return res.status(404).json({ message: "NF-e não encontrada" })
-  if (nota.status !== "rascunho") return res.status(409).json({ message: "Somente rascunhos podem ser alterados." })
+  if (!["rascunho", "rejeitada"].includes(nota.status)) return res.status(409).json({ message: "Somente rascunhos ou notas rejeitadas podem ser alterados." })
   await nota.update(prepararNota(req.body)); res.json(nota)
 })
-router.post("/notas/:id/transmitir", async (_req, res) => res.status(409).json({ message: "Transmissão bloqueada nesta etapa. Configure primeiro um provedor fiscal homologado." }))
+router.post("/notas/:id/transmitir", async (req, res) => {
+  const nota = await NFe.findByPk(req.params.id)
+  if (!nota) return res.status(404).json({ message: "NF-e não encontrada" })
+  if (!["rascunho", "rejeitada", "erro"].includes(nota.status)) return res.status(409).json({ message: "Esta NF-e não pode ser transmitida novamente." })
+  const [emitente, configuracao, certificado] = await Promise.all([
+    Cliente.findByPk(nota.clienteId), NFeConfiguracao.findOne({ where: { clienteId: nota.clienteId } }),
+    CredencialAcessoFiscal.findOne({ where: { clienteId: nota.clienteId, metodo: "A1", ativo: true }, order: [["updatedAt", "DESC"]] }),
+  ])
+  const erros = []
+  if (!emitente?.cnpj || !emitente?.inscricaoEstadual || !emitente?.endereco || !emitente?.numero || !emitente?.bairro || !emitente?.cep) erros.push("Complete CNPJ, IE e endereço do emitente.")
+  if (!configuracao?.crt || !/^\d{7}$/.test(texto(configuracao.codigoMunicipio))) erros.push("Complete CRT e código IBGE do emitente.")
+  if (!certificado) erros.push("Cadastre o certificado A1 no cofre.")
+  const dest = nota.destinatario || {}
+  if (!dest.cpfCnpj || !dest.cep || !dest.endereco || !dest.numero || !dest.bairro || !dest.cidade || !dest.estado) erros.push("Complete o documento e o endereço do destinatário.")
+  if (!/^\d{7}$/.test(texto(dest.codigoMunicipio || configuracao?.codigoMunicipio))) erros.push("Informe o código IBGE do município do destinatário.")
+  if (erros.length) return res.status(400).json({ message: erros.join(" ") })
+  try {
+    if (!nota.numero) {
+      await sequelize.transaction(async (transaction) => {
+        const cfg = await NFeConfiguracao.findOne({ where: { clienteId: nota.clienteId }, transaction, lock: transaction.LOCK.UPDATE })
+        const numero = Number(cfg.proximoNumero || 1)
+        await nota.update({ numero, serie: cfg.serie, status: "processando", erroEmissao: null }, { transaction })
+        await cfg.update({ proximoNumero: numero + 1 }, { transaction })
+      })
+    } else await nota.update({ status: "processando", erroEmissao: null })
+    const atualizada = await NFe.findByPk(nota.id)
+    const retorno = await autorizarNFePR({ credencial: certificado, nota: atualizada, emitente, configuracao })
+    if (!retorno.autorizado) {
+      await atualizada.update({ status: "rejeitada", chaveAcesso: retorno.chave, xmlEnvio: retorno.xmlEnvio, codigoStatus: retorno.cStat, motivoStatus: retorno.xMotivo, erroEmissao: `${retorno.cStat || ""} — ${retorno.xMotivo}` })
+      return res.status(422).json({ message: `NF-e rejeitada: ${retorno.cStat || ""} — ${retorno.xMotivo}`, nota: { id: atualizada.id, numero: atualizada.numero, status: "rejeitada", codigoStatus: retorno.cStat, motivoStatus: retorno.xMotivo } })
+    }
+    await atualizada.update({ status: "autorizada", chaveAcesso: retorno.chave, protocolo: retorno.protocolo, xmlEnvio: retorno.xmlEnvio, xmlAutorizado: retorno.xmlAutorizado, codigoStatus: retorno.cStat, motivoStatus: retorno.xMotivo, emitidaEm: new Date(), erroEmissao: null })
+    const pdf = await gerarDanfePdf(atualizada)
+    await atualizada.update({ danfePdf: pdf.toString("base64") })
+    res.json({ message: "NF-e autorizada em homologação.", nota: { id: atualizada.id, numero: atualizada.numero, serie: atualizada.serie, status: atualizada.status, chaveAcesso: atualizada.chaveAcesso, protocolo: atualizada.protocolo } })
+  } catch (error) {
+    console.error("ERRO TRANSMISSÃO NF-E:", error)
+    await nota.update({ status: "erro", erroEmissao: error.message }).catch(() => {})
+    res.status(502).json({ message: error.message || "Falha ao transmitir a NF-e." })
+  }
+})
+
+router.get("/notas/:id/xml", async (req, res) => {
+  const nota = await NFe.findByPk(req.params.id)
+  if (!nota?.xmlAutorizado) return res.status(404).json({ message: "XML autorizado não disponível." })
+  res.set({ "Content-Type": "application/xml; charset=utf-8", "Content-Disposition": `attachment; filename="NFe-${nota.chaveAcesso}.xml"` }).send(nota.xmlAutorizado)
+})
+
+router.get("/notas/:id/danfe", async (req, res) => {
+  const nota = await NFe.findByPk(req.params.id)
+  if (!nota?.danfePdf) return res.status(404).json({ message: "DANFE não disponível." })
+  res.set({ "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="DANFE-${nota.chaveAcesso}.pdf"` }).send(Buffer.from(nota.danfePdf, "base64"))
+})
 
 module.exports = router
