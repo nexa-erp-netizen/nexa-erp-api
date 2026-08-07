@@ -10,6 +10,27 @@ const { lerDasMei } = require("../services/dasMeiParserService")
 const router = express.Router()
 const BUCKET = "nexa-anexos"
 
+function dataEnvioDia15(vencimento) {
+  const data = String(vencimento || "").slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return null
+  return `${data.slice(0, 8)}15`
+}
+
+function respostaGuia(guia, hoje) {
+  const item = guia.toJSON ? guia.toJSON() : guia
+  const dataProgramadaEnvio = item.dataProgramadaEnvio || dataEnvioDia15(item.vencimento)
+  return {
+    ...item,
+    competencia: item.competencia,
+    vencimento: item.vencimento,
+    valor: item.valor,
+    dataProgramadaEnvio,
+    statusCalculado: item.status === "Programada" && dataProgramadaEnvio <= hoje
+      ? "Pronta para envio"
+      : item.status,
+  }
+}
+
 function somenteEscritorio(req, res, next) {
   if (req.usuario.perfil === "Cliente") return res.status(403).json({ message: "Acesso não autorizado" })
   next()
@@ -32,12 +53,10 @@ router.get("/", autenticar, async (req, res) => {
     if (!clienteId || !(await acessoPermitido(req, clienteId))) return res.status(403).json({ message: "Acesso não autorizado" })
     const guias = await DasMei.findAll({ where: { clienteId }, order: [["competencia", "ASC"]] })
     const hoje = new Date().toISOString().slice(0, 10)
-    res.json(guias.map((guia) => {
-      const item = guia.toJSON()
-      if (item.status === "Programada" && item.dataProgramadaEnvio && item.dataProgramadaEnvio <= hoje) item.statusCalculado = "Pronta para envio"
-      else item.statusCalculado = item.status
-      return item
-    }))
+    await Promise.all(guias.filter((guia) => !guia.dataProgramadaEnvio).map((guia) =>
+      guia.update({ dataProgramadaEnvio: dataEnvioDia15(guia.vencimento) })
+    ))
+    res.json(guias.map((guia) => respostaGuia(guia, hoje)))
   } catch (error) {
     console.error("ERRO AO LISTAR DAS-MEI:", error)
     res.status(500).json({ message: "Erro ao listar guias DAS-MEI" })
@@ -57,6 +76,7 @@ router.post("/importar/:clienteId", autenticar, somenteEscritorio, upload.array(
     try {
       if (file.mimetype !== "application/pdf" && !file.originalname.toLowerCase().endsWith(".pdf")) throw new Error("Somente arquivos PDF são aceitos.")
       const dados = await lerDasMei(file.buffer)
+      const dataProgramadaEnvio = dataEnvioDia15(dados.vencimento)
       if (dados.cnpj !== cnpjCliente) throw new Error("O CNPJ da guia não corresponde ao cliente selecionado.")
       const existente = await DasMei.findOne({ where: { clienteId, competencia: dados.competencia } })
       const hashArquivo = crypto.createHash("sha256").update(file.buffer).digest("hex")
@@ -69,9 +89,9 @@ router.post("/importar/:clienteId", autenticar, somenteEscritorio, upload.array(
 
       if (existente) {
         const historico = [...(existente.historico || []), { em: new Date().toISOString(), acao: "Guia substituída", arquivoAnterior: existente.nomeArquivo }]
-        await existente.update({ ...dados, caminhoArquivo: caminho, nomeArquivo: file.originalname, hashArquivo, status: "Programada", enviadoEm: null, historico })
+        await existente.update({ ...dados, dataProgramadaEnvio, caminhoArquivo: caminho, nomeArquivo: file.originalname, hashArquivo, status: "Programada", enviadoEm: null, historico })
       } else {
-        await DasMei.create({ ...dados, clienteId, empresaId: cliente.empresaId, caminhoArquivo: caminho, nomeArquivo: file.originalname, hashArquivo })
+        await DasMei.create({ ...dados, dataProgramadaEnvio, clienteId, empresaId: cliente.empresaId, caminhoArquivo: caminho, nomeArquivo: file.originalname, hashArquivo })
       }
       resultados.push({ arquivo: file.originalname, status: "importado", competencia: dados.competencia })
     } catch (error) {
@@ -84,7 +104,7 @@ router.post("/importar/:clienteId", autenticar, somenteEscritorio, upload.array(
 router.put("/:id", autenticar, somenteEscritorio, async (req, res) => {
   const guia = await DasMei.findByPk(req.params.id)
   if (!guia) return res.status(404).json({ message: "Guia não encontrada" })
-  const permitidos = ["dataProgramadaEnvio", "status"]
+  const permitidos = ["status"]
   const alteracoes = Object.fromEntries(permitidos.filter((campo) => campo in req.body).map((campo) => [campo, req.body[campo] || null]))
   alteracoes.historico = [...(guia.historico || []), { em: new Date().toISOString(), acao: "Dados de envio atualizados" }]
   await guia.update(alteracoes)
