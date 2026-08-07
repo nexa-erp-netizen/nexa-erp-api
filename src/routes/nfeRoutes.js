@@ -1,11 +1,11 @@
 const express = require("express")
-const { Op } = require("sequelize")
 const Cliente = require("../models/Cliente")
-const CertificadoDigital = require("../models/CertificadoDigital")
+const CredencialAcessoFiscal = require("../models/CredencialAcessoFiscal")
 const NFeConfiguracao = require("../models/NFeConfiguracao")
 const ProdutoNFe = require("../models/ProdutoNFe")
 const NFe = require("../models/NFe")
 const { autenticar } = require("../middlewares/authMiddleware")
+const { consultarStatusServicoPR, ENDPOINT_HOMOLOGACAO_PR } = require("../services/nfeSefazService")
 
 const router = express.Router()
 router.use(autenticar)
@@ -66,7 +66,7 @@ router.put("/configuracoes/:clienteId", async (req, res) => {
   await configuracao.update({
     ambiente: "homologacao", serie: Math.max(1, Number(req.body.serie || 1)), proximoNumero: Math.max(1, Number(req.body.proximoNumero || 1)),
     crt: texto(req.body.crt) || null, naturezaOperacao: texto(req.body.naturezaOperacao) || "Venda de mercadoria",
-    certificadoDigitalId: req.body.certificadoDigitalId ? Number(req.body.certificadoDigitalId) : null,
+    certificadoDigitalId: null,
     provedor: null, ativo: false,
   })
   res.json(configuracao)
@@ -74,8 +74,9 @@ router.put("/configuracoes/:clienteId", async (req, res) => {
 
 router.get("/diagnostico/:clienteId", async (req, res) => {
   const clienteId = Number(req.params.clienteId)
-  const [cliente, configuracao, produtos] = await Promise.all([
+  const [cliente, configuracao, produtos, certificado] = await Promise.all([
     Cliente.findByPk(clienteId), NFeConfiguracao.findOne({ where: { clienteId } }), ProdutoNFe.count({ where: { clienteId, ativo: true } }),
+    CredencialAcessoFiscal.findOne({ where: { clienteId, metodo: "A1", ativo: true }, order: [["updatedAt", "DESC"]] }),
   ])
   if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
   const pendencias = []
@@ -83,14 +84,20 @@ router.get("/diagnostico/:clienteId", async (req, res) => {
   if (!cliente.inscricaoEstadual) pendencias.push("Informe a inscrição estadual do emitente.")
   if (!cliente.cep || !cliente.endereco || !cliente.numero || !cliente.cidade || !cliente.estado) pendencias.push("Complete o endereço do emitente.")
   if (!configuracao?.crt) pendencias.push("Configure o CRT do emitente.")
-  if (!configuracao?.certificadoDigitalId) pendencias.push("Selecione um certificado digital A1.")
-  else {
-    const certificado = await CertificadoDigital.findOne({ where: { id: configuracao.certificadoDigitalId, clienteId, ativo: true, dataValidade: { [Op.gte]: new Date() } } })
-    if (!certificado) pendencias.push("O certificado selecionado está ausente, vencido ou pertence a outro cliente.")
-  }
+  if (!certificado?.arquivoCriptografado || !certificado?.segredoCriptografado) pendencias.push("Envie o certificado A1 e a senha no Cofre de acessos fiscais.")
   if (!produtos) pendencias.push("Cadastre ao menos um produto fiscal.")
-  pendencias.push("Escolha e configure um provedor fiscal homologado para liberar a transmissão.")
-  res.json({ prontoParaRascunho: pendencias.length === 1, prontoParaEmitir: false, ambiente: "homologacao", pendencias })
+  pendencias.push("A transmissão será liberada após montar e validar o XML assinado da NF-e 4.00.")
+  res.json({ prontoParaRascunho: pendencias.length === 1, prontoParaEmitir: false, ambiente: "homologacao", uf: "PR", endpointStatus: ENDPOINT_HOMOLOGACAO_PR, certificadoA1: certificado ? { id: certificado.id, nomeArquivo: certificado.nomeArquivo, configurado: Boolean(certificado.arquivoCriptografado && certificado.segredoCriptografado) } : null, pendencias })
+})
+
+router.post("/diagnostico/:clienteId/status-sefaz", async (req, res) => {
+  const clienteId = Number(req.params.clienteId); const cliente = await Cliente.findByPk(clienteId)
+  if (!cliente) return res.status(404).json({ message: "Cliente não encontrado" })
+  if (texto(cliente.estado).toUpperCase() !== "PR") return res.status(400).json({ message: "Esta etapa consulta somente a SEFA/PR." })
+  const certificado = await CredencialAcessoFiscal.findOne({ where: { clienteId, metodo: "A1", ativo: true }, order: [["updatedAt", "DESC"]] })
+  if (!certificado) return res.status(400).json({ message: "Cadastre o certificado A1 no Cofre de acessos fiscais." })
+  try { res.json(await consultarStatusServicoPR(certificado)) }
+  catch (error) { console.error("ERRO STATUS SEFA/PR:", error); res.status(502).json({ message: error.message || "Não foi possível consultar a SEFA/PR." }) }
 })
 
 router.get("/produtos", async (req, res) => {
