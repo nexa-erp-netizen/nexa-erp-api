@@ -5,6 +5,8 @@ const Notificacao = require("../models/Notificacao")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const Financeiro = require("../models/Financeiro")
+const Cliente = require("../models/Cliente")
+const DasMei = require("../models/DasMei")
 const supabase = require("../config/supabase")
 
 const router = express.Router()
@@ -189,7 +191,43 @@ router.get("/", autenticar, async (req, res) => {
       order: [["createdAt", "DESC"]],
     })
 
-    res.json(obrigacoes)
+    if (req.usuario.perfil !== "Cliente") {
+      return res.json(obrigacoes)
+    }
+
+    const cliente = await Cliente.findOne({ where: { nome: req.usuario.clienteVinculado } })
+    if (!cliente) return res.json(obrigacoes)
+
+    const partesHoje = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date())
+    const parte = (tipo) => partesHoje.find((item) => item.type === tipo)?.value
+    const hoje = `${parte("year")}-${parte("month")}-${parte("day")}`
+
+    const guias = await DasMei.findAll({
+      where: { clienteId: cliente.id },
+      order: [["vencimento", "ASC"]],
+    })
+
+    const guiasLiberadas = guias
+      .filter((guia) => guia.dataProgramadaEnvio && String(guia.dataProgramadaEnvio) <= hoje)
+      .map((guia) => ({
+        id: `das-mei-${guia.id}`,
+        dasMeiId: guia.id,
+        origem: "DAS-MEI",
+        cliente: cliente.nome,
+        obrigacao: "DAS-MEI",
+        competencia: String(guia.competencia || "").split("-").reverse().join("/"),
+        vencimento: guia.vencimento,
+        valor: Number(guia.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
+        status: guia.status === "Paga" ? "Pago" : "Pendente",
+        anexos: [{ nome: guia.nomeArquivo, dasMeiId: guia.id }],
+      }))
+
+    return res.json([...guiasLiberadas, ...obrigacoes])
   } catch (error) {
     console.error(error)
 

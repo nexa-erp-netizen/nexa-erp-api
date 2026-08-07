@@ -118,6 +118,17 @@ router.post("/:id/registrar-envio", autenticar, somenteEscritorio, async (req, r
   res.json(guia)
 })
 
+router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
+  if (req.usuario.perfil !== "Cliente") return res.status(403).json({ message: "Acesso não autorizado" })
+  const guia = await DasMei.findByPk(req.params.id)
+  if (!guia || !(await acessoPermitido(req, guia.clienteId))) return res.status(404).json({ message: "Guia não encontrada" })
+  await guia.update({
+    status: "Paga",
+    historico: [...(guia.historico || []), { em: new Date().toISOString(), acao: "Pagamento informado pelo cliente" }],
+  })
+  res.json(guia)
+})
+
 router.get("/:id/arquivo", autenticar, async (req, res) => {
   const guia = await DasMei.findByPk(req.params.id)
   if (!guia || !(await acessoPermitido(req, guia.clienteId))) return res.status(404).json({ message: "Guia não encontrada" })
