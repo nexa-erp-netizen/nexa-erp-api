@@ -1,12 +1,45 @@
 const https = require("https")
 const fs = require("fs")
 const tls = require("tls")
+const { X509Certificate } = require("crypto")
 const { carregarCertificado } = require("./certificadoStorageService")
 const { descriptografar } = require("./cofreCredenciaisService")
 
 const ENDPOINT_HOMOLOGACAO_PR = "https://homologacao.nfe.sefa.pr.gov.br/nfe/NFeStatusServico4"
+const ICP_BRASIL_RAIZ_SSL_URL = "https://acraiz.icpbrasil.gov.br/credenciadas/RAIZ/ICP-Brasilv10.crt"
+let raizIcpBrasilSslCache = null
 
-function certificadosConfiaveis() {
+function certificadoParaPem(conteudo) {
+  const buffer = Buffer.isBuffer(conteudo) ? conteudo : Buffer.from(conteudo)
+  if (buffer.toString("utf8", 0, 40).includes("BEGIN CERTIFICATE")) return buffer.toString("utf8")
+  return new X509Certificate(buffer).toString()
+}
+
+function baixarRaizIcpBrasilSsl() {
+  if (raizIcpBrasilSslCache) return Promise.resolve(raizIcpBrasilSslCache)
+  return new Promise((resolve, reject) => {
+    const requisicao = https.get(ICP_BRASIL_RAIZ_SSL_URL, { timeout: 15000, minVersion: "TLSv1.2" }, (resposta) => {
+      if (resposta.statusCode !== 200) {
+        resposta.resume()
+        return reject(new Error(`O repositório oficial do ITI respondeu HTTP ${resposta.statusCode}.`))
+      }
+      const partes = []
+      resposta.on("data", (parte) => partes.push(parte))
+      resposta.on("end", () => {
+        try {
+          raizIcpBrasilSslCache = certificadoParaPem(Buffer.concat(partes))
+          resolve(raizIcpBrasilSslCache)
+        } catch (error) {
+          reject(new Error(`O certificado raiz SSL do ITI é inválido: ${error.message}`))
+        }
+      })
+    })
+    requisicao.on("timeout", () => requisicao.destroy(new Error("Tempo esgotado ao carregar a cadeia oficial da ICP-Brasil.")))
+    requisicao.on("error", reject)
+  })
+}
+
+async function certificadosConfiaveis() {
   const certificados = [...tls.rootCertificates]
   const caminhosSistema = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
   for (const caminho of caminhosSistema) {
@@ -23,6 +56,14 @@ function certificadosConfiaveis() {
     } catch (error) {
       throw new Error(`A cadeia adicional da SEFAZ não pôde ser carregada: ${error.message}`)
     }
+  }
+  try {
+    certificados.push(await baixarRaizIcpBrasilSsl())
+  } catch (error) {
+    if (!process.env.SEFAZ_CA_BUNDLE) {
+      throw new Error(`Não foi possível carregar a cadeia oficial da ICP-Brasil: ${error.message}`)
+    }
+    console.warn("Não foi possível atualizar a raiz SSL da ICP-Brasil; usando SEFAZ_CA_BUNDLE:", error.message)
   }
   return certificados
 }
@@ -42,11 +83,12 @@ async function materializarA1(credencial) {
 
 async function consultarStatusServicoPR(credencial) {
   const { pfx, senha } = await materializarA1(credencial)
+  const ca = await certificadosConfiaveis()
   const corpo = `<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"><soap12:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4"><consStatServ xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><tpAmb>2</tpAmb><cUF>41</cUF><xServ>STATUS</xServ></consStatServ></nfeDadosMsg></soap12:Body></soap12:Envelope>`
   const url = new URL(ENDPOINT_HOMOLOGACAO_PR)
   return new Promise((resolve, reject) => {
     const requisicao = https.request({ hostname: url.hostname, port: 443, path: url.pathname, method: "POST", pfx, passphrase: senha, minVersion: "TLSv1.2", timeout: 20000,
-      ca: certificadosConfiaveis(), rejectUnauthorized: true,
+      ca, rejectUnauthorized: true,
       headers: { "Content-Type": 'application/soap+xml; charset=utf-8; action="http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4/nfeStatusServicoNF"', "Content-Length": Buffer.byteLength(corpo) } }, (resposta) => {
       const partes = []
       resposta.on("data", (parte) => partes.push(parte))
