@@ -7,6 +7,7 @@ const ProcuracaoEcac = require("../models/ProcuracaoEcac")
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
 const ServicoAvulso = require("../models/ServicoAvulso")
 const Agenda = require("../models/Agenda")
+const DasMei = require("../models/DasMei")
 const { consultarDocumentosComDrive, parecePedidoDeLeitura } = require("./leituraDocumentosService")
 const {
   financeiroAbertoParaPrioridade,
@@ -780,12 +781,13 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   // Usa as mesmas fontes operacionais do Assistente do Dia. MovimentoCliente não
   // entra aqui: ele é histórico financeiro/contábil e não representa, por si só,
   // uma ação pendente do escritório.
-  const [fiscais, financeiros, servicos, documentos, solicitacoes] = await Promise.all([
+  const [fiscais, financeiros, servicos, documentos, solicitacoes, guiasDasMei] = await Promise.all([
     Fiscal.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     Financeiro.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
     SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
+    DasMei.findAll({ where: { publicadoNoPortal: true }, order: [["vencimento", "ASC"]], limit: 2500 }),
   ])
 
   const itens = []
@@ -852,6 +854,29 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
         prioridade: prioridadePorPrazo(dias, { vencido: 140, hoje: 134, futuro: 106, semData: 84 }),
         pagina: "Fiscal",
         referenciaId: item.id,
+      })
+    })
+
+  guiasDasMei
+    .filter((guia) => guia.status !== "Paga")
+    .forEach((guia) => {
+      const cadastro = porId.get(Number(guia.clienteId))
+      if (!cadastro || !nomesAtivos.has(normalizar(nomeCliente(cadastro)))) return
+      const dias = diasAte(guia.vencimento)
+      const [ano, mes] = String(guia.competencia || "").split("-")
+      adicionar({
+        modulo: "das-mei",
+        categoria: "Fiscal",
+        clienteNome: nomeCliente(cadastro),
+        clienteId: cadastro.id,
+        titulo: "DAS-MEI",
+        detalhe: `Competência ${mes && ano ? `${mes}/${ano}` : guia.competencia || "não informada"}`,
+        status: guia.vencimento ? textoPrazo(dias) : "Pendente",
+        data: guia.vencimento,
+        valor: guia.valor,
+        prioridade: prioridadePorPrazo(dias, { vencido: 140, hoje: 134, futuro: 106, semData: 84 }),
+        pagina: "Fiscal",
+        referenciaId: guia.id,
       })
     })
 

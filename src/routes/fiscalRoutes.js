@@ -13,6 +13,40 @@ const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
 
+function competenciaDasParaFiscal(competencia) {
+  const [ano, mes] = String(competencia || "").split("-")
+  return ano && mes ? `${mes}/${ano}` : String(competencia || "")
+}
+
+async function sincronizarDasMeiPublicadosNoFiscal() {
+  const guias = await DasMei.findAll({ where: { publicadoNoPortal: true } })
+
+  for (const guia of guias) {
+    const cliente = await Cliente.findByPk(guia.clienteId)
+    if (!cliente) continue
+
+    const observacao = `DAS-MEI:${guia.id}`
+    const alerta = calcularAlertaFiscal(guia.vencimento, guia.status === "Paga" ? "Pago" : "Pendente")
+    const dados = {
+      cliente: cliente.nome,
+      obrigacao: "DAS-MEI",
+      competencia: competenciaDasParaFiscal(guia.competencia),
+      vencimento: guia.vencimento,
+      status: guia.status === "Paga" ? "Pago" : "Pendente",
+      valor: String(guia.valor || ""),
+      observacao,
+      anexos: [{ nome: guia.nomeArquivo, caminho: guia.caminhoArquivo, dasMeiId: guia.id }],
+      diasParaVencer: alerta.diasParaVencer,
+      alertaFiscal: alerta.alertaFiscal,
+      empresaId: guia.empresaId || cliente.empresaId || null,
+    }
+
+    const existente = await Fiscal.findOne({ where: { observacao } })
+    if (existente) await existente.update(dados)
+    else await Fiscal.create(dados)
+  }
+}
+
 function calcularAlertaFiscal(vencimento, status) {
   const hoje = new Date()
   const dataVencimento = new Date(vencimento)
@@ -180,16 +214,24 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
 
 router.get("/", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil !== "Cliente") {
+      await sincronizarDasMeiPublicadosNoFiscal()
+    }
+
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
       where.cliente = req.usuario.clienteVinculado
     }
 
-    const obrigacoes = await Fiscal.findAll({
+    const obrigacoesEncontradas = await Fiscal.findAll({
       where,
       order: [["createdAt", "DESC"]],
     })
+
+    const obrigacoes = req.usuario.perfil === "Cliente"
+      ? obrigacoesEncontradas.filter((item) => !String(item.observacao || "").startsWith("DAS-MEI:"))
+      : obrigacoesEncontradas
 
     if (req.usuario.perfil !== "Cliente") {
       return res.json(obrigacoes)

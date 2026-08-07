@@ -4,6 +4,7 @@ const upload = require("../middlewares/upload")
 const supabase = require("../config/supabase")
 const Cliente = require("../models/Cliente")
 const DasMei = require("../models/DasMei")
+const Fiscal = require("../models/Fiscal")
 const { autenticar } = require("../middlewares/authMiddleware")
 const { lerDasMei } = require("../services/dasMeiParserService")
 
@@ -14,6 +15,50 @@ function dataEnvioDia15(vencimento) {
   const data = String(vencimento || "").slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return null
   return `${data.slice(0, 8)}15`
+}
+
+function competenciaFiscal(competencia) {
+  const [ano, mes] = String(competencia || "").split("-")
+  return ano && mes ? `${mes}/${ano}` : String(competencia || "")
+}
+
+function alertaFiscal(vencimento, pago) {
+  const hoje = new Date()
+  hoje.setHours(0, 0, 0, 0)
+  const data = new Date(`${String(vencimento).slice(0, 10)}T00:00:00`)
+  const diasParaVencer = Math.ceil((data.getTime() - hoje.getTime()) / 86400000)
+  return {
+    diasParaVencer,
+    alertaFiscal: pago ? "Regularizado" : diasParaVencer < 0 ? "Vencido" : diasParaVencer === 0 ? "Vence hoje" : diasParaVencer <= 3 ? "Vencendo" : "Em dia",
+  }
+}
+
+async function sincronizarPendenciaFiscal(guia) {
+  if (!guia.publicadoNoPortal) return null
+  const cliente = await Cliente.findByPk(guia.clienteId)
+  if (!cliente) return null
+  const pago = guia.status === "Paga"
+  const observacao = `DAS-MEI:${guia.id}`
+  const alerta = alertaFiscal(guia.vencimento, pago)
+  const dados = {
+    cliente: cliente.nome,
+    obrigacao: "DAS-MEI",
+    competencia: competenciaFiscal(guia.competencia),
+    vencimento: guia.vencimento,
+    status: pago ? "Pago" : "Pendente",
+    valor: String(guia.valor || ""),
+    observacao,
+    anexos: [{ nome: guia.nomeArquivo, caminho: guia.caminhoArquivo, dasMeiId: guia.id }],
+    diasParaVencer: alerta.diasParaVencer,
+    alertaFiscal: alerta.alertaFiscal,
+    empresaId: guia.empresaId || cliente.empresaId || null,
+  }
+  const existente = await Fiscal.findOne({ where: { observacao } })
+  if (existente) {
+    await existente.update(dados)
+    return existente
+  }
+  return Fiscal.create(dados)
 }
 
 function respostaGuia(guia, hoje) {
@@ -118,6 +163,7 @@ router.put("/:id", autenticar, somenteEscritorio, async (req, res) => {
     },
   }]
   await guia.update(alteracoes)
+  await sincronizarPendenciaFiscal(guia)
   res.json(guia)
 })
 
@@ -135,6 +181,8 @@ router.post("/publicar-portal", autenticar, somenteEscritorio, async (req, res) 
     status: guia.status === "Paga" ? "Paga" : "Enviada",
     historico: [...(guia.historico || []), { em: agora.toISOString(), acao: "Guia publicada nas Pendências do Portal do Cliente" }],
   })))
+
+  await Promise.all(guias.map((guia) => sincronizarPendenciaFiscal(guia)))
 
   res.json({ publicados: guias.length })
 })
@@ -154,6 +202,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
     status: "Paga",
     historico: [...(guia.historico || []), { em: new Date().toISOString(), acao: "Pagamento informado pelo cliente" }],
   })
+  await sincronizarPendenciaFiscal(guia)
   res.json(guia)
 })
 
