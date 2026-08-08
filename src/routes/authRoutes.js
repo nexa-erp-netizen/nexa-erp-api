@@ -85,6 +85,53 @@ async function localizarUsuarioPorLogin(loginInformado, codigoEscritorio) {
   return usuario
 }
 
+router.post("/identificar-acesso", async (req, res) => {
+  try {
+    const login = String(req.body.login || req.body.email || "").trim()
+
+    if (!login) {
+      return res.status(400).json({ message: "Informe o usuário" })
+    }
+
+    const documento = limparDocumento(login)
+    const usuarios = await Usuario.findAll({
+      where: {
+        [Op.or]: [
+          { email: login },
+          { nome: login },
+        ],
+      },
+      attributes: ["perfil"],
+      semIsolamentoEscritorio: true,
+    })
+
+    let existeCliente = usuarios.some((usuario) => usuario.perfil === "Cliente")
+    const existeEscritorio = usuarios.some((usuario) => usuario.perfil !== "Cliente")
+
+    if (!existeCliente && documento) {
+      const cliente = await Cliente.findOne({
+        where: {
+          [Op.or]: [
+            { cpf: documento },
+            { cnpj: documento },
+            { cpf: login },
+            { cnpj: login },
+          ],
+        },
+        attributes: ["id"],
+        semIsolamentoEscritorio: true,
+      })
+      existeCliente = Boolean(cliente)
+    }
+
+    // Em caso de login repetido entre perfis, o código mantém a seleção segura.
+    res.json({ exigeCodigoEscritorio: existeEscritorio || !existeCliente })
+  } catch (error) {
+    console.error("ERRO AO IDENTIFICAR TIPO DE ACESSO:", error)
+    res.status(500).json({ message: "Erro ao identificar acesso" })
+  }
+})
+
 router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
   try {
     const {
@@ -168,6 +215,13 @@ router.post("/login", async (req, res) => {
     if (!usuario) {
       return res.status(401).json({
         message: "Usuário ou senha inválidos",
+      })
+    }
+
+    if (usuario.perfil !== "Cliente" && !escritorioCodigo && !usuario.plataformaAdmin) {
+      return res.status(400).json({
+        message: "Informe o código do escritório",
+        exigeCodigoEscritorio: true,
       })
     }
 
