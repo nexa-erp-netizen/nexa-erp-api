@@ -6,6 +6,7 @@ const Usuario = require("../models/Usuario")
 const Cliente = require("../models/Cliente")
 const Escritorio = require("../models/Escritorio")
 const { autenticar } = require("../middlewares/authMiddleware")
+const AcessoCliente = require("../models/AcessoCliente")
 
 const router = express.Router()
 
@@ -251,6 +252,21 @@ router.post("/login", async (req, res) => {
         expiresIn: "8h",
       }
     )
+
+    if (usuario.perfil === "Cliente") {
+      const cliente = await Cliente.findOne({ where: { escritorioId: usuario.escritorioId, nome: usuario.clienteVinculado } })
+      await AcessoCliente.create({
+        usuarioId: usuario.id,
+        clienteId: cliente?.id || null,
+        clienteNome: cliente?.nome || usuario.clienteVinculado || usuario.nome,
+        tipo: "login",
+        pagina: "Portal Cliente",
+        descricao: "Entrada no Portal",
+        ip: String(req.headers["x-forwarded-for"] || req.ip || "").split(",")[0].trim().slice(0, 80),
+        dispositivo: String(req.headers["user-agent"] || "").slice(0, 255),
+        escritorioId: usuario.escritorioId,
+      })
+    }
 
     res.json({
       token,
