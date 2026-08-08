@@ -38,6 +38,7 @@ require("./src/models/ServicoNFSe")
 require("./src/models/NFSe")
 require("./src/models/AuditoriaIntegracaoChatGPT")
 require("./src/models/DasMei")
+require("./src/models/WhatsAppAssistEnvio")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
@@ -73,6 +74,7 @@ const nfeRoutes = require("./src/routes/nfeRoutes")
 const nfseRoutes = require("./src/routes/nfseRoutes")
 const credenciaisFiscaisRoutes = require("./src/routes/credenciaisFiscaisRoutes")
 const dasMeiRoutes = require("./src/routes/dasMeiRoutes")
+const whatsappAssistRoutes = require("./src/routes/whatsappAssistRoutes")
 
 const app = express()
 
@@ -125,6 +127,7 @@ app.use("/nfe", nfeRoutes)
 app.use("/nfse", nfseRoutes)
 app.use("/credenciais-fiscais", credenciaisFiscaisRoutes)
 app.use("/das-mei", dasMeiRoutes)
+app.use("/whatsapp-assist", whatsappAssistRoutes)
 app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
