@@ -14,7 +14,6 @@ const Empresa = sequelize.define("Empresa", {
   cnpj: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
   },
 
   regime_tributario: {
@@ -37,6 +36,8 @@ const Empresa = sequelize.define("Empresa", {
     type: DataTypes.STRING,
     defaultValue: "Ativa",
   },
+}, {
+  indexes: [{ unique: true, fields: ["escritorioId", "cnpj"] }],
 })
 
 module.exports = Empresa

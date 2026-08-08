@@ -11,6 +11,7 @@ const Financeiro = require("./src/models/Financeiro")
 const Servico = require("./src/models/Servico")
 const ServicoAvulso = require("./src/models/ServicoAvulso")
 const Usuario = require("./src/models/Usuario")
+const Escritorio = require("./src/models/Escritorio")
 const PlanoConta = require("./src/models/PlanoConta")
 const LancamentoContabil = require("./src/models/LancamentoContabil")
 const SolicitacaoCliente = require("./src/models/SolicitacaoCliente")
@@ -40,6 +41,7 @@ require("./src/models/AuditoriaIntegracaoChatGPT")
 require("./src/models/DasMei")
 require("./src/models/WhatsAppAssistEnvio")
 const { autenticar } = require("./src/middlewares/authMiddleware")
+const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -75,11 +77,16 @@ const nfseRoutes = require("./src/routes/nfseRoutes")
 const credenciaisFiscaisRoutes = require("./src/routes/credenciaisFiscaisRoutes")
 const dasMeiRoutes = require("./src/routes/dasMeiRoutes")
 const whatsappAssistRoutes = require("./src/routes/whatsappAssistRoutes")
+const escritoriosRoutes = require("./src/routes/escritoriosRoutes")
 
 const app = express()
 
 app.use(cors())
 app.use(express.json())
+
+app.get("/", (_req, res) => {
+  res.json({ message: "API Nexa ERP funcionando 🚀" })
+})
 
 app.use(
   "/uploads",
@@ -94,6 +101,10 @@ app.use(
     path.resolve(__dirname, "src", "uploads")
   )
 )
+app.use("/auth", authRoutes)
+app.use(autenticar)
+app.use(contextoDoEscritorio)
+app.use("/escritorios", escritoriosRoutes)
 app.use("/clientes", clientesRoutes)
 app.use("/fiscal", fiscalRoutes)
 app.use("/financeiro", financeiroRoutes)
@@ -128,7 +139,6 @@ app.use("/nfse", nfseRoutes)
 app.use("/credenciais-fiscais", credenciaisFiscaisRoutes)
 app.use("/das-mei", dasMeiRoutes)
 app.use("/whatsapp-assist", whatsappAssistRoutes)
-app.use("/auth", authRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
   try {
@@ -330,17 +340,44 @@ app.get("/dashboard", autenticar, async (req, res) => {
     })
   }
 })
-  app.get("/", (req, res) => {
-  res.json({
-    message: "API Nexa ERP funcionando 🚀",
-  })
-})
 
 const PORT = 3000
 
+async function prepararMultiempresa() {
+  const [escritorio] = await Escritorio.findOrCreate({
+    where: { codigo: "nexa-principal" },
+    defaults: {
+      nome: process.env.NEXA_ESCRITORIO_NOME || "Escritório Principal",
+      codigo: "nexa-principal",
+      plano: "Proprietário",
+      status: "Ativo",
+    },
+    semIsolamentoEscritorio: true,
+  })
+
+  for (const modelo of Object.values(sequelize.models)) {
+    if (modelo === Escritorio || !modelo.rawAttributes?.escritorioId) continue
+    await modelo.update(
+      { escritorioId: escritorio.id },
+      { where: { escritorioId: null }, semIsolamentoEscritorio: true }
+    )
+  }
+
+  const primeiroAdmin = await Usuario.findOne({
+    where: { escritorioId: escritorio.id, perfil: "Administrador" },
+    order: [["id", "ASC"]],
+    semIsolamentoEscritorio: true,
+  })
+
+  if (primeiroAdmin && !primeiroAdmin.plataformaAdmin) {
+    await primeiroAdmin.update({ plataformaAdmin: true }, { semIsolamentoEscritorio: true })
+  }
+}
+
 sequelize
   .sync({ alter: true })
-  .then(() => {
+  .then(async () => {
+    await prepararMultiempresa()
     console.log("PostgreSQL conectado com sucesso 🚀")
 
     app.listen(PORT, () => {

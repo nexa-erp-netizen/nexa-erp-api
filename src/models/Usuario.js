@@ -10,7 +10,6 @@ const Usuario = sequelize.define("Usuario", {
   email: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
   },
 
   senha: {
@@ -32,6 +31,14 @@ const Usuario = sequelize.define("Usuario", {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+
+  plataformaAdmin: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+}, {
+  indexes: [{ unique: true, fields: ["escritorioId", "email"] }],
 })
 
 module.exports = Usuario

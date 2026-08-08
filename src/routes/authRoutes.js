@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken")
 const { Op } = require("sequelize")
 const Usuario = require("../models/Usuario")
 const Cliente = require("../models/Cliente")
+const Escritorio = require("../models/Escritorio")
 const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
@@ -30,12 +31,25 @@ function limparDocumento(valor) {
   return String(valor || "").replace(/\D/g, "")
 }
 
-async function localizarUsuarioPorLogin(loginInformado) {
+async function localizarUsuarioPorLogin(loginInformado, codigoEscritorio) {
   const login = String(loginInformado || "").trim()
   const documento = limparDocumento(login)
+  let escritorioId = null
+
+  if (codigoEscritorio) {
+    const escritorio = await Escritorio.findOne({
+      where: { codigo: String(codigoEscritorio).trim().toLowerCase() },
+      semIsolamentoEscritorio: true,
+    })
+    if (!escritorio || escritorio.status !== "Ativo") return null
+    escritorioId = escritorio.id
+  }
+
+  const filtroEscritorio = escritorioId ? { escritorioId } : {}
 
   let usuario = await Usuario.findOne({
     where: {
+      ...filtroEscritorio,
       [Op.or]: [
         { email: login },
         { nome: login },
@@ -48,6 +62,7 @@ async function localizarUsuarioPorLogin(loginInformado) {
   if (documento) {
     const cliente = await Cliente.findOne({
       where: {
+        ...filtroEscritorio,
         [Op.or]: [
           { cpf: documento },
           { cnpj: documento },
@@ -60,6 +75,7 @@ async function localizarUsuarioPorLogin(loginInformado) {
     if (cliente) {
       usuario = await Usuario.findOne({
         where: {
+          escritorioId: cliente.escritorioId,
           clienteVinculado: cliente.nome,
         },
       })
@@ -93,7 +109,7 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
     }
 
     const usuarioExiste = await Usuario.findOne({
-      where: { email },
+      where: { email, escritorioId: req.usuario.escritorioId },
     })
 
     if (usuarioExiste) {
@@ -114,7 +130,8 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
       perfil,
       clienteVinculado:
         perfil === "Cliente" ? clienteVinculado : null,
-      empresaId,
+      empresaId: empresaId || null,
+      escritorioId: req.usuario.escritorioId,
     })
 
     res.status(201).json({
@@ -124,6 +141,7 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
       perfil: usuario.perfil,
       clienteVinculado: usuario.clienteVinculado,
       empresaId: usuario.empresaId,
+      escritorioId: usuario.escritorioId,
     })
   } catch (error) {
     console.error("ERRO AO REGISTRAR USUÁRIO:", error)
@@ -137,7 +155,7 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const login = req.body.login || req.body.email
-    const { senha } = req.body
+    const { senha, escritorioCodigo } = req.body
 
     if (!login || !senha) {
       return res.status(400).json({
@@ -145,7 +163,7 @@ router.post("/login", async (req, res) => {
       })
     }
 
-    const usuario = await localizarUsuarioPorLogin(login)
+    const usuario = await localizarUsuarioPorLogin(login, escritorioCodigo)
 
     if (!usuario) {
       return res.status(401).json({
@@ -171,6 +189,8 @@ router.post("/login", async (req, res) => {
         perfil: usuario.perfil,
         clienteVinculado: usuario.clienteVinculado,
         empresaId: usuario.empresaId,
+        escritorioId: usuario.escritorioId,
+        plataformaAdmin: Boolean(usuario.plataformaAdmin),
       },
       getJwtSecret(),
       {
@@ -187,6 +207,11 @@ router.post("/login", async (req, res) => {
         perfil: usuario.perfil,
         clienteVinculado: usuario.clienteVinculado,
         empresaId: usuario.empresaId,
+        escritorioId: usuario.escritorioId,
+        plataformaAdmin: Boolean(usuario.plataformaAdmin),
+        escritorio: usuario.escritorioId
+          ? await Escritorio.findByPk(usuario.escritorioId, { semIsolamentoEscritorio: true })
+          : null,
       },
     })
   } catch (error) {
