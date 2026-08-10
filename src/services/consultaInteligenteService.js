@@ -337,6 +337,82 @@ function pedidoDocumentosPendentes(texto) {
   return /(documentos? (?:pendentes?|aguardando|recebidos?|enviados?|no escritorio)|arquivos? (?:pendentes?|aguardando|recebidos?)|o que chegou de documento|documentos? para analisar|documentos? sem conferir)/.test(texto)
 }
 
+function pedidoAlteracaoRegime(texto) {
+  const mencionaRegime = /(regime|mei|simples nacional|lucro presumido|lucro real)/.test(texto)
+  const solicitaMudanca = /(^|\s)(mude|mudar|altere|alterar|troque|trocar|passe|passar|migre|migrar|desenquadre|desenquadrar|atualize|atualizar)(\s|$)/.test(texto)
+    || /(deixar de ser|sair do mei|mudanca de regime|alteracao de regime|troca de regime|desenquadramento)/.test(texto)
+  return mencionaRegime && solicitaMudanca
+}
+
+function respostaAlteracaoRegime(localizado, mensagem) {
+  if (localizado.ambiguo) {
+    const candidatos = (localizado.candidatos || []).slice(0, 4)
+    const opcoes = candidatos.map((cliente, indice) => `${indice + 1}) ${nomeCliente(cliente)} (${codigoCliente(cliente)})`).join("; ")
+    return respostaConsulta({
+      resposta: `Encontrei mais de um cliente compatível: ${opcoes}. Qual deles deve ter o regime analisado?`,
+      consulta: {
+        tipo: "alteracao-regime-cliente-ambiguo",
+        titulo: "Confirmar cliente",
+        resumo: "A alteração de regime exige a identificação exata do cliente.",
+        total: candidatos.length,
+        itens: candidatos.map((cliente) => ({
+          id: cliente.id,
+          clienteId: cliente.id,
+          cliente: nomeCliente(cliente),
+          titulo: nomeCliente(cliente),
+          detalhe: codigoCliente(cliente),
+        })),
+      },
+      alteracaoSensivel: true,
+    })
+  }
+
+  const cliente = localizado.cliente
+  if (!cliente) {
+    return respostaConsulta({
+      resposta: "Qual cliente deve ter o regime tributário analisado? Informe o nome completo ou o código do cliente.",
+      consulta: {
+        tipo: "alteracao-regime-cliente-nao-informado",
+        titulo: "Informar cliente",
+        resumo: "Nenhuma alteração foi realizada.",
+        total: 0,
+        itens: [],
+      },
+      alteracaoSensivel: true,
+    })
+  }
+
+  const nome = nomeCliente(cliente)
+  return respostaConsulta({
+    resposta: `Entendi: você quer tratar a mudança de ${nome}, atualmente ${cliente.regime || "com regime não informado"}, para o Simples Nacional. Você quer apenas atualizar o cadastro na Nexa ou iniciar o processo real de desenquadramento do MEI? Informe também a data ou competência de início. Nenhuma alteração foi realizada ainda.`,
+    fala: `Entendi. A mudança de regime de ${nome} precisa de confirmação. É apenas no cadastro da Nexa ou é o desenquadramento real? E a partir de qual competência?`,
+    consulta: {
+      tipo: "confirmacao-alteracao-regime",
+      titulo: `Alteração de regime — ${nome}`,
+      resumo: "Aguardando tipo da mudança e data ou competência de início.",
+      total: 1,
+      itens: [{
+        id: cliente.id,
+        clienteId: cliente.id,
+        cliente: nome,
+        titulo: `${cliente.regime || "Regime não informado"} → Simples Nacional`,
+        status: "Aguardando confirmação",
+      }],
+      cliente: { id: cliente.id, nome },
+    },
+    confirmacaoAlteracaoPendente: {
+      tipo: "regime-tributario",
+      clienteId: cliente.id,
+      clienteNome: nome,
+      regimeAtual: cliente.regime || null,
+      regimePretendido: "Simples Nacional",
+      pedidoOriginal: String(mensagem || "").trim(),
+      camposNecessarios: ["escopo", "dataInicio"],
+    },
+    alteracaoSensivel: true,
+  })
+}
+
 function consultaSolicitada(texto, cliente = null, clienteId = null) {
   const pedidoOperacionalDireto = pedidoPrioridadesHoje(texto)
     || pedidoTodasPendencias(texto)
@@ -1367,6 +1443,12 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
 
   const clientes = await carregarClientes(usuario)
   const localizado = localizarCliente(clientes, texto, clienteId)
+  // Alterações tributárias precisam ser compreendidas antes das intenções de
+  // consulta/navegação. Assim, o nome do cliente nunca transforma um pedido de
+  // mudança de regime em um simples comando para abrir a Central do Cliente.
+  if (!intencaoForcada && pedidoAlteracaoRegime(texto)) {
+    return respostaAlteracaoRegime(localizado, mensagem)
+  }
   if (!intencaoForcada && !consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
   const campoCadastro = campoCadastroSolicitado(texto)
 
