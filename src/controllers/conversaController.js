@@ -2534,9 +2534,7 @@ async function conversar(req, res) {
         paginaAtual,
         historico,
       }
-      comandoNavegacao = decisaoOperacional?.tipo === "navegacao"
-        ? await detectarComandoNavegacaoDeterministico(parametrosNavegacao)
-        : await detectarComandoNavegacao(parametrosNavegacao)
+      comandoNavegacao = await detectarComandoNavegacao(parametrosNavegacao)
     }
 
     if (comandoNavegacao) {

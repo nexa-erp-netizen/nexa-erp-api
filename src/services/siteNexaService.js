@@ -1,5 +1,5 @@
 const SITES_OFICIAIS_NEXA = [
-  { titulo: "Carteira de Trabalho Digital", url: "https://www.gov.br/pt-br/servicos/obter-a-carteira-de-trabalho", aliases: ["carteira de trabalho digital", "carteira de trabalho", "ctps digital", "ctps"] },
+  { titulo: "Carteira de Trabalho Digital", url: "https://www.gov.br/pt-br/temas/carteira-de-trabalho-digital", aliases: ["carteira de trabalho digital", "carteira de trabalho", "ctps digital", "ctps"] },
   { titulo: "Portal e-CAC", url: "https://cav.receita.fazenda.gov.br/autenticacao/login", aliases: ["portal e-cac", "portal e cac", "e-cac", "e cac", "ecac"] },
   { titulo: "Portal do Simples Nacional", url: "https://www8.receita.fazenda.gov.br/simplesnacional/", aliases: ["portal do simples nacional", "simples nacional", "portal do simples"] },
   { titulo: "PGMEI", url: "https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes/atspo/pgmei.app/", aliases: ["pgmei", "das mei", "gerador do das mei"] },
