@@ -863,7 +863,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     ServicoAvulso.findAll({ order: [["createdAt", "DESC"]], limit: 2500 }),
     DocumentoDigital.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
     SolicitacaoCliente.findAll({ order: [["createdAt", "DESC"]], limit: 1800 }),
-    DasMei.findAll({ where: { publicadoNoPortal: true }, order: [["vencimento", "ASC"]], limit: 2500 }),
+    DasMei.findAll({ where: { publicadoNoPortal: true, rotinaAtiva: true }, order: [["vencimento", "ASC"]], limit: 2500 }),
   ])
 
   const itens = []

@@ -34,7 +34,7 @@ function alertaFiscal(vencimento, pago) {
 }
 
 async function sincronizarPendenciaFiscal(guia) {
-  if (!guia.publicadoNoPortal) return null
+  if (!guia.publicadoNoPortal || guia.rotinaAtiva === false) return null
   const cliente = await Cliente.findByPk(guia.clienteId)
   if (!cliente) return null
   const pago = guia.status === "Paga"
@@ -96,7 +96,7 @@ router.get("/", autenticar, async (req, res) => {
   try {
     const clienteId = Number(req.query.clienteId)
     if (!clienteId || !(await acessoPermitido(req, clienteId))) return res.status(403).json({ message: "Acesso não autorizado" })
-    const guias = await DasMei.findAll({ where: { clienteId }, order: [["competencia", "ASC"]] })
+    const guias = await DasMei.findAll({ where: { clienteId, rotinaAtiva: true }, order: [["competencia", "ASC"]] })
     const hoje = new Date().toISOString().slice(0, 10)
     await Promise.all(guias.filter((guia) => !guia.dataProgramadaEnvio).map((guia) =>
       guia.update({ dataProgramadaEnvio: dataEnvioDia15(guia.vencimento) })
@@ -123,6 +123,10 @@ router.post("/importar/:clienteId", autenticar, somenteEscritorio, upload.array(
       const dados = await lerDasMei(file.buffer)
       const dataProgramadaEnvio = dataEnvioDia15(dados.vencimento)
       if (dados.cnpj !== cnpjCliente) throw new Error("O CNPJ da guia não corresponde ao cliente selecionado.")
+      const inicioRegimeAtual = String(cliente.dataOpcaoRegime || "").slice(0, 7)
+      if (String(cliente.regime || "").toLowerCase() !== "mei" && inicioRegimeAtual && dados.competencia >= inicioRegimeAtual) {
+        throw new Error(`A rotina de DAS-MEI está encerrada para este cliente desde ${inicioRegimeAtual.split("-").reverse().join("/")}.`)
+      }
       const existente = await DasMei.findOne({ where: { clienteId, competencia: dados.competencia } })
       const hashArquivo = crypto.createHash("sha256").update(file.buffer).digest("hex")
       if (existente && existente.hashArquivo === hashArquivo) throw new Error("Esta competência já foi importada com o mesmo arquivo.")
@@ -171,7 +175,7 @@ router.post("/publicar-portal", autenticar, somenteEscritorio, async (req, res) 
   const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : []
   if (!ids.length) return res.status(400).json({ message: "Selecione ao menos uma competência." })
 
-  const guias = await DasMei.findAll({ where: { id: ids } })
+  const guias = await DasMei.findAll({ where: { id: ids, rotinaAtiva: true } })
   if (guias.length !== ids.length) return res.status(404).json({ message: "Uma ou mais guias não foram encontradas." })
 
   const agora = new Date()

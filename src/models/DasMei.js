@@ -16,6 +16,7 @@ const DasMei = sequelize.define("DasMei", {
   dataProgramadaEnvio: { type: DataTypes.DATEONLY, allowNull: true },
   publicadoNoPortal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   publicadoEm: { type: DataTypes.DATE, allowNull: true },
+  rotinaAtiva: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   status: {
     type: DataTypes.ENUM("Programada", "Pronta para envio", "Enviada", "Paga"),
     allowNull: false,

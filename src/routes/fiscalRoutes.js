@@ -19,7 +19,7 @@ function competenciaDasParaFiscal(competencia) {
 }
 
 async function sincronizarDasMeiPublicadosNoFiscal() {
-  const guias = await DasMei.findAll({ where: { publicadoNoPortal: true } })
+  const guias = await DasMei.findAll({ where: { publicadoNoPortal: true, rotinaAtiva: true } })
 
   for (const guia of guias) {
     const cliente = await Cliente.findByPk(guia.clienteId)
@@ -241,7 +241,7 @@ router.get("/", autenticar, async (req, res) => {
     if (!cliente) return res.json(obrigacoes)
 
     const guias = await DasMei.findAll({
-      where: { clienteId: cliente.id },
+      where: { clienteId: cliente.id, rotinaAtiva: true },
       order: [["vencimento", "ASC"]],
     })
 

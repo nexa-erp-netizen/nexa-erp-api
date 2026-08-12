@@ -10,6 +10,7 @@ const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
 const { detectarConsultaInteligente, responderConfirmacaoCliente } = require("../services/consultaInteligenteService")
+const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
 const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
   consultarDocumentosComDrive,
@@ -1328,6 +1329,15 @@ async function ultimaConfirmacaoClientePendente(conversaId, usuarioId) {
   return ultimaResposta?.dados?.confirmacaoClientePendente || null
 }
 
+async function ultimaConfirmacaoAlteracaoPendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.confirmacaoAlteracaoPendente || null
+}
+
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
   return {
     ...resposta,
@@ -2430,6 +2440,28 @@ async function conversar(req, res) {
         dados: selecaoResolvida,
       })
       return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
+    }
+
+    const confirmacaoAlteracao = await ultimaConfirmacaoAlteracaoPendente(conversa.id, req.usuario.id)
+    const alteracaoResolvida = await responderConfirmacaoAlteracaoRegime({
+      confirmacao: confirmacaoAlteracao,
+      mensagem,
+      usuario: usuarioCompleto,
+    })
+    if (alteracaoResolvida) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: alteracaoResolvida.resposta,
+        dados: alteracaoResolvida,
+      })
+      return res.json(anexarMetadadosConversa({
+        ...alteracaoResolvida,
+        atividade: "alteracao-regime",
+        provedor: "sistema",
+        modelo: "Nexa Regime Tributário 1.0",
+      }, conversa))
     }
 
     const confirmacaoCliente = await ultimaConfirmacaoClientePendente(conversa.id, req.usuario.id)

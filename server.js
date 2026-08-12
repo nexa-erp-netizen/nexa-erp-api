@@ -41,6 +41,7 @@ require("./src/models/AuditoriaIntegracaoChatGPT")
 require("./src/models/DasMei")
 require("./src/models/WhatsAppAssistEnvio")
 require("./src/models/AcessoCliente")
+require("./src/models/HistoricoRegimeTributario")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 
