@@ -918,6 +918,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
   )
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
+      if (dias === null || dias >= 0) return
       adicionar({
         modulo: "fiscal",
         categoria: "Fiscal",
@@ -939,6 +940,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
       const cadastro = porId.get(Number(guia.clienteId))
       if (!cadastro || !nomesAtivos.has(normalizar(nomeCliente(cadastro)))) return
       const dias = diasAte(guia.vencimento)
+      if (dias === null || dias >= 0) return
       const [ano, mes] = String(guia.competencia || "").split("-")
       adicionar({
         modulo: "das-mei",
@@ -998,6 +1000,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     .filter((item) => clienteCadastrado(item.clienteId, item.cliente) && servicoAbertoParaPrioridade(item))
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
+      if (dias === null || dias >= 0) return
       adicionar({
         modulo: "servico-cobranca",
         categoria: "Financeiro do escritório",
@@ -1023,6 +1026,7 @@ async function carregarPendenciasOperacionais(clientes, cliente = null) {
     )
     .forEach((item) => {
       const dias = diasAte(item.vencimento)
+      if (dias === null || dias >= 0) return
       const ehHonorario = /honor/.test(`${normalizar(item.descricao)} ${normalizar(item.origem)} ${normalizar(item.centroCusto)}`)
       const ehServico = origemEhServico(item)
       adicionar({
