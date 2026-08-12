@@ -27,6 +27,7 @@ const {
   detectarInstrucaoDeAprendizado,
 } = require("../services/vocabularioVozService")
 const { tituloAutomatico } = require("./conversaHistoricoController")
+const { detectarSiteParaAbrir } = require("../services/siteNexaService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -420,6 +421,17 @@ function respostaDeComando({ resposta, acao = null, ...extras }) {
     aviso: "Comando seguro de navegação. Nenhum dado foi alterado.",
     ...extras,
   }
+}
+
+function detectarComandoAbrirSite(mensagem) {
+  const site = detectarSiteParaAbrir(mensagem)
+  if (!site) return null
+
+  return respostaDeComando({
+    resposta: `${site.titulo} aberto.`,
+    fala: "Pronto.",
+    acao: { tipo: "abrir-url", url: site.url, titulo: site.titulo, segura: true, origem: site.origem },
+  })
 }
 
 function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual }) {
@@ -922,6 +934,8 @@ Retorne SOMENTE JSON válido, sem markdown:
 
 async function detectarComandoNavegacao(parametros) {
   if (pedidoResumoOperacionalDoDia(parametros?.mensagem)) return null
+  const site = detectarComandoAbrirSite(parametros?.mensagem)
+  if (site) return site
   const deterministico = await detectarComandoNavegacaoDeterministico(parametros)
   if (deterministico) return deterministico
 
