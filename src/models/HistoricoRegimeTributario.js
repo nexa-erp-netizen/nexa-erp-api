@@ -14,7 +14,10 @@ const HistoricoRegimeTributario = sequelize.define("HistoricoRegimeTributario", 
 }, {
   tableName: "historicos_regime_tributario",
   indexes: [
-    { fields: ["escritorioId", "clienteId", "createdAt"] },
+    {
+      name: "idx_hist_regime_escr_cliente_created",
+      fields: ["escritorioId", "clienteId", "createdAt"],
+    },
   ],
 })
 
