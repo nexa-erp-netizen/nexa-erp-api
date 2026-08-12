@@ -10,7 +10,6 @@ const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
 const { detectarConsultaInteligente, responderConfirmacaoCliente } = require("../services/consultaInteligenteService")
-const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
 const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
   consultarDocumentosComDrive,
@@ -304,7 +303,7 @@ function configuracaoPaginaNoTexto(texto) {
     .flatMap((item) => item.aliases.map((alias) => ({ ...item, alias: normalizar(alias) })))
     .sort((a, b) => b.alias.length - a.alias.length)
 
-  const encontrados = candidatos.filter((item) => texto.includes(item.alias))
+  const encontrados = candidatos.filter((item) => contemPalavra(texto, item.alias))
   const paginaEspecifica = encontrados.find(
     (item) => !(item.pagina === "Clientes" && ["cliente", "clientes"].includes(item.alias)),
   )
@@ -315,7 +314,7 @@ function configuracaoGrupoNoTexto(texto) {
   const candidatos = GRUPOS_NAVEGACAO
     .flatMap((item) => item.aliases.map((alias) => ({ ...item, alias: normalizar(alias) })))
     .sort((a, b) => b.alias.length - a.alias.length)
-  return candidatos.find((item) => texto === item.alias || texto.includes(item.alias)) || null
+  return candidatos.find((item) => texto === item.alias || contemPalavra(texto, item.alias)) || null
 }
 
 function temVerboNavegacao(texto) {
@@ -1327,15 +1326,6 @@ async function ultimaConfirmacaoClientePendente(conversaId, usuarioId) {
     order: [["createdAt", "DESC"], ["id", "DESC"]],
   })
   return ultimaResposta?.dados?.confirmacaoClientePendente || null
-}
-
-async function ultimaConfirmacaoAlteracaoPendente(conversaId, usuarioId) {
-  if (!conversaId) return null
-  const ultimaResposta = await MensagemNexa.findOne({
-    where: { conversaId, usuarioId, autor: "nexa" },
-    order: [["createdAt", "DESC"], ["id", "DESC"]],
-  })
-  return ultimaResposta?.dados?.confirmacaoAlteracaoPendente || null
 }
 
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
@@ -2440,28 +2430,6 @@ async function conversar(req, res) {
         dados: selecaoResolvida,
       })
       return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
-    }
-
-    const confirmacaoAlteracao = await ultimaConfirmacaoAlteracaoPendente(conversa.id, req.usuario.id)
-    const alteracaoResolvida = await responderConfirmacaoAlteracaoRegime({
-      confirmacao: confirmacaoAlteracao,
-      mensagem,
-      usuario: usuarioCompleto,
-    })
-    if (alteracaoResolvida) {
-      await salvarMensagemConversa({
-        conversa,
-        usuarioId: req.usuario.id,
-        autor: "nexa",
-        texto: alteracaoResolvida.resposta,
-        dados: alteracaoResolvida,
-      })
-      return res.json(anexarMetadadosConversa({
-        ...alteracaoResolvida,
-        atividade: "alteracao-regime",
-        provedor: "sistema",
-        modelo: "Nexa Regime Tributário 1.0",
-      }, conversa))
     }
 
     const confirmacaoCliente = await ultimaConfirmacaoClientePendente(conversa.id, req.usuario.id)
