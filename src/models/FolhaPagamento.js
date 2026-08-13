@@ -1,0 +1,41 @@
+const { DataTypes } = require("sequelize")
+const sequelize = require("../config/database")
+
+const FolhaPagamento = sequelize.define("FolhaPagamento", {
+  clienteId: { type: DataTypes.INTEGER, allowNull: false },
+  cliente: { type: DataTypes.STRING, allowNull: false },
+  funcionarioId: { type: DataTypes.INTEGER, allowNull: false },
+  funcionario: { type: DataTypes.STRING, allowNull: false },
+  competencia: { type: DataTypes.STRING(7), allowNull: false },
+  status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Rascunho" },
+  salarioBase: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  diasTrabalhados: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
+  horasExtras50: { type: DataTypes.DECIMAL(8, 2), allowNull: false, defaultValue: 0 },
+  horasExtras100: { type: DataTypes.DECIMAL(8, 2), allowNull: false, defaultValue: 0 },
+  faltasDias: { type: DataTypes.DECIMAL(8, 2), allowNull: false, defaultValue: 0 },
+  atrasosHoras: { type: DataTypes.DECIMAL(8, 2), allowNull: false, defaultValue: 0 },
+  comissoes: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  bonus: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  outrosProventos: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  outrosDescontos: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  pensaoAlimenticia: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  descontoValeTransporte: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  descontoValeAlimentacao: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  proventos: { type: DataTypes.JSON, allowNull: false, defaultValue: [] },
+  descontos: { type: DataTypes.JSON, allowNull: false, defaultValue: [] },
+  totalProventos: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  totalDescontos: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  liquido: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  baseInss: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  inss: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  baseIrrf: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  irrf: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  baseFgts: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  fgts: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  salarioFamilia: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+  tabelaCalculo: { type: DataTypes.JSON, allowNull: false, defaultValue: {} },
+  observacoes: { type: DataTypes.TEXT, allowNull: true },
+  fechadoEm: { type: DataTypes.DATE, allowNull: true },
+})
+
+module.exports = FolhaPagamento
