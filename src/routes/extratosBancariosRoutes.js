@@ -10,6 +10,13 @@ const { lerExtrato } = require("../services/extratoBancarioParser")
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
 
+router.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+  res.set("Pragma", "no-cache")
+  res.set("Expires", "0")
+  next()
+})
+
 router.use((req, res, next) =>
   req.usuario.perfil === "Cliente"
     ? res.status(403).json({ message: "Acesso restrito ao escritório" })
