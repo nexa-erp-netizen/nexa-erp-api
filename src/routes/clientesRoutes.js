@@ -63,6 +63,110 @@ function extrairPathSupabase(valor) {
   return valor
 }
 
+async function obterClienteDoUsuario(req) {
+  if (req.usuario?.perfil !== "Cliente" || !req.usuario?.clienteVinculado) {
+    return null
+  }
+
+  return Cliente.findOne({
+    where: { nome: req.usuario.clienteVinculado },
+  })
+}
+
+function cadastroVisivelAoCliente(cliente) {
+  return {
+    nome: cliente.nome,
+    cpf: cliente.cpf,
+    cnpj: cliente.cnpj,
+    telefone: cliente.telefone,
+    email: cliente.email,
+    cep: cliente.cep,
+    endereco: cliente.endereco,
+    numero: cliente.numero,
+    complemento: cliente.complemento,
+    bairro: cliente.bairro,
+    cidade: cliente.cidade,
+    estado: cliente.estado,
+  }
+}
+
+function textoLimitado(valor, limite) {
+  return String(valor || "").trim().slice(0, limite) || null
+}
+
+function dadosCadastraisPermitidos(body) {
+  return {
+    telefone: textoLimitado(body.telefone, 30) || "",
+    email: textoLimitado(body.email, 160),
+    cep: textoLimitado(body.cep, 10),
+    endereco: textoLimitado(body.endereco, 180),
+    numero: textoLimitado(body.numero, 30),
+    complemento: textoLimitado(body.complemento, 100),
+    bairro: textoLimitado(body.bairro, 100),
+    cidade: textoLimitado(body.cidade, 100),
+    estado: textoLimitado(body.estado, 2)?.toUpperCase() || null,
+  }
+}
+
+router.get("/meu-cadastro", autenticar, async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Cliente") {
+      return res.status(403).json({ message: "Acesso exclusivo do cliente." })
+    }
+
+    const cliente = await obterClienteDoUsuario(req)
+
+    if (!cliente) {
+      return res.status(404).json({ message: "Cadastro vinculado não encontrado." })
+    }
+
+    res.json(cadastroVisivelAoCliente(cliente))
+  } catch (error) {
+    console.error("ERRO AO CARREGAR CADASTRO DO CLIENTE:", error)
+    res.status(500).json({ message: "Erro ao carregar dados cadastrais." })
+  }
+})
+
+router.put("/meu-cadastro", autenticar, async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Cliente") {
+      return res.status(403).json({ message: "Acesso exclusivo do cliente." })
+    }
+
+    const cliente = await obterClienteDoUsuario(req)
+
+    if (!cliente) {
+      return res.status(404).json({ message: "Cadastro vinculado não encontrado." })
+    }
+
+    const dados = dadosCadastraisPermitidos(req.body || {})
+    const email = dados.email || ""
+    const cep = String(dados.cep || "").replace(/\D/g, "")
+
+    if (!dados.telefone) {
+      return res.status(400).json({ message: "Informe um telefone para contato." })
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: "Informe um e-mail válido." })
+    }
+
+    if (cep && cep.length !== 8) {
+      return res.status(400).json({ message: "Informe um CEP válido com 8 números." })
+    }
+
+    if (dados.estado && !/^[A-Z]{2}$/.test(dados.estado)) {
+      return res.status(400).json({ message: "Informe a UF com duas letras." })
+    }
+
+    await cliente.update(dados)
+    res.json(cadastroVisivelAoCliente(cliente))
+  } catch (error) {
+    console.error("ERRO AO ATUALIZAR CADASTRO PELO CLIENTE:", error)
+    res.status(500).json({ message: "Erro ao atualizar dados cadastrais." })
+  }
+})
+
 router.get("/", autenticar, async (req, res) => {
   try {
     const where = {}
