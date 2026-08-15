@@ -5,6 +5,9 @@ const { Op } = require("sequelize")
 const ContaBancariaCliente = require("../models/ContaBancariaCliente")
 const ImportacaoExtratoBancario = require("../models/ImportacaoExtratoBancario")
 const MovimentoBancario = require("../models/MovimentoBancario")
+const PlanoConta = require("../models/PlanoConta")
+const LancamentoContabil = require("../models/LancamentoContabil")
+const sequelize = require("../config/database")
 const { lerExtrato } = require("../services/extratoBancarioParser")
 
 const router = express.Router()
@@ -125,8 +128,145 @@ router.get("/importacoes", async (req, res) => {
   }
 })
 
+router.patch("/movimentos/:id", async (req, res) => {
+  try {
+    const movimento = await MovimentoBancario.findByPk(req.params.id)
+    if (!movimento) return res.status(404).json({ message: "Movimento bancário não encontrado" })
+    if (movimento.lancamentoContabilId) return res.status(409).json({ message: "Este movimento já gerou um lançamento contábil." })
+    const status = statusValido(req.body.statusConciliacao || "Classificado")
+    const plano = req.body.planoContaId ? await PlanoConta.findByPk(Number(req.body.planoContaId)) : null
+    if (["Classificado", "Conciliado"].includes(status) && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
+    await movimento.update({
+      planoContaId: plano?.id || null,
+      categoriaSugerida: plano?.conta || movimento.categoriaSugerida,
+      statusConciliacao: status,
+      conciliadoEm: status === "Conciliado" ? new Date() : null,
+      conciliadoPor: status === "Conciliado" ? (req.usuario.nome || req.usuario.email || "Equipe Nexa") : null,
+      observacoes: req.body.observacoes !== undefined ? String(req.body.observacoes || "").trim() || null : movimento.observacoes,
+    })
+    res.json(movimento)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao classificar movimento" })
+  }
+})
+
+router.post("/movimentos/classificar-lote", async (req, res) => {
+  try {
+    const ids = [...new Set((req.body.ids || []).map(Number).filter(Number.isInteger))]
+    if (!ids.length) return res.status(400).json({ message: "Selecione pelo menos um movimento." })
+    const status = statusValido(req.body.statusConciliacao || "Classificado")
+    const plano = req.body.planoContaId ? await PlanoConta.findByPk(Number(req.body.planoContaId)) : null
+    if (["Classificado", "Conciliado"].includes(status) && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
+    const movimentos = await MovimentoBancario.findAll({ where: { id: { [Op.in]: ids }, lancamentoContabilId: null } })
+    for (const movimento of movimentos) {
+      await movimento.update({
+        planoContaId: plano?.id || null,
+        categoriaSugerida: plano?.conta || movimento.categoriaSugerida,
+        statusConciliacao: status,
+        conciliadoEm: status === "Conciliado" ? new Date() : null,
+        conciliadoPor: status === "Conciliado" ? (req.usuario.nome || req.usuario.email || "Equipe Nexa") : null,
+      })
+    }
+    res.json({ atualizados: movimentos.length })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao classificar movimentos em lote" })
+  }
+})
+
+router.post("/movimentos/sugerir", async (req, res) => {
+  try {
+    const contaBancariaId = Number(req.body.contaBancariaId)
+    const pendentes = await MovimentoBancario.findAll({ where: { contaBancariaId, statusConciliacao: "Pendente", planoContaId: null } })
+    if (!pendentes.length) return res.json({ sugeridos: 0 })
+    const historico = await MovimentoBancario.findAll({
+      where: { clienteId: pendentes[0].clienteId, planoContaId: { [Op.ne]: null }, statusConciliacao: { [Op.in]: ["Classificado", "Conciliado", "Lançado"] } },
+      order: [["updatedAt", "DESC"]],
+    })
+    let sugeridos = 0
+    for (const movimento of pendentes) {
+      const melhor = melhorHistorico(movimento, historico)
+      if (!melhor) continue
+      await movimento.update({ planoContaId: melhor.planoContaId, categoriaSugerida: melhor.categoriaSugerida, statusConciliacao: "Classificado" })
+      sugeridos += 1
+    }
+    res.json({ sugeridos })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao sugerir classificações" })
+  }
+})
+
+router.post("/gerar-lancamentos", async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    const ids = [...new Set((req.body.ids || []).map(Number).filter(Number.isInteger))]
+    if (!ids.length) throw new Error("Selecione os movimentos conciliados que deseja lançar.")
+    const movimentos = await MovimentoBancario.findAll({
+      where: { id: { [Op.in]: ids }, statusConciliacao: "Conciliado", lancamentoContabilId: null },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    if (!movimentos.length) throw new Error("Nenhum movimento conciliado disponível para lançamento.")
+    const planos = await PlanoConta.findAll({ where: { id: { [Op.in]: movimentos.map(m => m.planoContaId).filter(Boolean) } }, transaction })
+    const mapaPlanos = new Map(planos.map(p => [Number(p.id), p]))
+    let gerados = 0
+    for (const movimento of movimentos) {
+      const plano = mapaPlanos.get(Number(movimento.planoContaId))
+      if (!plano) throw new Error(`Plano de Contas não encontrado para: ${movimento.descricao}`)
+      const [ano, mes] = String(movimento.data).split("-")
+      const lancamento = await LancamentoContabil.create({
+        cliente: movimento.cliente,
+        data: movimento.data,
+        competencia: `${mes}/${ano}`,
+        tipo: movimento.natureza === "Entrada" ? "Receita" : "Despesa",
+        planoConta: plano.conta,
+        descricao: movimento.descricao,
+        quantidade: 1,
+        valorUnitario: Number(movimento.valor).toFixed(2),
+        valor: Number(movimento.valor).toFixed(2),
+        formaPagamento: "Bancos",
+        observacao: `Gerado pela Conciliação Bancária • Movimento ${movimento.id}`,
+        anexos: [],
+        empresaId: req.usuario?.empresaId || null,
+      }, { transaction })
+      await movimento.update({ statusConciliacao: "Lançado", lancamentoContabilId: lancamento.id }, { transaction })
+      gerados += 1
+    }
+    await transaction.commit()
+    res.status(201).json({ gerados })
+  } catch (error) {
+    await transaction.rollback()
+    console.error(error)
+    res.status(400).json({ message: error.message || "Erro ao gerar lançamentos contábeis" })
+  }
+})
+
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim()
+}
+
+function statusValido(status) {
+  return ["Pendente", "Classificado", "Conciliado", "Ignorado"].includes(status) ? status : "Classificado"
+}
+
+function palavras(valor) {
+  return new Set(normalizar(valor).split(/[^a-z0-9]+/).filter(p => p.length >= 3 && !["pagamento", "recebimento", "pix", "ted", "doc"].includes(p)))
+}
+
+function melhorHistorico(movimento, historico) {
+  const atual = palavras(movimento.descricao)
+  let melhor = null, melhorNota = 0
+  for (const item of historico) {
+    if (item.natureza !== movimento.natureza || !item.planoContaId) continue
+    const anterior = palavras(item.descricao)
+    const comuns = [...atual].filter(p => anterior.has(p)).length
+    const nota = atual.size && anterior.size ? comuns / Math.max(atual.size, anterior.size) : 0
+    if (normalizar(item.descricao) === normalizar(movimento.descricao)) { melhor = item; melhorNota = 1; break }
+    if (nota > melhorNota) { melhor = item; melhorNota = nota }
+  }
+  return melhorNota >= 0.5 ? melhor : null
 }
 
 router.use((error, _req, res, next) => {

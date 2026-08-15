@@ -18,6 +18,9 @@ const MovimentoBancario = sequelize.define("MovimentoBancario", {
   statusConciliacao: { type: DataTypes.STRING, allowNull: false, defaultValue: "Pendente" },
   categoriaSugerida: { type: DataTypes.STRING, allowNull: true },
   planoContaId: { type: DataTypes.INTEGER, allowNull: true },
+  lancamentoContabilId: { type: DataTypes.INTEGER, allowNull: true },
+  conciliadoEm: { type: DataTypes.DATE, allowNull: true },
+  conciliadoPor: { type: DataTypes.STRING, allowNull: true },
   observacoes: { type: DataTypes.TEXT, allowNull: true },
 })
 
