@@ -7,8 +7,10 @@ const ImportacaoExtratoBancario = require("../models/ImportacaoExtratoBancario")
 const MovimentoBancario = require("../models/MovimentoBancario")
 const PlanoConta = require("../models/PlanoConta")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const FechamentoConciliacaoBancaria = require("../models/FechamentoConciliacaoBancaria")
 const sequelize = require("../config/database")
 const { lerExtrato } = require("../services/extratoBancarioParser")
+const PDFDocument = require("pdfkit")
 
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } })
@@ -42,6 +44,12 @@ router.post("/importar", upload.single("arquivo"), async (req, res) => {
 
     const leitura = lerExtrato(req.file.buffer, extensao)
     if (!leitura.movimentos.length) return res.status(400).json({ message: "Nenhum movimento válido foi encontrado no extrato." })
+
+    const competenciasDoArquivo = [...new Set(leitura.movimentos.map(item => String(item.data).slice(0, 7)))]
+    const competenciaFechada = await FechamentoConciliacaoBancaria.findOne({
+      where: { contaBancariaId: conta.id, competencia: { [Op.in]: competenciasDoArquivo }, status: "Fechado" },
+    })
+    if (competenciaFechada) return res.status(409).json({ message: `A competência ${competenciaBr(competenciaFechada.competencia)} está fechada. Reabra o mês antes de importar este extrato.` })
 
     const datas = leitura.movimentos.map(item => item.data).sort()
     importacao = await ImportacaoExtratoBancario.create({
@@ -125,6 +133,100 @@ router.get("/importacoes", async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: "Erro ao listar importações" })
+  }
+})
+
+router.get("/fechamentos", async (req, res) => {
+  try {
+    const where = {}
+    if (req.query.clienteId) where.clienteId = Number(req.query.clienteId)
+    if (req.query.contaBancariaId) where.contaBancariaId = Number(req.query.contaBancariaId)
+    res.json(await FechamentoConciliacaoBancaria.findAll({ where, order: [["competencia", "DESC"]] }))
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao listar fechamentos bancários" })
+  }
+})
+
+router.post("/fechamentos", async (req, res) => {
+  try {
+    const contaBancariaId = Number(req.body.contaBancariaId)
+    const competencia = String(req.body.competencia || "")
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) return res.status(400).json({ message: "Competência inválida." })
+    const conta = await ContaBancariaCliente.findByPk(contaBancariaId)
+    if (!conta) return res.status(404).json({ message: "Conta bancária não encontrada." })
+    const existente = await FechamentoConciliacaoBancaria.findOne({ where: { contaBancariaId, competencia } })
+    if (existente?.status === "Fechado") return res.status(409).json({ message: "Esta competência já está fechada." })
+
+    const periodo = periodoCompetencia(competencia)
+    const movimentos = await MovimentoBancario.findAll({ where: { contaBancariaId, data: { [Op.between]: [periodo.inicio, periodo.fim] } } })
+    if (!movimentos.length) return res.status(400).json({ message: "Não existem movimentos nesta competência." })
+    const naoConcluidos = movimentos.filter(m => !["Conciliado", "Ignorado", "Lançado"].includes(m.statusConciliacao))
+    if (naoConcluidos.length) return res.status(409).json({ message: `Faltam ${naoConcluidos.length} movimento(s) para concluir este mês.`, pendentes: naoConcluidos.length })
+
+    const anteriores = await MovimentoBancario.findAll({ where: { contaBancariaId, data: { [Op.lt]: periodo.inicio } } })
+    const saldoInicial = Number(conta.saldoInicial || 0) + anteriores.reduce((total, m) => total + Number(m.valorAssinado || 0), 0)
+    const totalEntradas = movimentos.filter(m => m.natureza === "Entrada").reduce((total, m) => total + Number(m.valor || 0), 0)
+    const totalSaidas = movimentos.filter(m => m.natureza === "Saída").reduce((total, m) => total + Number(m.valor || 0), 0)
+    const dados = {
+      clienteId: conta.clienteId, cliente: conta.cliente, contaBancariaId, competencia,
+      saldoInicial, totalEntradas, totalSaidas, saldoFinal: saldoInicial + totalEntradas - totalSaidas,
+      quantidadeMovimentos: movimentos.length, status: "Fechado", fechadoEm: new Date(),
+      fechadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa", reabertoEm: null, reabertoPor: null,
+    }
+    if (existente) { await existente.update(dados); return res.json(existente) }
+    res.status(201).json(await FechamentoConciliacaoBancaria.create(dados))
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao fechar competência bancária" })
+  }
+})
+
+router.patch("/fechamentos/:id/reabrir", async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Administrador") return res.status(403).json({ message: "Somente o administrador pode reabrir uma competência." })
+    const fechamento = await FechamentoConciliacaoBancaria.findByPk(req.params.id)
+    if (!fechamento) return res.status(404).json({ message: "Fechamento não encontrado." })
+    await fechamento.update({ status: "Reaberto", reabertoEm: new Date(), reabertoPor: req.usuario.nome || req.usuario.email || "Administrador" })
+    res.json(fechamento)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao reabrir competência" })
+  }
+})
+
+router.get("/fechamentos/:id/pdf", async (req, res) => {
+  try {
+    const fechamento = await FechamentoConciliacaoBancaria.findByPk(req.params.id)
+    if (!fechamento) return res.status(404).json({ message: "Fechamento não encontrado." })
+    const conta = await ContaBancariaCliente.findByPk(fechamento.contaBancariaId)
+    const doc = new PDFDocument({ size: "A4", margin: 45 })
+    const partes = []
+    doc.on("data", parte => partes.push(parte))
+    doc.on("end", () => {
+      res.setHeader("Content-Type", "application/pdf")
+      res.setHeader("Content-Disposition", `attachment; filename=conciliacao-${fechamento.competencia}.pdf`)
+      res.send(Buffer.concat(partes))
+    })
+    doc.fillColor("#0b4a84").font("Helvetica-Bold").fontSize(19).text("RELATÓRIO DE CONCILIAÇÃO BANCÁRIA", { align: "center" })
+    doc.moveDown().fillColor("#172b4d").fontSize(11).text(fechamento.cliente, { align: "center" })
+    doc.font("Helvetica").fontSize(9).text(`Competência: ${competenciaBr(fechamento.competencia)}  •  Conta: ${conta?.bancoNome || "-"} - Ag. ${conta?.agencia || "-"} - ${conta?.conta || "-"}${conta?.digito ? `-${conta.digito}` : ""}`, { align: "center" })
+    doc.moveDown(2)
+    const itens = [["Saldo inicial", fechamento.saldoInicial], ["Entradas", fechamento.totalEntradas], ["Saídas", fechamento.totalSaidas], ["Saldo final", fechamento.saldoFinal]]
+    itens.forEach(([titulo, valor], indice) => {
+      const y = doc.y
+      doc.rect(55, y, 485, 34).fillAndStroke(indice === 3 ? "#c8f3dc" : "#e8f2fb", "#76a4c9")
+      doc.fillColor("#183653").font("Helvetica-Bold").fontSize(10).text(titulo, 68, y + 11)
+      doc.text(moedaPdf(valor), 330, y + 11, { width: 195, align: "right" })
+      doc.y = y + 42
+    })
+    doc.moveDown().fillColor("#354b63").font("Helvetica").fontSize(9).text(`${fechamento.quantidadeMovimentos} movimento(s) conferido(s).`)
+    doc.text(`Fechado por ${fechamento.fechadoPor || "Equipe Nexa"} em ${new Date(fechamento.fechadoEm).toLocaleString("pt-BR")}.`)
+    doc.moveDown(3).fontSize(8).fillColor("#6b7d90").text("Documento gerado pelo Nexa ERP.", { align: "center" })
+    doc.end()
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao gerar relatório da conciliação" })
   }
 })
 
@@ -246,6 +348,15 @@ router.post("/gerar-lancamentos", async (req, res) => {
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim()
 }
+
+function periodoCompetencia(competencia) {
+  const [ano, mes] = competencia.split("-").map(Number)
+  const ultimoDia = new Date(ano, mes, 0).getDate()
+  return { inicio: `${competencia}-01`, fim: `${competencia}-${String(ultimoDia).padStart(2, "0")}` }
+}
+
+function competenciaBr(valor) { const [ano, mes] = String(valor).split("-"); return `${mes}/${ano}` }
+function moedaPdf(valor) { return Number(valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) }
 
 function statusValido(status) {
   return ["Pendente", "Classificado", "Conciliado", "Ignorado"].includes(status) ? status : "Classificado"

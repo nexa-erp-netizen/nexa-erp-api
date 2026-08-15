@@ -51,6 +51,7 @@ require("./src/models/Rescisao")
 require("./src/models/ContaBancariaCliente")
 require("./src/models/ImportacaoExtratoBancario")
 require("./src/models/MovimentoBancario")
+require("./src/models/FechamentoConciliacaoBancaria")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 
