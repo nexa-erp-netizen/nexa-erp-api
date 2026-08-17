@@ -229,9 +229,7 @@ router.get("/", autenticar, async (req, res) => {
       order: [["createdAt", "DESC"]],
     })
 
-    const obrigacoes = req.usuario.perfil === "Cliente"
-      ? obrigacoesEncontradas.filter((item) => !String(item.observacao || "").startsWith("DAS-MEI:"))
-      : obrigacoesEncontradas
+    const obrigacoes = obrigacoesEncontradas
 
     if (req.usuario.perfil !== "Cliente") {
       return res.json(obrigacoes)
@@ -260,7 +258,21 @@ router.get("/", autenticar, async (req, res) => {
         anexos: [{ nome: guia.nomeArquivo, dasMeiId: guia.id }],
       }))
 
-    return res.json([...guiasLiberadas, ...obrigacoes])
+    const idsDasJaSincronizados = new Set()
+    const obrigacoesNormalizadas = obrigacoes.map((item) => {
+      const dados = item.toJSON ? item.toJSON() : item
+      const observacao = String(dados.observacao || "")
+      if (!observacao.startsWith("DAS-MEI:")) return dados
+      const dasMeiId = Number(observacao.replace("DAS-MEI:", "")) || null
+      if (dasMeiId) idsDasJaSincronizados.add(dasMeiId)
+      return { ...dados, dasMeiId }
+    })
+
+    const guiasAindaNaoSincronizadas = guiasLiberadas.filter(
+      (guia) => !idsDasJaSincronizados.has(Number(guia.dasMeiId))
+    )
+
+    return res.json([...guiasAindaNaoSincronizadas, ...obrigacoesNormalizadas])
   } catch (error) {
     console.error(error)
 
