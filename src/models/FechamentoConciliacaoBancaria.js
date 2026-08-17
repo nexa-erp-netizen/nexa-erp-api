@@ -16,8 +16,6 @@ const FechamentoConciliacaoBancaria = sequelize.define("FechamentoConciliacaoBan
   fechadoPor: { type: DataTypes.STRING, allowNull: true },
   reabertoEm: { type: DataTypes.DATE, allowNull: true },
   reabertoPor: { type: DataTypes.STRING, allowNull: true },
-}, {
-  indexes: [{ unique: true, fields: ["escritorioId", "contaBancariaId", "competencia"] }],
 })
 
 module.exports = FechamentoConciliacaoBancaria
