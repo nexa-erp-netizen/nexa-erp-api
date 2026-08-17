@@ -13,6 +13,15 @@ const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
 
+function normalizarNomeCliente(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+}
+
 function competenciaDasParaFiscal(competencia) {
   const [ano, mes] = String(competencia || "").split("-")
   return ano && mes ? `${mes}/${ano}` : String(competencia || "")
@@ -214,28 +223,32 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
 
 router.get("/", autenticar, async (req, res) => {
   try {
-    if (req.usuario.perfil !== "Cliente") {
-      await sincronizarDasMeiPublicadosNoFiscal()
-    }
+    await sincronizarDasMeiPublicadosNoFiscal()
 
     const where = {}
-
-    if (req.usuario.perfil === "Cliente") {
-      where.cliente = req.usuario.clienteVinculado
-    }
 
     const obrigacoesEncontradas = await Fiscal.findAll({
       where,
       order: [["createdAt", "DESC"]],
     })
 
-    const obrigacoes = obrigacoesEncontradas
+    const identificacaoCliente =
+      req.usuario.clienteVinculado || req.usuario.nome || ""
+    const nomeClienteVinculado = normalizarNomeCliente(identificacaoCliente)
+    const obrigacoes = req.usuario.perfil === "Cliente"
+      ? obrigacoesEncontradas.filter(
+          (item) => normalizarNomeCliente(item.cliente) === nomeClienteVinculado
+        )
+      : obrigacoesEncontradas
 
     if (req.usuario.perfil !== "Cliente") {
       return res.json(obrigacoes)
     }
 
-    const cliente = await Cliente.findOne({ where: { nome: req.usuario.clienteVinculado } })
+    const clientes = await Cliente.findAll()
+    const cliente = clientes.find(
+      (item) => normalizarNomeCliente(item.nome) === nomeClienteVinculado
+    )
     if (!cliente) return res.json(obrigacoes)
 
     const guias = await DasMei.findAll({
