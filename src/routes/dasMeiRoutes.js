@@ -5,6 +5,7 @@ const supabase = require("../config/supabase")
 const Cliente = require("../models/Cliente")
 const DasMei = require("../models/DasMei")
 const Fiscal = require("../models/Fiscal")
+const MovimentoCliente = require("../models/MovimentoCliente")
 const { autenticar } = require("../middlewares/authMiddleware")
 const { lerDasMei } = require("../services/dasMeiParserService")
 
@@ -59,6 +60,34 @@ async function sincronizarPendenciaFiscal(guia) {
     return existente
   }
   return Fiscal.create(dados)
+}
+
+async function criarMovimentoPagamentoDas(guia, cliente) {
+  const observacao = `das-mei:${guia.id}`
+  const existente = await MovimentoCliente.findOne({
+    where: { cliente: cliente.nome, tipo: "Despesa", observacao },
+  })
+  if (existente) return existente
+
+  const valor = Number(String(guia.valor || "0").replace(",", "."))
+  if (!Number.isFinite(valor) || valor <= 0) {
+    throw new Error("Não foi possível registrar a movimentação: DAS sem valor válido.")
+  }
+
+  return MovimentoCliente.create({
+    cliente: cliente.nome,
+    tipo: "Despesa",
+    data: new Date().toISOString().slice(0, 10),
+    planoContaId: null,
+    planoContaNome: "Impostos e taxas",
+    forma: "Confirmado pelo cliente",
+    descricao: `Pagamento confirmado - DAS-MEI ${competenciaFiscal(guia.competencia)}`,
+    valor,
+    formaPagamento: "Confirmado pelo cliente",
+    comprovante: null,
+    observacao,
+    status: "Pendente",
+  })
 }
 
 function respostaGuia(guia, hoje) {
@@ -217,12 +246,15 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
   if (req.usuario.perfil !== "Cliente") return res.status(403).json({ message: "Acesso não autorizado" })
   const guia = await DasMei.findByPk(req.params.id)
   if (!guia || !(await acessoPermitido(req, guia.clienteId))) return res.status(404).json({ message: "Guia não encontrada" })
+  const cliente = await Cliente.findByPk(guia.clienteId)
+  if (!cliente) return res.status(404).json({ message: "Cliente da guia não encontrado" })
   await guia.update({
     status: "Paga",
     historico: [...(guia.historico || []), { em: new Date().toISOString(), acao: "Pagamento informado pelo cliente" }],
   })
   await sincronizarPendenciaFiscal(guia)
-  res.json(guia)
+  const movimento = await criarMovimentoPagamentoDas(guia, cliente)
+  res.json({ message: "Pagamento confirmado e movimentação criada", guia, movimento })
 })
 
 router.get("/:id/arquivo", autenticar, async (req, res) => {
