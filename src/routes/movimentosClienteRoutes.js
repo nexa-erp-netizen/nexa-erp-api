@@ -108,6 +108,13 @@ async function removerLancamentoContabilDoMovimento(movimento) {
   })
 }
 
+async function garantirLancamentosContabeis(movimentos, usuario) {
+  for (const movimento of movimentos) {
+    await criarLancamentoContabilDoMovimento(movimento, usuario)
+  }
+  return movimentos
+}
+
 router.get("/", autenticar, async (req, res) => {
   try {
     if (req.usuario.perfil === "Cliente") {
@@ -120,11 +127,11 @@ router.get("/", autenticar, async (req, res) => {
         order: [["data", "DESC"], ["createdAt", "DESC"]],
       })
 
-      return res.json(
-        movimentos.filter(
-          (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
-        )
+      const movimentosDoCliente = movimentos.filter(
+        (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
       )
+      await garantirLancamentosContabeis(movimentosDoCliente, req.usuario)
+      return res.json(movimentosDoCliente)
     }
 
     const nomesConsultados = []
@@ -150,6 +157,7 @@ router.get("/", autenticar, async (req, res) => {
     })
 
     if (!nomesConsultados.length) {
+      await garantirLancamentosContabeis(movimentos, req.usuario)
       return res.json(movimentos)
     }
 
@@ -163,6 +171,7 @@ router.get("/", autenticar, async (req, res) => {
       nomesNormalizados.has(normalizarNomeCliente(movimento.cliente))
     )
 
+    await garantirLancamentosContabeis(movimentosDoCliente, req.usuario)
     res.json(movimentosDoCliente)
   } catch (error) {
     console.error("ERRO AO LISTAR MOVIMENTOS:", error)

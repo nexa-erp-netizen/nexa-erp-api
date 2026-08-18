@@ -6,6 +6,7 @@ const Cliente = require("../models/Cliente")
 const DasMei = require("../models/DasMei")
 const Fiscal = require("../models/Fiscal")
 const MovimentoCliente = require("../models/MovimentoCliente")
+const LancamentoContabil = require("../models/LancamentoContabil")
 const { autenticar } = require("../middlewares/authMiddleware")
 const { lerDasMei } = require("../services/dasMeiParserService")
 
@@ -88,6 +89,31 @@ async function criarMovimentoPagamentoDas(guia, cliente) {
     observacao,
     status: "Pendente",
   })
+}
+
+async function criarLancamentoDoMovimentoDas(movimento, guia, cliente) {
+  const observacao = `movimento-cliente:${movimento.id}`
+  const existente = await LancamentoContabil.findOne({
+    where: { cliente: movimento.cliente, observacao },
+  })
+  const dados = {
+    data: movimento.data,
+    competencia: String(movimento.data).slice(0, 7).split("-").reverse().join("/"),
+    tipo: movimento.tipo,
+    planoConta: movimento.planoContaNome || "Impostos e taxas",
+    descricao: movimento.descricao,
+    quantidade: 1,
+    valorUnitario: String(movimento.valor),
+    valor: String(movimento.valor),
+    formaPagamento: movimento.formaPagamento || movimento.forma || "",
+    anexos: movimento.comprovante ? [{ nome: "Comprovante", caminho: movimento.comprovante }] : [],
+    empresaId: guia.empresaId || cliente.empresaId || null,
+  }
+  if (existente) {
+    await existente.update(dados)
+    return existente
+  }
+  return LancamentoContabil.create({ cliente: movimento.cliente, ...dados, observacao })
 }
 
 function respostaGuia(guia, hoje) {
@@ -254,7 +280,8 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
   })
   await sincronizarPendenciaFiscal(guia)
   const movimento = await criarMovimentoPagamentoDas(guia, cliente)
-  res.json({ message: "Pagamento confirmado e movimentação criada", guia, movimento })
+  const lancamento = await criarLancamentoDoMovimentoDas(movimento, guia, cliente)
+  res.json({ message: "Pagamento confirmado, movimentação e lançamento contábil criados", guia, movimento, lancamento })
 })
 
 router.get("/:id/arquivo", autenticar, async (req, res) => {
