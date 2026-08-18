@@ -86,10 +86,25 @@ function nomeSeguro(nome) {
     .replace(/[^a-zA-Z0-9._-]/g, "-")
 }
 
+function normalizarNomeCliente(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+}
+
 async function acessoPermitido(req, clienteId) {
   if (req.usuario.perfil !== "Cliente") return true
   const cliente = await Cliente.findByPk(clienteId)
-  return Boolean(cliente && cliente.nome === req.usuario.clienteVinculado)
+  const identificacaoCliente =
+    req.usuario.clienteVinculado || req.usuario.nome || ""
+  return Boolean(
+    cliente &&
+    normalizarNomeCliente(cliente.nome) ===
+      normalizarNomeCliente(identificacaoCliente)
+  )
 }
 
 router.get("/", autenticar, async (req, res) => {
