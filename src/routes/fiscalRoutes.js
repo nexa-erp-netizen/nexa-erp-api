@@ -268,7 +268,12 @@ router.get("/", autenticar, async (req, res) => {
         vencimento: guia.vencimento,
         valor: Number(guia.valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }),
         status: guia.status === "Paga" ? "Pago" : "Pendente",
-        anexos: [{ nome: guia.nomeArquivo, dasMeiId: guia.id }],
+        anexos: [{
+          nome: guia.nomeArquivo,
+          caminho: guia.caminhoArquivo,
+          url: guia.caminhoArquivo,
+          dasMeiId: guia.id,
+        }],
       }))
 
     const idsDasJaSincronizados = new Set()
@@ -297,7 +302,6 @@ router.get("/", autenticar, async (req, res) => {
 
 router.get("/anexo-url", autenticar, async (req, res) => {
   try {
-    const bucket = process.env.SUPABASE_BUCKET || "nexa-uploads"
     const path = req.query.path
 
     if (!path) {
@@ -305,6 +309,10 @@ router.get("/anexo-url", autenticar, async (req, res) => {
         message: "Caminho do anexo não informado.",
       })
     }
+
+    const bucket = String(path).startsWith("das-mei/")
+      ? "nexa-anexos"
+      : process.env.SUPABASE_BUCKET || "nexa-uploads"
 
     const { data, error } = await supabase.storage
       .from(bucket)
