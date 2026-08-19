@@ -36,4 +36,18 @@ function identificarEscopo(mensagem) {
   return null
 }
 
-module.exports = { extrairCompetencia, identificarEscopo, normalizar }
+function respostaConfirmaExecucao(valor) {
+  return /^(sim|confirmo|confirmar|confirmado|pode confirmar|pode executar|pode salvar|salvar|execute|executar)$/.test(normalizar(valor))
+}
+
+function respostaCancelaExecucao(valor) {
+  return /^(nao|cancelar|cancele|cancela|desistir|desisto|parar|pare)$/.test(normalizar(valor))
+}
+
+module.exports = {
+  extrairCompetencia,
+  identificarEscopo,
+  normalizar,
+  respostaConfirmaExecucao,
+  respostaCancelaExecucao,
+}

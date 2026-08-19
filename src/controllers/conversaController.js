@@ -28,6 +28,7 @@ const {
 } = require("../services/vocabularioVozService")
 const { tituloAutomatico } = require("./conversaHistoricoController")
 const { detectarSiteParaAbrir } = require("../services/siteNexaService")
+const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1342,6 +1343,15 @@ async function ultimaConfirmacaoClientePendente(conversaId, usuarioId) {
   return ultimaResposta?.dados?.confirmacaoClientePendente || null
 }
 
+async function ultimaConfirmacaoAlteracaoPendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.confirmacaoAlteracaoPendente || null
+}
+
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
   return {
     ...resposta,
@@ -2444,6 +2454,32 @@ async function conversar(req, res) {
         dados: selecaoResolvida,
       })
       return res.json(anexarMetadadosConversa(selecaoResolvida, conversa))
+    }
+
+    // A confirmação de uma ação sensível é recuperada da própria conversa.
+    // Assim o fluxo continua funcionando após atualizar a página e nenhuma
+    // alteração depende de estado temporário mantido apenas no navegador.
+    const confirmacaoAlteracao = await ultimaConfirmacaoAlteracaoPendente(conversa.id, req.usuario.id)
+    const alteracaoResolvida = await responderConfirmacaoAlteracaoRegime({
+      confirmacao: confirmacaoAlteracao,
+      mensagem,
+      usuario: usuarioCompleto,
+    })
+    if (alteracaoResolvida) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: alteracaoResolvida.resposta,
+        dados: alteracaoResolvida,
+      })
+      return res.json(anexarMetadadosConversa({
+        ...alteracaoResolvida,
+        atividade: "acao-guiada",
+        provedor: "sistema",
+        modelo: "Nexa Ações Guiadas 1.0",
+        respondidoEm: new Date().toISOString(),
+      }, conversa))
     }
 
     const confirmacaoCliente = await ultimaConfirmacaoClientePendente(conversa.id, req.usuario.id)

@@ -4,7 +4,13 @@ const Cliente = require("../models/Cliente")
 const Fiscal = require("../models/Fiscal")
 const DasMei = require("../models/DasMei")
 const HistoricoRegimeTributario = require("../models/HistoricoRegimeTributario")
-const { extrairCompetencia, identificarEscopo, normalizar } = require("./regimeParserService")
+const {
+  extrairCompetencia,
+  identificarEscopo,
+  normalizar,
+  respostaConfirmaExecucao,
+  respostaCancelaExecucao,
+} = require("./regimeParserService")
 
 function competenciaFiscal(valor) {
   const texto = String(valor || "").trim()
@@ -29,8 +35,27 @@ function respostaBase(dados) {
 async function responderConfirmacaoAlteracaoRegime({ confirmacao, mensagem, usuario }) {
   if (!confirmacao || confirmacao.tipo !== "regime-tributario") return null
 
-  const escopo = identificarEscopo(mensagem)
-  const periodo = extrairCompetencia(mensagem)
+  if (respostaCancelaExecucao(mensagem)) {
+    return respostaBase({
+      resposta: `Certo. A alteração de regime de ${confirmacao.clienteNome} foi cancelada. Nenhum dado foi modificado.`,
+      confirmacaoAlteracaoConcluida: true,
+      alteracaoCancelada: true,
+      consulta: { tipo: "alteracao-regime-cancelada", titulo: `Alteração cancelada — ${confirmacao.clienteNome}`, resumo: "Nenhuma alteração foi realizada.", total: 0, itens: [] },
+    })
+  }
+
+  const dadosColetados = confirmacao.dadosColetados || null
+  const escopo = dadosColetados?.escopo || identificarEscopo(mensagem)
+  const periodo = dadosColetados?.periodo || extrairCompetencia(mensagem)
+
+  if (dadosColetados && !respostaConfirmaExecucao(mensagem)) {
+    return respostaBase({
+      resposta: `A alteração ainda não foi executada. Responda “confirmar” para atualizar o cadastro de ${confirmacao.clienteNome} ou “cancelar” para encerrar sem modificar nada.`,
+      confirmacaoAlteracaoPendente: confirmacao,
+      consulta: { tipo: "confirmacao-final-alteracao-regime", titulo: `Confirmação final — ${confirmacao.clienteNome}`, resumo: "Aguardando confirmar ou cancelar.", total: 1, itens: [] },
+    })
+  }
+
   if (!escopo || !periodo) {
     const faltam = [!escopo ? "se é somente no cadastro da Nexa ou um processo real" : null, !periodo ? "a competência inicial" : null].filter(Boolean)
     return respostaBase({
@@ -45,6 +70,24 @@ async function responderConfirmacaoAlteracaoRegime({ confirmacao, mensagem, usua
       resposta: `Entendido. O cadastro de ${confirmacao.clienteNome} não foi alterado. Para o desenquadramento real a partir de ${periodo.competencia.split("-").reverse().join("/")}, confirme primeiro o motivo e a data de efeito no Portal do Simples Nacional; depois, retorne à Nexa para registrar o resultado oficial.`,
       confirmacaoAlteracaoConcluida: true,
       consulta: { tipo: "alteracao-regime-processo-real", titulo: `Desenquadramento real — ${confirmacao.clienteNome}`, resumo: "Orientação apresentada; nenhuma alteração automática foi realizada.", total: 0, itens: [] },
+    })
+  }
+
+  if (!dadosColetados) {
+    const competenciaFormatada = periodo.competencia.split("-").reverse().join("/")
+    return respostaBase({
+      resposta: `Revise antes de salvar: ${confirmacao.clienteNome} será alterado de ${confirmacao.regimeAtual || "regime não informado"} para ${confirmacao.regimePretendido || "Simples Nacional"}, a partir de ${competenciaFormatada}. As rotinas futuras de DAS-MEI serão encerradas, mas o histórico será preservado. Responda “confirmar” para executar ou “cancelar”. Nenhuma alteração foi realizada ainda.`,
+      confirmacaoAlteracaoPendente: {
+        ...confirmacao,
+        dadosColetados: { escopo, periodo },
+      },
+      consulta: {
+        tipo: "confirmacao-final-alteracao-regime",
+        titulo: `Confirmação final — ${confirmacao.clienteNome}`,
+        resumo: `${confirmacao.regimeAtual || "Não informado"} → ${confirmacao.regimePretendido || "Simples Nacional"} desde ${competenciaFormatada}.`,
+        total: 1,
+        itens: [{ clienteId: confirmacao.clienteId, cliente: confirmacao.clienteNome, status: "Aguardando confirmação final" }],
+      },
     })
   }
 
