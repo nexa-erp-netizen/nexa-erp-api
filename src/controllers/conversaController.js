@@ -29,6 +29,7 @@ const {
 const { tituloAutomatico } = require("./conversaHistoricoController")
 const { detectarSiteParaAbrir } = require("../services/siteNexaService")
 const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
+const { processarNexaAction } = require("../services/nexaActionsService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1352,6 +1353,15 @@ async function ultimaConfirmacaoAlteracaoPendente(conversaId, usuarioId) {
   return ultimaResposta?.dados?.confirmacaoAlteracaoPendente || null
 }
 
+async function ultimaAcaoGuiadaPendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.acaoGuiadaPendente || null
+}
+
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
   return {
     ...resposta,
@@ -2478,6 +2488,31 @@ async function conversar(req, res) {
         atividade: "acao-guiada",
         provedor: "sistema",
         modelo: "Nexa Ações Guiadas 1.0",
+        respondidoEm: new Date().toISOString(),
+      }, conversa))
+    }
+
+
+    const acaoGuiadaPendente = await ultimaAcaoGuiadaPendente(conversa.id, req.usuario.id)
+    const acaoGuiadaResolvida = await processarNexaAction({
+      mensagem,
+      pendente: acaoGuiadaPendente,
+      clienteIdAtual: clienteId,
+      usuario: usuarioCompleto,
+    })
+    if (acaoGuiadaResolvida) {
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: acaoGuiadaResolvida.resposta,
+        dados: acaoGuiadaResolvida,
+      })
+      return res.json(anexarMetadadosConversa({
+        ...acaoGuiadaResolvida,
+        atividade: "nexa-action",
+        provedor: "sistema",
+        modelo: "Nexa Actions 1.0",
         respondidoEm: new Date().toISOString(),
       }, conversa))
     }
