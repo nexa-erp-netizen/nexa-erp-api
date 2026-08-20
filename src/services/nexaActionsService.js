@@ -1,4 +1,5 @@
 const { normalizar, respostaConfirmaExecucao, respostaCancelaExecucao } = require("./regimeParserService")
+const { processarNexaFinancialAction } = require("./nexaFinancialActionsService")
 
 function clienteModel() {
   return require("../models/Cliente")
@@ -356,6 +357,8 @@ async function continuarAtualizacaoCliente(pendente, mensagem, usuario) {
 }
 
 async function processarNexaAction({ mensagem, pendente = null, clienteIdAtual = null, usuario }) {
+  const financeiro = await processarNexaFinancialAction({ mensagem, pendente, clienteIdAtual, usuario })
+  if (financeiro) return financeiro
   if (pendente?.tipo === "cliente-novo") return continuarNovoCliente(pendente, mensagem, usuario)
   if (pendente?.tipo === "cliente-atualizar") return continuarAtualizacaoCliente(pendente, mensagem, usuario)
   if (intencaoNovoCliente(mensagem)) return iniciarNovoCliente()
