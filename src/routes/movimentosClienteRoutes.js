@@ -5,6 +5,7 @@ const MovimentoCliente = require("../models/MovimentoCliente")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const Cliente = require("../models/Cliente")
 const supabase = require("../config/supabaseClient")
+const { normalizarDataMovimento, competenciaDaData } = require("../services/dataMovimentoService")
 
 const router = express.Router()
 
@@ -45,15 +46,12 @@ function valorParaNumero(valor) {
 }
 
 function obterCompetencia(data) {
-  if (!data) return "00/0000"
+  return competenciaDaData(data) || "00/0000"
+}
 
-  const partes = String(data).split("-")
-
-  if (partes.length >= 2) {
-    return `${partes[1]}/${partes[0]}`
-  }
-
-  return "00/0000"
+function validarDataNova(valor) {
+  const resultado = normalizarDataMovimento(valor)
+  return resultado.valida && !resultado.corrigida ? resultado.data : null
 }
 
 function descricaoLancamento(movimento) {
@@ -108,6 +106,24 @@ async function removerLancamentoContabilDoMovimento(movimento) {
   })
 }
 
+async function corrigirEFiltrarDatasLegadas(movimentos, usuario) {
+  const validos = []
+  for (const movimento of movimentos) {
+    const resultado = normalizarDataMovimento(movimento.data)
+    if (!resultado.valida) {
+      console.warn(`Movimento ${movimento.id} ignorado por data inválida: ${movimento.data}`)
+      continue
+    }
+    if (resultado.corrigida) {
+      await movimento.update({ data: resultado.data })
+      await criarLancamentoContabilDoMovimento(movimento, usuario)
+      console.warn(`Movimento ${movimento.id} corrigido de ano legado para ${resultado.data}`)
+    }
+    validos.push(movimento)
+  }
+  return validos
+}
+
 router.get("/", autenticar, async (req, res) => {
   try {
     if (req.usuario.perfil === "Cliente") {
@@ -123,7 +139,7 @@ router.get("/", autenticar, async (req, res) => {
       const movimentosDoCliente = movimentos.filter(
         (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
       )
-      return res.json(movimentosDoCliente)
+      return res.json(await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario))
     }
 
     const nomesConsultados = []
@@ -149,7 +165,7 @@ router.get("/", autenticar, async (req, res) => {
     })
 
     if (!nomesConsultados.length) {
-      return res.json(movimentos)
+      return res.json(await corrigirEFiltrarDatasLegadas(movimentos, req.usuario))
     }
 
     const nomesNormalizados = new Set(
@@ -162,7 +178,7 @@ router.get("/", autenticar, async (req, res) => {
       nomesNormalizados.has(normalizarNomeCliente(movimento.cliente))
     )
 
-    res.json(movimentosDoCliente)
+    res.json(await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario))
   } catch (error) {
     console.error("ERRO AO LISTAR MOVIMENTOS:", error)
 
@@ -174,6 +190,8 @@ router.get("/", autenticar, async (req, res) => {
 
 router.post("/", autenticar, async (req, res) => {
   try {
+    const dataValida = validarDataNova(req.body.data)
+    if (!dataValida) return res.status(400).json({ message: "Data inválida. Informe uma data entre 1900 e o próximo ano." })
     let clienteFinal = req.body.cliente
 
     if (req.usuario.perfil === "Cliente") {
@@ -188,6 +206,7 @@ router.post("/", autenticar, async (req, res) => {
 
     const movimento = await MovimentoCliente.create({
       ...req.body,
+      data: dataValida,
       cliente: clienteFinal,
       valor: valorParaNumero(req.body.valor),
       status: req.body.status || "Pendente",
@@ -222,6 +241,11 @@ router.post("/massa", autenticar, async (req, res) => {
       })
     }
 
+    const dataInvalidaIndice = lista.findIndex((item) => !validarDataNova(item.data))
+    if (dataInvalidaIndice >= 0) {
+      return res.status(400).json({ message: `Data inválida na linha ${dataInvalidaIndice + 1}. Corrija o ano antes de salvar.` })
+    }
+
     const movimentosTratados = lista.map((item) => {
       let clienteFinal = item.cliente
 
@@ -231,6 +255,7 @@ router.post("/massa", autenticar, async (req, res) => {
 
       return {
         ...item,
+        data: validarDataNova(item.data),
         cliente: clienteFinal,
         valor: valorParaNumero(item.valor),
         status: item.status || "Pendente",
@@ -285,8 +310,15 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    const dataInformada = req.body.data !== undefined
+      ? validarDataNova(req.body.data)
+      : normalizarDataMovimento(movimento.data).data
+    if (!dataInformada) return res.status(400).json({ message: "Data inválida. Corrija o ano antes de salvar." })
+
     await movimento.update({
       ...req.body,
+      cliente: req.usuario.perfil === "Cliente" ? req.usuario.clienteVinculado : (req.body.cliente || movimento.cliente),
+      data: dataInformada,
       valor:
         req.body.valor !== undefined
           ? valorParaNumero(req.body.valor)

@@ -555,6 +555,13 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
           clienteId: clienteSugerido.id,
           comandoCorrigido,
         },
+        confirmacaoNavegacaoPendente: {
+          termoOuvido: nomeFalado,
+          termoCorreto: nomeCorreto,
+          clienteId: clienteSugerido.id,
+          comandoOriginal: String(mensagem || ""),
+          comandoCorrigido,
+        },
       })
     }
   }
@@ -1360,6 +1367,15 @@ async function ultimaAcaoGuiadaPendente(conversaId, usuarioId) {
     order: [["createdAt", "DESC"], ["id", "DESC"]],
   })
   return ultimaResposta?.dados?.acaoGuiadaPendente || null
+}
+
+async function ultimaConfirmacaoNavegacaoPendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.confirmacaoNavegacaoPendente || null
 }
 
 function anexarMetadadosConversa(resposta, conversa, extra = {}) {
@@ -2343,6 +2359,59 @@ async function conversar(req, res) {
           : {}),
       },
     })
+
+    const confirmacaoNavegacao = await ultimaConfirmacaoNavegacaoPendente(conversa.id, req.usuario.id)
+    const respostaConfirmacaoNavegacao = normalizar(mensagemOriginal)
+    if (confirmacaoNavegacao && /^(sim|isso|correto|confirmo|pode abrir|abrir)$/.test(respostaConfirmacaoNavegacao)) {
+      await aprenderTermoVoz({
+        usuarioId: req.usuario.id,
+        clienteId,
+        termoOuvido: confirmacaoNavegacao.termoOuvido,
+        termoCorreto: confirmacaoNavegacao.termoCorreto,
+        origem: "confirmacao_navegacao",
+      }).catch(() => null)
+
+      const resultadoNavegacao = await detectarComandoNavegacaoDeterministico({
+        mensagem: confirmacaoNavegacao.comandoCorrigido,
+        clienteId,
+        usuario: usuarioCompleto,
+        origem: "voz",
+      })
+      const respostaNavegacao = resultadoNavegacao || respostaDeComando({
+        resposta: "Entendi o cliente, mas não consegui identificar a tela. Diga novamente qual tela deseja abrir.",
+      })
+      const respostaFinal = {
+        ...respostaNavegacao,
+        confirmacaoNavegacaoConcluida: true,
+        vocabularioAprendido: true,
+        conversacionalV2: true,
+        atividade: "navegacao",
+      }
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaFinal.resposta,
+        dados: respostaFinal,
+      })
+      return res.json(anexarMetadadosConversa(respostaFinal, conversa))
+    }
+
+    if (confirmacaoNavegacao && /^(nao|não|errado|outro|outra|cancelar)$/.test(respostaConfirmacaoNavegacao)) {
+      const respostaFinal = respostaDeComando({
+        resposta: "Certo. Informe novamente o nome do cliente.",
+        fala: "Certo. Qual é o cliente?",
+        confirmacaoNavegacaoCancelada: true,
+      })
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaFinal.resposta,
+        dados: respostaFinal,
+      })
+      return res.json(anexarMetadadosConversa(respostaFinal, conversa))
+    }
 
     const instrucaoVocabulario = detectarInstrucaoDeAprendizado(mensagemOriginal)
     if (instrucaoVocabulario) {

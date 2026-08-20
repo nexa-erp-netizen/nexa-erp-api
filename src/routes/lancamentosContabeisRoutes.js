@@ -2,6 +2,7 @@ const express = require("express")
 
 const LancamentoContabil = require("../models/LancamentoContabil")
 const upload = require("../middlewares/upload")
+const { normalizarDataMovimento, competenciaDaData } = require("../services/dataMovimentoService")
 
 const {
   autenticar,
@@ -43,6 +44,28 @@ function numeroParaBanco(valor) {
   return numeroSeguro(valor).toFixed(2)
 }
 
+function validarDataNova(valor) {
+  const resultado = normalizarDataMovimento(valor)
+  return resultado.valida && !resultado.corrigida ? resultado.data : null
+}
+
+async function corrigirEFiltrarDatasLegadas(lancamentos) {
+  const validos = []
+  for (const lancamento of lancamentos) {
+    const resultado = normalizarDataMovimento(lancamento.data)
+    if (!resultado.valida) {
+      console.warn(`Lançamento contábil ${lancamento.id} ignorado por data inválida: ${lancamento.data}`)
+      continue
+    }
+    if (resultado.corrigida) {
+      await lancamento.update({ data: resultado.data, competencia: competenciaDaData(resultado.data) })
+      console.warn(`Lançamento contábil ${lancamento.id} corrigido para ${resultado.data}`)
+    }
+    validos.push(lancamento)
+  }
+  return validos
+}
+
 
 function somenteEquipe(req, res, next) {
   if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
@@ -70,7 +93,7 @@ router.get("/", autenticar, async (req, res) => {
       order: [["createdAt", "DESC"]],
     })
 
-    res.json(lancamentos)
+    res.json(await corrigirEFiltrarDatasLegadas(lancamentos))
   } catch (error) {
     console.error("ERRO AO LISTAR LANÇAMENTOS:", error)
 
@@ -88,19 +111,11 @@ router.post("/", autenticar, somenteEquipe, async (req, res) => {
       })
     }
 
-    const data =
-      req.body.data ||
-      new Date().toISOString().slice(0, 10)
+    const dataInformada = req.body.data || new Date().toISOString().slice(0, 10)
+    const data = validarDataNova(dataInformada)
+    if (!data) return res.status(400).json({ message: "Data inválida. Corrija o ano antes de salvar." })
 
-    const partesData = data.split("-")
-
-    const competencia =
-      req.body.competencia ||
-      (
-        partesData.length === 3
-          ? `${partesData[1]}/${partesData[0]}`
-          : "01/2026"
-      )
+    const competencia = competenciaDaData(data)
 
     const tipoContabil =
       String(req.body.tipo || "").toLowerCase() === "receita"
@@ -174,6 +189,13 @@ router.put("/:id", autenticar, somenteEquipe, async (req, res) => {
     }
 
     const dadosAtualizados = { ...req.body }
+
+    const resultadoData = normalizarDataMovimento(req.body.data !== undefined ? req.body.data : lancamento.data)
+    if (!resultadoData.valida || (req.body.data !== undefined && resultadoData.corrigida)) {
+      return res.status(400).json({ message: "Data inválida. Corrija o ano antes de salvar." })
+    }
+    dadosAtualizados.data = resultadoData.data
+    dadosAtualizados.competencia = competenciaDaData(resultadoData.data)
 
     const quantidadeAtual = quantidadeSegura(lancamento.quantidade)
     const quantidade =
