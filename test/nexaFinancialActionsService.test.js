@@ -7,6 +7,7 @@ const {
   dataIso,
   tipoMovimento,
   extrairDadosIniciais,
+  localizarCliente,
 } = require("../src/services/nexaFinancialActionsService")
 
 test("reconhece lançamento de receita ou despesa", () => {
@@ -38,4 +39,13 @@ test("extrai dados fornecidos em um comando natural", () => {
   assert.equal(dados.valor, 150.9)
   assert.equal(dados.data, "2026-08-20")
   assert.equal(dados.formaPagamento.toLowerCase(), "pix")
+})
+
+test("localiza cliente pelo nome parcial dentro do comando", () => {
+  const clientes = [
+    { id: 1, nome: "Multicópias Maracanã" },
+    { id: 2, nome: "Daiane Dallazen Vitor" },
+  ]
+  const resultado = localizarCliente(clientes, "Lance uma despesa para a Multicópias, hoje, via PIX")
+  assert.equal(resultado.cliente.id, 1)
 })

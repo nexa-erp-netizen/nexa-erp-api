@@ -72,8 +72,9 @@ function extrairDadosIniciais(mensagem) {
 
 async function listarClientes(usuario) {
   const { Cliente } = models()
-  const where = usuario?.empresaId ? { empresaId: usuario.empresaId } : {}
-  return Cliente.findAll({ where, order: [["nome", "ASC"]] })
+  // O isolamento entre escritórios já é aplicado globalmente por escritorioId.
+  // empresaId no usuário não representa o escritório e não deve filtrar clientes.
+  return Cliente.findAll({ order: [["nome", "ASC"]] })
 }
 
 function localizarCliente(clientes, mensagem, clienteIdAtual = null) {
@@ -173,7 +174,7 @@ async function executar(dados, usuario) {
   const { Cliente, MovimentoCliente, LancamentoContabil } = models()
   const Op = sequelizeOp()
   const cliente = await Cliente.findByPk(dados.clienteId)
-  if (!cliente || (usuario?.empresaId && Number(cliente.empresaId) !== Number(usuario.empresaId))) {
+  if (!cliente) {
     return respostaBase({ resposta: "O cliente não está disponível para este escritório. Nenhum lançamento foi criado.", acaoGuiadaConcluida: true })
   }
   const desde = new Date(Date.now() - 10 * 60 * 1000)
@@ -233,4 +234,4 @@ async function processarNexaFinancialAction({ mensagem, pendente, clienteIdAtual
   return null
 }
 
-module.exports = { processarNexaFinancialAction, intencaoNovoMovimento, numeroMonetario, dataIso, tipoMovimento, extrairDadosIniciais }
+module.exports = { processarNexaFinancialAction, intencaoNovoMovimento, numeroMonetario, dataIso, tipoMovimento, extrairDadosIniciais, localizarCliente }
