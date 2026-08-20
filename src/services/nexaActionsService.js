@@ -11,7 +11,7 @@ function operadorSequelize() {
 const CAMPOS_CLIENTE = {
   nome: { rotulo: "nome", aliases: ["nome", "nome completo", "razao social", "razão social"], limite: 180 },
   cpf: { rotulo: "CPF", aliases: ["cpf"], digitos: 11 },
-  cnpj: { rotulo: "CNPJ", aliases: ["cnpj"], digitos: 14, opcional: true },
+  cnpj: { rotulo: "CNPJ", aliases: ["cnpj"], digitos: 14, cnpj: true, opcional: true },
   telefone: { rotulo: "telefone", aliases: ["telefone", "celular", "whatsapp", "whats"], telefone: true },
   email: { rotulo: "e-mail", aliases: ["email", "e-mail"], email: true, opcional: true },
   cep: { rotulo: "CEP", aliases: ["cep"], digitos: 8, opcional: true },
@@ -22,16 +22,25 @@ const CAMPOS_CLIENTE = {
   cidade: { rotulo: "cidade", aliases: ["cidade", "municipio", "município"], limite: 100, opcional: true },
   estado: { rotulo: "UF", aliases: ["estado", "uf"], uf: true, opcional: true },
   dataNascimento: { rotulo: "data de nascimento", aliases: ["data de nascimento", "nascimento"], data: true, opcional: true },
-  regime: { rotulo: "regime tributário", aliases: ["regime tributario", "regime tributário", "regime"], limite: 80, opcional: true },
-  ramoAtividade: { rotulo: "ramo de atividade", aliases: ["ramo de atividade", "atividade", "ramo"], limite: 160, opcional: true },
+  dataInicioAtividades: { rotulo: "data de início das atividades", aliases: ["data de inicio das atividades", "data de início das atividades", "inicio das atividades", "início das atividades"], data: true },
+  regime: { rotulo: "regime tributário", aliases: ["regime tributario", "regime tributário", "regime"], regime: true },
+  ramoAtividade: { rotulo: "ramo de atividade", aliases: ["ramo de atividade", "atividade", "ramo"], ramo: true },
   cnaePrincipal: { rotulo: "CNAE principal", aliases: ["cnae principal", "cnae"], limite: 20, opcional: true },
   inscricaoMunicipal: { rotulo: "inscrição municipal", aliases: ["inscricao municipal", "inscrição municipal", "im"], limite: 40, opcional: true },
   inscricaoEstadual: { rotulo: "inscrição estadual", aliases: ["inscricao estadual", "inscrição estadual", "ie"], limite: 40, opcional: true },
-  situacaoEmpresa: { rotulo: "situação da empresa", aliases: ["situacao da empresa", "situação da empresa", "situacao", "situação", "status"], limite: 40, opcional: true },
+  situacaoEmpresa: { rotulo: "situação da empresa", aliases: ["situacao da empresa", "situação da empresa", "situacao", "situação", "status"], situacao: true },
+  ativo: { rotulo: "status do cliente (ativo ou inativo)", aliases: ["ativo", "inativo", "status do cliente"], booleano: true },
   observacao: { rotulo: "observação", aliases: ["observacao", "observação"], limite: 2000, opcional: true },
 }
 
-const CAMPOS_NOVO_CLIENTE = ["nome", "cpf", "telefone"]
+const CAMPOS_PRINCIPAIS_CLIENTE = ["nome", "cpf", "telefone", "email", "cnpj"]
+const CAMPOS_COMPLEMENTARES_CLIENTE = [
+  "ativo", "situacaoEmpresa", "dataInicioAtividades", "regime", "ramoAtividade",
+  "cep", "endereco", "numero", "complemento", "bairro", "cidade", "estado",
+]
+const CAMPOS_NOVO_CLIENTE = [...CAMPOS_PRINCIPAIS_CLIENTE, ...CAMPOS_COMPLEMENTARES_CLIENTE]
+
+const RESPOSTAS_PULAR = /^(pular|pule|nao possui|não possui|nao tem|não tem|sem|depois)$/
 
 function somenteDigitos(valor) {
   return String(valor || "").replace(/\D/g, "")
@@ -47,6 +56,19 @@ function cpfValido(valor) {
     if (digito !== Number(cpf[posicao])) return false
   }
   return true
+}
+
+function cnpjValido(valor) {
+  const cnpj = somenteDigitos(valor)
+  if (cnpj.length !== 14 || /^(\d)\1{13}$/.test(cnpj)) return false
+  const calcular = (base, pesos) => {
+    const soma = base.split("").reduce((total, digito, indice) => total + Number(digito) * pesos[indice], 0)
+    const resto = soma % 11
+    return resto < 2 ? 0 : 11 - resto
+  }
+  const primeiro = calcular(cnpj.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+  const segundo = calcular(cnpj.slice(0, 12) + primeiro, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2])
+  return cnpj.endsWith(`${primeiro}${segundo}`)
 }
 
 function dataIso(valor) {
@@ -67,6 +89,7 @@ function validarCampo(campo, valor) {
     if (limpo.length !== config.digitos) return { erro: `${config.rotulo} deve ter ${config.digitos} números.` }
   }
   if (campo === "cpf" && !cpfValido(limpo)) return { erro: "Informe um CPF válido." }
+  if (campo === "cnpj" && !cnpjValido(limpo)) return { erro: "Informe um CNPJ válido." }
   if (config.telefone) {
     limpo = somenteDigitos(limpo)
     if (![10, 11].includes(limpo.length)) return { erro: "Informe um telefone com DDD." }
@@ -79,6 +102,27 @@ function validarCampo(campo, valor) {
   if (config.data) {
     limpo = dataIso(limpo)
     if (!limpo) return { erro: "Informe a data no formato DD/MM/AAAA." }
+  }
+  if (config.booleano) {
+    const texto = normalizar(limpo)
+    if (/^(ativo|ativa|sim)$/.test(texto)) limpo = true
+    else if (/^(inativo|inativa|nao|não)$/.test(texto)) limpo = false
+    else return { erro: "Informe se o cliente está ativo ou inativo." }
+  }
+  if (config.situacao) {
+    const opcoes = { ativa: "Ativa", inapta: "Inapta", baixada: "Baixada", suspensa: "Suspensa", "em constituicao": "Em Constituição" }
+    limpo = opcoes[normalizar(limpo)]
+    if (!limpo) return { erro: "Informe: Ativa, Inapta, Baixada, Suspensa ou Em Constituição." }
+  }
+  if (config.regime) {
+    const opcoes = { avulso: "Avulso", mei: "MEI", "simples nacional": "Simples Nacional", "lucro presumido": "Lucro Presumido", "lucro real": "Lucro Real" }
+    limpo = opcoes[normalizar(limpo)]
+    if (!limpo) return { erro: "Informe: Avulso, MEI, Simples Nacional, Lucro Presumido ou Lucro Real." }
+  }
+  if (config.ramo) {
+    const opcoes = { servicos: "Serviços", comercio: "Comércio", industria: "Indústria", misto: "Misto" }
+    limpo = opcoes[normalizar(limpo)]
+    if (!limpo) return { erro: "Informe: Serviços, Comércio, Indústria ou Misto." }
   }
   if (config.limite) limpo = limpo.slice(0, config.limite)
   return { valor: limpo }
@@ -126,8 +170,8 @@ function clientePorMensagem(clientes, mensagem, clienteIdAtual = null) {
   return atual || null
 }
 
-function proximoCampoNovo(dados) {
-  return CAMPOS_NOVO_CLIENTE.find((campo) => !dados[campo]) || null
+function proximoCampoNovo(dados, campos = CAMPOS_NOVO_CLIENTE) {
+  return campos.find((campo) => !Object.prototype.hasOwnProperty.call(dados, campo)) || null
 }
 
 function rotuloCampo(campo) {
@@ -139,13 +183,43 @@ function formatarValor(campo, valor) {
     const d = somenteDigitos(valor)
     return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`
   }
+  if (campo === "cnpj" && somenteDigitos(valor).length === 14) {
+    const d = somenteDigitos(valor)
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`
+  }
+  if (campo === "ativo") return valor ? "Ativo" : "Inativo"
   return String(valor || "")
+}
+
+function perguntaCampo(campo) {
+  const perguntas = {
+    cpf: "Informe o CPF do cliente ou do responsável pela empresa.",
+    cnpj: "Informe o CNPJ da empresa. Se não possuir, diga “pular”.",
+    ativo: "O cliente ficará ativo ou inativo no sistema?",
+    situacaoEmpresa: "Qual é a situação da empresa: Ativa, Inapta, Baixada, Suspensa ou Em Constituição?",
+    regime: "Qual é o regime tributário: Avulso, MEI, Simples Nacional, Lucro Presumido ou Lucro Real?",
+    ramoAtividade: "Qual é o ramo de atividade: Serviços, Comércio, Indústria ou Misto?",
+    complemento: "Informe o complemento do endereço. Se não possuir, diga “pular”.",
+  }
+  return perguntas[campo] || `Informe ${rotuloCampo(campo)}${CAMPOS_CLIENTE[campo]?.opcional ? ". Se não possuir, diga “pular”." : "."}`
+}
+
+function prepararConfirmacaoNovoCliente(dados) {
+  const resumo = CAMPOS_NOVO_CLIENTE
+    .filter((campoResumo) => Object.prototype.hasOwnProperty.call(dados, campoResumo) && dados[campoResumo] !== null)
+    .map((campoResumo) => `${rotuloCampo(campoResumo)}: ${formatarValor(campoResumo, dados[campoResumo])}`)
+    .join("; ") + "."
+  return respostaBase({
+    resposta: `Revise o cadastro: ${resumo} Responda “confirmar” para criar o cliente ou “cancelar”. Nenhum cadastro foi criado ainda.`,
+    acaoGuiadaPendente: { tipo: "cliente-novo", etapa: "confirmacao", dados },
+    consulta: { tipo: "confirmacao-final-cliente-novo", titulo: "Confirmar novo cliente", resumo, total: 1, itens: [{ cliente: dados.nome, status: "Aguardando confirmação" }] },
+  })
 }
 
 async function iniciarNovoCliente() {
   return respostaBase({
     resposta: "Vamos cadastrar um novo cliente. Qual é o nome completo? Você pode cancelar a qualquer momento.",
-    acaoGuiadaPendente: { tipo: "cliente-novo", etapa: "coleta", dados: {}, proximoCampo: "nome" },
+    acaoGuiadaPendente: { tipo: "cliente-novo", etapa: "coleta-principal", dados: {}, proximoCampo: "nome" },
     consulta: { tipo: "acao-guiada-cliente-novo", titulo: "Novo cliente", resumo: "Aguardando o nome completo.", total: 0, itens: [] },
   })
 }
@@ -168,7 +242,7 @@ async function continuarNovoCliente(pendente, mensagem, usuario) {
     const Op = operadorSequelize()
     const existente = await Cliente.findOne({ where: { [Op.or]: [{ cpf: pendente.dados.cpf }, ...(pendente.dados.cnpj ? [{ cnpj: pendente.dados.cnpj }] : [])] } })
     if (existente) return respostaBase({ resposta: `O cadastro não foi criado porque ${existente.nome} já utiliza esse CPF ou CNPJ.`, acaoGuiadaConcluida: true })
-    const cliente = await Cliente.create({ ...pendente.dados, ativo: true, situacaoEmpresa: "Ativa", anotacoes: [], proximasAcoes: [], anexos: [] })
+    const cliente = await Cliente.create({ ...pendente.dados, anotacoes: [], proximasAcoes: [], anexos: [] })
     return respostaBase({
       resposta: `Cliente ${cliente.nome} cadastrado com sucesso.`,
       acaoGuiadaConcluida: true,
@@ -178,8 +252,30 @@ async function continuarNovoCliente(pendente, mensagem, usuario) {
     })
   }
 
-  const campo = pendente.proximoCampo || proximoCampoNovo(pendente.dados || {})
-  const validacao = validarCampo(campo, mensagem)
+  if (pendente.etapa === "escolha-complemento") {
+    const escolha = normalizar(mensagem)
+    if (/^(concluir|concluir cadastro|finalizar|finalizar cadastro|so os principais|somente os principais)$/.test(escolha)) {
+      return prepararConfirmacaoNovoCliente(pendente.dados || {})
+    }
+    if (/^(continuar|continuar cadastro|adicionar mais informacoes|mais informacoes|completar cadastro)$/.test(escolha)) {
+      const proximo = proximoCampoNovo(pendente.dados || {}, CAMPOS_COMPLEMENTARES_CLIENTE)
+      return respostaBase({
+        resposta: `Certo, vamos completar o cadastro. ${perguntaCampo(proximo)}`,
+        acaoGuiadaPendente: { ...pendente, etapa: "coleta-complementar", proximoCampo: proximo },
+        consulta: { tipo: "acao-guiada-cliente-novo", titulo: "Cadastro completo", resumo: `Aguardando ${rotuloCampo(proximo)}.`, total: Object.keys(pendente.dados || {}).length, itens: [] },
+      })
+    }
+    return respostaBase({
+      resposta: "Responda “concluir” para cadastrar somente com os dados principais ou “continuar” para adicionar mais informações.",
+      acaoGuiadaPendente: pendente,
+      consulta: { tipo: "escolha-cadastro-cliente", titulo: "Novo cliente", resumo: "Escolha concluir ou continuar.", total: Object.keys(pendente.dados || {}).length, itens: [] },
+    })
+  }
+
+  const camposDaEtapa = pendente.etapa === "coleta-complementar" ? CAMPOS_COMPLEMENTARES_CLIENTE : CAMPOS_PRINCIPAIS_CLIENTE
+  const campo = pendente.proximoCampo || proximoCampoNovo(pendente.dados || {}, camposDaEtapa)
+  const podePular = CAMPOS_CLIENTE[campo]?.opcional && RESPOSTAS_PULAR.test(normalizar(mensagem))
+  const validacao = podePular ? { valor: null } : validarCampo(campo, mensagem)
   if (validacao.erro) {
     return respostaBase({
       resposta: `${validacao.erro} Tente novamente ou diga “cancelar”.`,
@@ -189,21 +285,23 @@ async function continuarNovoCliente(pendente, mensagem, usuario) {
   }
 
   const dados = { ...(pendente.dados || {}), [campo]: validacao.valor }
-  const proximo = proximoCampoNovo(dados)
+  const proximo = proximoCampoNovo(dados, camposDaEtapa)
   if (proximo) {
     return respostaBase({
-      resposta: `${rotuloCampo(campo)} registrado. Agora informe ${rotuloCampo(proximo)}.`,
+      resposta: `${rotuloCampo(campo)} registrado. ${perguntaCampo(proximo)}`,
       acaoGuiadaPendente: { ...pendente, dados, proximoCampo: proximo },
       consulta: { tipo: "acao-guiada-cliente-novo", titulo: "Novo cliente", resumo: `Aguardando ${rotuloCampo(proximo)}.`, total: Object.keys(dados).length, itens: [] },
     })
   }
 
-  const resumo = `Nome: ${dados.nome}; CPF: ${formatarValor("cpf", dados.cpf)}; telefone: ${dados.telefone}.`
-  return respostaBase({
-    resposta: `Revise o cadastro: ${resumo} Responda “confirmar” para criar o cliente ou “cancelar”. Nenhum cadastro foi criado ainda.`,
-    acaoGuiadaPendente: { tipo: "cliente-novo", etapa: "confirmacao", dados },
-    consulta: { tipo: "confirmacao-final-cliente-novo", titulo: "Confirmar novo cliente", resumo, total: 1, itens: [{ cliente: dados.nome, status: "Aguardando confirmação" }] },
-  })
+  if (pendente.etapa !== "coleta-complementar") {
+    return respostaBase({
+      resposta: "Dados principais registrados. Deseja “concluir” o cadastro agora ou “continuar” para adicionar situação, início das atividades, regime tributário, ramo e endereço?",
+      acaoGuiadaPendente: { tipo: "cliente-novo", etapa: "escolha-complemento", dados },
+      consulta: { tipo: "escolha-cadastro-cliente", titulo: "Dados principais concluídos", resumo: "Escolha concluir ou continuar com mais informações.", total: Object.keys(dados).length, itens: [{ cliente: dados.nome, status: "Aguardando escolha" }] },
+    })
+  }
+  return prepararConfirmacaoNovoCliente(dados)
 }
 
 async function iniciarAtualizacaoCliente({ mensagem, clienteIdAtual, usuario }) {
@@ -269,6 +367,7 @@ module.exports = {
   processarNexaAction,
   validarCampo,
   cpfValido,
+  cnpjValido,
   intencaoNovoCliente,
   intencaoAtualizarCliente,
   campoNaMensagem,
