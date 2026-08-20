@@ -156,11 +156,12 @@ function respostaConsulta({ resposta, fala = "", pontos = [], recomendacao = "",
   }
 }
 
-function acaoPagina(pagina, cliente = null, alvo = "pagina") {
+function acaoPagina(pagina, cliente = null, alvo = "pagina", secao = "") {
   return {
     tipo: "navegar",
     pagina,
     alvo,
+    ...(secao ? { secao } : {}),
     segura: true,
     cliente: cliente ? { id: cliente.id, nome: nomeCliente(cliente) } : null,
   }
@@ -421,20 +422,20 @@ function consultaSolicitada(texto, cliente = null, clienteId = null) {
     || pedidoMensagensAbertas(texto)
     || pedidoDocumentosPendentes(texto)
   if (pedidoOperacionalDireto) return true
-  if (/(cpf|cnpj|telefone|celular|whatsapp|email|e-mail|enderec|cep|data de nascimento)/.test(texto)
+  if (/(cpf|cnpj|telefone|celular|whatsapp|email|e-mail|enderec|cep|data de nascimento|historico|anotacoes?)/.test(texto)
     && /(cliente|empresa|cadastro|\bdo\b|\bda\b)/.test(texto)) return true
 
   const verboConsulta = /(^|\s)(mostre|mostrar|liste|listar|consulte|consultar|verifique|verificar|busque|buscar|procure|procurar|resuma|resumir|resumo|qual|quais|quanto|quantos|quantas|existe|existem|tem|ha|como esta|situacao|status)(\s|$)/.test(texto)
   const referenciaSistema = /(na nexa|no sistema|cadastrad|registrad|lancad|meus? clientes?|minhas? pendencias?|do escritorio|da carteira|cliente selecionado|desse cliente|deste cliente)/.test(texto)
   const estadoOperacional = /(pendenc|em aberto|vencid|vencendo|vence hoje|vencem hoje|atrasad|pago|recebido|concluido|prioridade|atencao|devendo|\bdeve\b|quanto deve)/.test(texto)
-  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das|mensag|solicitac|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento)/.test(texto)
+  const objetoOperacional = /(clientes?|fiscal|obrigac|pendenc|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|inadimpl|pagament|devendo|\bdeve\b|quanto deve|moviment|agenda|assistente do dia|venciment|das|mensag|solicitac|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento|historico|anotacoes?)/.test(texto)
   const fraseEscritorio = /(como esta o escritorio|resumo do escritorio|escritorio hoje|situacao do escritorio|prioridades de hoje)/.test(texto)
   const fraseAtencao = /(clientes?).*(atencao|prioridade|critico|pendenc)|precisam de atencao|precisa de atencao/.test(texto)
   const listaClientes = /(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes|meus? clientes?)/.test(texto)
   const clienteIdentificado = Boolean(cliente || clienteId)
   const dadoDoCliente = clienteIdentificado
     && verboConsulta
-    && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia|mensag|solicitac)/.test(texto)
+    && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento|das|obrigac|pendenc|venciment|document|arquivo|anexo|certificad|procurac|financeir|honor|cobranc|moviment|competencia|mensag|solicitac|historico|anotacoes?)/.test(texto)
 
   return fraseEscritorio || fraseAtencao || listaClientes || dadoDoCliente
     || (verboConsulta && objetoOperacional && (referenciaSistema || estadoOperacional))
@@ -455,7 +456,7 @@ function identificarIntencao(texto, cliente) {
   if (/(financeir|honor|cobranc|receber|pagar|inadimpl|valor pendente|pagament|devendo|\bdeve\b|quanto deve|o que deve|ainda deve)/.test(texto)) return "financeiro"
   if (/(fiscal|obrig|das|imposto|tribut|vencimento)/.test(texto)) return "fiscal"
   if (/(clientes? ativos?|quantos clientes|lista de clientes|carteira de clientes)/.test(texto)) return "clientes"
-  if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento)/.test(texto)) return "cliente"
+  if (cliente && /(como esta|situacao|resumo|dados|regime|ramo|cpf|cnpj|telefone|celular|email|e-mail|enderec|cep|data de nascimento|historico|anotacoes?)/.test(texto)) return "cliente"
   return null
 }
 
@@ -470,6 +471,7 @@ function campoCadastroSolicitado(texto) {
   if (/(data de nascimento|nascimento|aniversario)/.test(texto)) return "dataNascimento"
   if (/(regime tributario|qual (?:e )?o regime|\bregime\b)/.test(texto)) return "regime"
   if (/(ramo de atividade|atividade do cliente|\bramo\b)/.test(texto)) return "ramoAtividade"
+  if (/(historico|anotacoes?)/.test(texto)) return "anotacoes"
   return null
 }
 
@@ -489,10 +491,21 @@ function rotuloCampoCadastro(campo) {
     dataNascimento: "data de nascimento",
     regime: "regime tributário",
     ramoAtividade: "ramo de atividade",
+    anotacoes: "histórico de anotações",
   }[campo] || "dado solicitado"
 }
 
 function valorCampoCadastro(cliente, campo) {
+  if (campo === "anotacoes") {
+    const itens = Array.isArray(cliente?.anotacoes) ? cliente.anotacoes : []
+    const formatados = itens.slice(0, 10).map((item) => {
+      const texto = String(item?.texto || item?.conteudo || item?.observacao || "").trim()
+      const tipo = String(item?.tipo || "Anotação").trim()
+      const data = item?.data ? formatarData(item.data) : "sem data"
+      return texto ? `${data} — ${tipo}: ${texto}` : ""
+    }).filter(Boolean)
+    return formatados.length ? formatados.join(" | ") : null
+  }
   if (campo !== "endereco") return cliente?.[campo] || null
   const partes = [
     cliente?.endereco,
@@ -524,7 +537,7 @@ function respostaDadoCadastral(cliente, campo) {
       total: valor ? 1 : 0,
       itens: valor ? [{ id: cliente.id, clienteId: cliente.id, cliente: nome, titulo: rotulo, detalhe: String(valor) }] : [],
       paginaSugerida: "Clientes",
-      acaoSugerida: acaoPagina("Clientes", { id: cliente.id, nome }, "central-cliente"),
+      acaoSugerida: acaoPagina("Clientes", { id: cliente.id, nome }, "central-cliente", campo === "anotacoes" ? "historico" : ""),
     },
   })
 }
@@ -1455,6 +1468,13 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   }
   if (!intencaoForcada && !consultaSolicitada(texto, localizado.cliente || (localizado.ambiguo ? {} : null), clienteId)) return null
   const campoCadastro = campoCadastroSolicitado(texto)
+
+  if (campoCadastro === "anotacoes" && usuario?.perfil === "Cliente") {
+    return respostaConsulta({
+      resposta: "O histórico interno de anotações é restrito ao escritório.",
+      consulta: { tipo: "acesso-restrito", titulo: "Acesso restrito", resumo: "Informação interna do escritório.", total: 0, itens: [] },
+    })
+  }
 
   if (campoCadastro && localizado.sugerido) {
     const nome = nomeCliente(localizado.sugerido)

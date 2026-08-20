@@ -436,13 +436,25 @@ function detectarComandoAbrirSite(mensagem) {
   })
 }
 
-function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual }) {
+function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual, secao = "" }) {
   const clienteMudou = Boolean(
     clienteAcao
     && (!clienteAtual || String(clienteAcao.id) !== String(clienteAtual.id)),
   )
 
   if (alvo === "central-cliente") {
+    if (secao === "historico") {
+      return {
+        resposta: `Histórico e anotações de ${nomeCliente(clienteAcao)} abertos.`,
+        fala: `Certo, abri o histórico de ${nomeCliente(clienteAcao)}.`,
+      }
+    }
+    if (secao === "servicos") {
+      return {
+        resposta: `Serviços e cobranças de ${nomeCliente(clienteAcao)} abertos.`,
+        fala: `Certo, abri os serviços e cobranças de ${nomeCliente(clienteAcao)}.`,
+      }
+    }
     const texto = clienteMudou
       ? `Cliente ${nomeCliente(clienteAcao)} aberto.`
       : "Cliente aberto."
@@ -569,6 +581,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
   if (localizado.ambiguo) {
     const paginaAmbigua = paginaEncontradaInicial?.pagina || "Clientes"
     const ehServicosCobrancas = /(servicos? e cobrancas?|servicos? avulsos?|lancamento de servico avulso|lancar servico avulso)/.test(texto)
+    const ehHistoricoAnotacoes = /(historico|anotacoes?)/.test(texto)
     const alvoAmbiguo = paginaAmbigua === "Clientes" ? "central-cliente" : "pagina"
     const candidatos = (localizado.candidatos || []).map((cliente) => ({
       id: cliente.id,
@@ -587,7 +600,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
       selecaoClientePendente: {
         pagina: paginaAmbigua,
         alvo: alvoAmbiguo,
-        secao: ehServicosCobrancas ? "servicos" : "",
+        secao: ehServicosCobrancas ? "servicos" : (ehHistoricoAnotacoes ? "historico" : ""),
         candidatos,
       },
     })
@@ -600,6 +613,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
 
   const paginaEncontrada = paginaEncontradaInicial
   const ehServicosCobrancas = /(servicos? e cobrancas?|servicos? avulsos?|lancamento de servico avulso|lancar servico avulso)/.test(texto)
+  const ehHistoricoAnotacoes = /(historico|anotacoes?)/.test(texto)
   let pagina = paginaEncontrada?.pagina || null
   let alvo = "pagina"
   let secao = ""
@@ -608,6 +622,10 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
     pagina = "Clientes"
     alvo = "central-cliente"
     secao = "servicos"
+  } else if (ehHistoricoAnotacoes && (localizado.cliente || clienteAtual)) {
+    pagina = "Clientes"
+    alvo = "central-cliente"
+    secao = "historico"
   } else if (querCentralCliente || (!pagina && localizado.cliente && temVerbo)) {
     pagina = "Clientes"
     alvo = "central-cliente"
@@ -651,6 +669,7 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
     alvo,
     clienteAcao,
     clienteAtual,
+    secao,
   })
 
   return respostaDeComando({
@@ -668,7 +687,8 @@ async function resolverSelecaoClientePendente({ selecao, clienteSelecionadoId, c
     PAGINAS_NAVEGACAO.map((item) => item.pagina),
   )
   const alvo = normalizar(selecao.alvo) === "central-cliente" ? "central-cliente" : "pagina"
-  const secao = normalizar(selecao.secao) === "servicos" ? "servicos" : ""
+  const secaoNormalizada = normalizar(selecao.secao)
+  const secao = ["servicos", "historico"].includes(secaoNormalizada) ? secaoNormalizada : ""
   const idsPermitidos = new Set(
     (Array.isArray(selecao.candidatos) ? selecao.candidatos : [])
       .map((item) => Number(item?.id))
@@ -1119,6 +1139,13 @@ async function montarContextoCliente(clienteId, usuario) {
       municipio: cliente.municipio || cliente.cidade,
       estado: cliente.estado,
     },
+    anotacoes: usuario?.perfil === "Cliente"
+      ? []
+      : (Array.isArray(cliente.anotacoes) ? cliente.anotacoes : []).slice(0, 20).map((item) => ({
+        data: item?.data || null,
+        tipo: item?.tipo || "Anotação",
+        texto: String(item?.texto || item?.conteudo || item?.observacao || "").slice(0, 800),
+      })),
     obrigacoesFiscais: fiscais.map(resumirObrigacao),
     financeiro: financeiros.map(resumirFinanceiro),
     servicosCobrancas: servicosCobrancas.map(resumirServicoCobranca),
@@ -1186,7 +1213,7 @@ async function montarContextoEscritorio(usuario) {
 
 function perguntaPedeDetalhes(mensagem) {
   const texto = normalizar(mensagem)
-  return /(explique|detalhe|detalhes|por que|porque|como funciona|quais regras|aprofund|passo a passo|me fale mais|complete|fundament)/.test(texto)
+  return /(explique|detalhe|detalhes|por que|porque|como funciona|quais regras|aprofund|passo a passo|me fale mais|complete|fundament|analise|compare|comparacao|monte|crie|escreva|redija|elabore|prepare|resuma|traduza|plano|roteiro|modelo|lista|tabela)/.test(texto)
 }
 
 const TEMA_PROFISSIONAL_ATUALIZAVEL = /(inss|previden|gps|carne|contribui|segurado|aposent|beneficio|salario minimo|mei|simples nacional|pgdas|das|defis|dctf|receita federal|imposto|tribut|aliquota|cnae|ncm|cfop|cst|csosn|iss|icms|ipi|irpf|irpj|csll|pis|cofins|folha|trabalh|empregad|admiss|demiss|ferias|decimo terceiro|fgts|esocial|e-social|seguro desemprego|licenca|afastamento|legisl|lei|decreto|portaria|instrucao normativa|obrigacao acessoria|prazo fiscal)/
@@ -1240,7 +1267,7 @@ function pesquisaDeveUsarSomenteFontesOficiais(mensagem, historico = []) {
 
 function perguntaPrecisaDadosNexa(mensagem, clienteId, tipoContexto) {
   const texto = normalizar(mensagem)
-  const referenciaOperacional = /(meus? clientes?|cliente cadastrado|esse cliente|essa empresa|cliente aberto|escritorio|nexa|pendenc|venciment|financeir|honorario|cobranc|pagament|devendo|quanto deve|servicos? e cobrancas?|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente)/.test(texto)
+  const referenciaOperacional = /(meus? clientes?|cliente cadastrado|esse cliente|essa empresa|cliente aberto|escritorio|nexa|pendenc|venciment|financeir|honorario|cobranc|pagament|devendo|quanto deve|servicos? e cobrancas?|documentos? digitais|certificado|procuracao|fiscal|agenda|assistente do dia|dashboard|movimentos? cliente|central do cliente|historico do cliente|historico da empresa|anotacoes?)/.test(texto)
   const pronomeComDadoOperacional = clienteId && /(quanto (?:ele|ela) deve|o que (?:ele|ela) deve|pendencias? (?:dele|dela)|documentos? (?:dele|dela)|fiscal (?:dele|dela)|cobrancas? (?:dele|dela))/.test(texto)
   return referenciaOperacional || pronomeComDadoOperacional || (tipoContexto === "cliente" && referenciaOperacional)
 }
@@ -1434,6 +1461,7 @@ function selecionarContextoParaPergunta(contexto, mensagem) {
     return {
       escopo: contexto.escopo,
       cliente: contexto.cliente,
+      ...(/(historico|anotac)/.test(texto) ? { anotacoes: (contexto.anotacoes || []).slice(0, 20) } : {}),
       ...(querFiscal || perguntaGeral ? { obrigacoesFiscais: (contexto.obrigacoesFiscais || []).slice(0, 18) } : {}),
       ...(querFinanceiro || perguntaGeral ? { financeiro: (contexto.financeiro || []).slice(0, 18) } : {}),
       ...(querFinanceiro || perguntaGeral ? { servicosCobrancas: (contexto.servicosCobrancas || []).slice(0, 24) } : {}),
@@ -1566,11 +1594,11 @@ async function rotearMensagemComModelo({ mensagem, nomeUsuario, historico, pagin
     {
       role: "system",
       content: `Você é o roteador conversacional da Nexa, colega digital do escritório contábil de ${nomeUsuario}.
-Classifique a mensagem pela intenção real, considerando o histórico. Não use palavras isoladas para decidir.
+Classifique a mensagem pela intenção real, considerando o histórico. Não use palavras isoladas para decidir. A Nexa é uma assistente geral: toda pergunta compreensível deve seguir para conversa, pesquisa, consulta ou navegação; nunca descarte uma pergunta apenas por não ser contábil.
 ROTAS:
 - navegacao: pedido explícito para abrir, entrar, ir, voltar ou mostrar uma tela/cliente.
 - consulta: pergunta sobre dados reais cadastrados no ERP.
-- conversa: conhecimento geral, explicação, opinião, redação, cálculo genérico ou conversa livre.
+- conversa: qualquer conhecimento geral, explicação, opinião, redação, revisão, tradução, resumo, comparação, planejamento, cálculo genérico, orientação ou conversa livre que não dependa de informação atual.
 - pesquisa: somente quando o usuário pedir pesquisa online ou quando a resposta exigir regra, valor, código, prazo ou notícia atual.
 - esclarecer: a pergunta está incompleta e é impossível responder corretamente sem um dado essencial.
 INTENÇÕES DE CONSULTA PERMITIDAS:
@@ -1581,6 +1609,7 @@ REGRAS IMPORTANTES:
 - “Quem pagou hoje?” significa pagamentos-hoje.
 - “Tem mensagem de cliente?” significa mensagens-pendentes.
 - “Por que contador não pode ser MEI?” é conversa, não consulta do ERP.
+- “Escreva uma mensagem”, “monte um plano”, “traduza”, “resuma”, “calcule” e perguntas de qualquer tema são conversa.
 - “E qual empresa ele pode abrir?” continua o assunto anterior e é conversa.
 - “Quanto ele vai pagar de imposto?” deve ser esclarecer quando faltarem regime, atividade e faturamento; formule uma pergunta curta para obter o dado ausente.
 - A tela ou cliente atualmente aberto não substitui o assunto da conversa.
