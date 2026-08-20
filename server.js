@@ -101,12 +101,23 @@ const contasBancariasClientesRoutes = require("./src/routes/contasBancariasClien
 const extratosBancariosRoutes = require("./src/routes/extratosBancariosRoutes")
 
 const app = express()
+const PORT = Number(process.env.PORT) || 3000
+let bancoPronto = false
+let erroInicializacaoBanco = null
 
 app.use(cors())
 app.use(express.json())
 
 app.get("/", (_req, res) => {
   res.json({ message: "API Nexa ERP funcionando 🚀" })
+})
+
+app.get("/health", (_req, res) => {
+  res.status(bancoPronto ? 200 : 503).json({
+    servidor: "online",
+    banco: bancoPronto ? "conectado" : "inicializando",
+    erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
+  })
 })
 
 app.use(
@@ -371,8 +382,6 @@ app.get("/dashboard", autenticar, async (req, res) => {
   }
 })
 
-const PORT = 3000
-
 async function prepararMultiempresa() {
   const [escritorio] = await Escritorio.findOrCreate({
     where: { codigo: "nexa-principal" },
@@ -404,21 +413,20 @@ async function prepararMultiempresa() {
   }
 }
 
-sequelize
-  .sync({ alter: true })
-  .then(async () => {
-    await prepararMultiempresa()
-    console.log("PostgreSQL conectado com sucesso 🚀")
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Servidor rodando na porta ${PORT}`)
+})
 
-    app.listen(PORT, () => {
-      console.log(
-        `Servidor rodando na porta ${PORT}`
-      )
-    })
-  })
-  .catch((error) => {
-    console.error(
-      "Erro ao conectar PostgreSQL:",
-      error
-    )
-  })
+async function inicializarBanco() {
+  try {
+    await sequelize.sync({ alter: true })
+    await prepararMultiempresa()
+    bancoPronto = true
+    console.log("PostgreSQL conectado com sucesso 🚀")
+  } catch (error) {
+    erroInicializacaoBanco = error
+    console.error("Erro ao conectar PostgreSQL:", error)
+  }
+}
+
+inicializarBanco()
