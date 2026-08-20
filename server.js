@@ -116,6 +116,9 @@ app.get("/health", (_req, res) => {
   res.status(bancoPronto ? 200 : 503).json({
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
+    instancia: process.env.NEXA_INSTANCE_NAME || "principal",
+    versao: "3.31.3",
+    timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })
 })
