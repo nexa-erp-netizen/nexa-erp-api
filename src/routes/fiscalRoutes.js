@@ -35,13 +35,32 @@ async function sincronizarDasMeiPublicadosNoFiscal() {
     if (!cliente) continue
 
     const observacao = `DAS-MEI:${guia.id}`
-    const alerta = calcularAlertaFiscal(guia.vencimento, guia.status === "Paga" ? "Pago" : "Pendente")
+    const lancamentoConfirmado = await LancamentoContabil.findOne({
+      where: { observacao },
+      order: [["createdAt", "DESC"]],
+    })
+    const pagamentoConfirmado = guia.status === "Paga" || Boolean(lancamentoConfirmado)
+
+    if (pagamentoConfirmado && guia.status !== "Paga") {
+      await guia.update({
+        status: "Paga",
+        historico: [
+          ...(Array.isArray(guia.historico) ? guia.historico : []),
+          {
+            em: new Date().toISOString(),
+            acao: "Status reparado automaticamente a partir do lançamento contábil confirmado",
+          },
+        ],
+      })
+    }
+
+    const alerta = calcularAlertaFiscal(guia.vencimento, pagamentoConfirmado ? "Pago" : "Pendente")
     const dados = {
       cliente: cliente.nome,
       obrigacao: "DAS-MEI",
       competencia: competenciaDasParaFiscal(guia.competencia),
       vencimento: guia.vencimento,
-      status: guia.status === "Paga" ? "Pago" : "Pendente",
+      status: pagamentoConfirmado ? "Concluído" : "Pendente",
       valor: String(guia.valor || ""),
       observacao,
       anexos: [{ nome: guia.nomeArquivo, caminho: guia.caminhoArquivo, dasMeiId: guia.id }],
@@ -571,21 +590,49 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
 
     const nomeObrigacao = obrigacao.obrigacao || "Obrigação fiscal"
 
-    await LancamentoContabil.create({
-      cliente: obrigacao.cliente,
-      data: new Date().toISOString().slice(0, 10),
-      competencia: obrigacao.competencia || "00/0000",
-      tipo: "Despesa",
-      planoConta: obterPlanoContaDaObrigacao(nomeObrigacao),
-      descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
-      valor: obrigacao.valor || "0",
-      formaPagamento: "",
-      observacao:
-        obrigacao.observacao ||
-        "Gerado automaticamente ao concluir pendência.",
-      anexos: obrigacao.anexos || [],
-      empresaId: req.usuario.empresaId || obrigacao.empresaId || null,
+    const referenciaDas = String(obrigacao.observacao || "").match(/^DAS-MEI:(\d+)$/)
+    const referenciaLancamento = referenciaDas
+      ? `DAS-MEI:${referenciaDas[1]}`
+      : `fiscal:${obrigacao.id}`
+    let lancamento = await LancamentoContabil.findOne({
+      where: referenciaDas
+        ? { observacao: referenciaLancamento }
+        : {
+          cliente: obrigacao.cliente,
+          descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
+          tipo: "Despesa",
+        },
+      order: [["createdAt", "DESC"]],
     })
+
+    if (!lancamento) {
+      lancamento = await LancamentoContabil.create({
+        cliente: obrigacao.cliente,
+        data: new Date().toISOString().slice(0, 10),
+        competencia: obrigacao.competencia || "00/0000",
+        tipo: "Despesa",
+        planoConta: obterPlanoContaDaObrigacao(nomeObrigacao),
+        descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
+        valor: obrigacao.valor || "0",
+        formaPagamento: "",
+        observacao: referenciaLancamento,
+        anexos: obrigacao.anexos || [],
+        empresaId: req.usuario.empresaId || obrigacao.empresaId || null,
+      })
+    }
+
+    if (referenciaDas) {
+      const guia = await DasMei.findByPk(Number(referenciaDas[1]))
+      if (guia && guia.status !== "Paga") {
+        await guia.update({
+          status: "Paga",
+          historico: [
+            ...(Array.isArray(guia.historico) ? guia.historico : []),
+            { em: new Date().toISOString(), acao: "Pagamento concluído pelo escritório no Fiscal" },
+          ],
+        })
+      }
+    }
 
     const financeiro = await criarFinanceiroDaObrigacaoFiscal(
       obrigacao,
@@ -623,6 +670,7 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
     res.json({
       message: "Pendência concluída e lançamento contábil criado com sucesso",
       obrigacao,
+      lancamento,
       financeiro,
     })
   } catch (error) {

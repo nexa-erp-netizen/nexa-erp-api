@@ -63,16 +63,38 @@ function pdfBuffer(relatorio) {
     doc.on("end", () => resolve(Buffer.concat(partes)))
     doc.on("error", reject)
     doc.fontSize(18).fillColor("#0b356f").text(relatorio.titulo)
-    doc.moveDown(0.3).fontSize(9).fillColor("#555").text(`Gerado pela Nexa em ${new Date().toLocaleString("pt-BR")}`)
+    doc.moveDown(0.3).fontSize(9).fillColor("#555").text(`Gerado pela Nexa em ${new Date().toLocaleString("pt-BR")} - ${relatorio.linhas.length} registro(s)`)
     doc.moveDown()
-    doc.fontSize(8).fillColor("#111")
-    doc.text(relatorio.colunas.join("  |  "), { continued: false })
-    doc.moveTo(36, doc.y + 3).lineTo(559, doc.y + 3).strokeColor("#47bfe8").stroke()
-    doc.moveDown(0.6)
-    relatorio.linhas.forEach((linha) => {
-      if (doc.y > 760) doc.addPage()
-      doc.text(linha.map((v) => String(v ?? "")).join("  |  "))
-      doc.moveDown(0.25)
+    if (!relatorio.linhas.length) {
+      doc.roundedRect(36, doc.y, 523, 54, 6).fillAndStroke("#f2f7fb", "#b9d7e8")
+      doc.fillColor("#24435b").fontSize(11).text("Nenhum registro encontrado para os filtros deste relatório.", 50, doc.y + 18, { width: 495 })
+      doc.end()
+      return
+    }
+    const larguras = relatorio.colunas.map((_, indice) => indice === 0 || indice === 1 ? 120 : 70)
+    const larguraTotal = larguras.reduce((soma, valor) => soma + valor, 0)
+    const escala = 523 / larguraTotal
+    const largurasAjustadas = larguras.map((valor) => valor * escala)
+    let x = 36
+    const yCabecalho = doc.y
+    doc.rect(36, yCabecalho, 523, 24).fill("#0b356f")
+    doc.fontSize(7.5).fillColor("#fff")
+    relatorio.colunas.forEach((coluna, indice) => {
+      doc.text(String(coluna), x + 4, yCabecalho + 8, { width: largurasAjustadas[indice] - 8, lineBreak: false })
+      x += largurasAjustadas[indice]
+    })
+    doc.y = yCabecalho + 28
+    relatorio.linhas.forEach((linha, linhaIndice) => {
+      if (doc.y > 770) doc.addPage()
+      const y = doc.y
+      if (linhaIndice % 2 === 0) doc.rect(36, y - 2, 523, 21).fill("#f4f8fb")
+      x = 36
+      doc.fontSize(7).fillColor("#172b3a")
+      linha.forEach((valor, indice) => {
+        doc.text(String(valor ?? ""), x + 4, y + 4, { width: largurasAjustadas[indice] - 8, height: 12, ellipsis: true, lineBreak: false })
+        x += largurasAjustadas[indice]
+      })
+      doc.y = y + 21
     })
     doc.end()
   })

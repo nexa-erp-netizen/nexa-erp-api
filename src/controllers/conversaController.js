@@ -2638,9 +2638,10 @@ async function conversar(req, res) {
           modelo: "Nexa Ferramentas Universais 1.0",
         }
       } else {
+        const relatorioDoClienteAtual = /\b(deste|desse|do|para o) cliente\b|\bcliente atual\b/i.test(mensagem)
         respostaFerramenta = {
           resposta: `Preparei o relatório de ${tipo === "cobrancas" ? "serviços e cobranças" : tipo} em ${formato === "xls" ? "Excel" : "PDF"}. Use o botão abaixo para gerar e baixar com os dados atuais do ERP.`,
-          arquivoNexa: { tipo, formato, clienteId: clienteId || null, titulo: `Baixar relatório em ${formato === "xls" ? "Excel" : "PDF"}` },
+          arquivoNexa: { tipo, formato, clienteId: relatorioDoClienteAtual ? (clienteId || null) : null, titulo: `Baixar relatório em ${formato === "xls" ? "Excel" : "PDF"}` },
           atividade: "ferramenta-universal",
           modo: "nexa-ferramentas",
           provedor: "sistema",
