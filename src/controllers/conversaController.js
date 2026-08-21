@@ -33,6 +33,7 @@ const { processarNexaAction } = require("../services/nexaActionsService")
 const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoService")
 const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
 const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
+const { detectarPedidoRelatorio } = require("../services/nexaFerramentasService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -2621,6 +2622,35 @@ async function conversar(req, res) {
       }, conversa))
     }
 
+    const pedidoRelatorio = detectarPedidoRelatorio(mensagem)
+    if (pedidoRelatorio) {
+      const tipo = pedidoRelatorio.tipo
+      const formato = pedidoRelatorio.formato
+      let respostaFerramenta
+      if (!tipo || !formato) {
+        respostaFerramenta = {
+          resposta: !tipo
+            ? "Qual relatório você deseja: clientes, financeiro, fiscal ou serviços e cobranças? Informe também PDF ou Excel."
+            : "Você prefere esse relatório em PDF ou Excel?",
+          atividade: "ferramenta-universal",
+          modo: "nexa-ferramentas",
+          provedor: "sistema",
+          modelo: "Nexa Ferramentas Universais 1.0",
+        }
+      } else {
+        respostaFerramenta = {
+          resposta: `Preparei o relatório de ${tipo === "cobrancas" ? "serviços e cobranças" : tipo} em ${formato === "xls" ? "Excel" : "PDF"}. Use o botão abaixo para gerar e baixar com os dados atuais do ERP.`,
+          arquivoNexa: { tipo, formato, clienteId: clienteId || null, titulo: `Baixar relatório em ${formato === "xls" ? "Excel" : "PDF"}` },
+          atividade: "ferramenta-universal",
+          modo: "nexa-ferramentas",
+          provedor: "sistema",
+          modelo: "Nexa Ferramentas Universais 1.0",
+        }
+      }
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaFerramenta.resposta, dados: respostaFerramenta })
+      return res.json(anexarMetadadosConversa({ ...respostaFerramenta, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
     const confirmacaoCliente = await ultimaConfirmacaoClientePendente(conversa.id, req.usuario.id)
     const confirmacaoResolvida = await responderConfirmacaoCliente({
       confirmacao: confirmacaoCliente,
@@ -2830,7 +2860,7 @@ async function conversar(req, res) {
     })
 
     let contextoNexa
-    const rotaLivre = ["conversa", "pesquisa", "esclarecer"].includes(rotaModelo?.rota)
+    const rotaLivre = ["conversa", "esclarecer"].includes(rotaModelo?.rota)
     if (conversaCasual || rotaLivre || conversa.tipoContexto === "interessado" || !perguntaPrecisaDadosNexa(mensagem, clienteId, conversa.tipoContexto)) {
       contextoNexa = contextoLivre({
         nomeUsuario,
