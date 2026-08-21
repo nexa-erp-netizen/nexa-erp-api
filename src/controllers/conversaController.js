@@ -26,6 +26,7 @@ const {
   aprenderTermo: aprenderTermoVoz,
   detectarInstrucaoDeAprendizado,
 } = require("../services/vocabularioVozService")
+const { corrigirMensagemNatural } = require("../services/compreensaoNaturalService")
 const { tituloAutomatico } = require("./conversaHistoricoController")
 const { detectarSiteParaAbrir } = require("../services/siteNexaService")
 const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
@@ -189,31 +190,36 @@ function mensagemOperacionalDeterministica(valor) {
 
 function corrigirTranscricaoPeloContexto({ mensagem, historico = [], origem = "texto" }) {
   const textoOriginal = String(mensagem || "").trim()
-  if (!textoOriginal || normalizar(origem) !== "voz") {
+  if (!textoOriginal) {
     return { texto: textoOriginal, alterada: false, substituicoes: [] }
   }
+
+  const compreensao = corrigirMensagemNatural({ mensagem: textoOriginal })
+  const textoCompreendido = compreensao.texto
+
+  if (normalizar(origem) !== "voz") return compreensao
 
   const contextoRecente = limparHistorico(historico)
     .slice(-8)
     .map((item) => normalizar(item.texto))
     .join(" ")
-  const atual = normalizar(textoOriginal)
+  const atual = normalizar(textoCompreendido)
   const assuntoContador = /(contador|contadora|contabilidade|profissao contabil|mei)/.test(contextoRecente)
   const continuacaoSobreEmpresa = /(tipo de empresa|empresa.*abrir|pode abrir|qual empresa|natureza juridica)/.test(atual)
 
-  if (assuntoContador && continuacaoSobreEmpresa && /\bcomputador(?:a|es)?\b/i.test(textoOriginal)) {
-    const corrigido = textoOriginal.replace(/\bcomputador(?:a|es)?\b/gi, (termo) => {
+  if (assuntoContador && continuacaoSobreEmpresa && /\bcomputador(?:a|es)?\b/i.test(textoCompreendido)) {
+    const corrigido = textoCompreendido.replace(/\bcomputador(?:a|es)?\b/gi, (termo) => {
       if (/a$/i.test(termo)) return "contadora"
       return "contador"
     })
     return {
       texto: corrigido,
       alterada: corrigido !== textoOriginal,
-      substituicoes: [{ termoOuvido: "computador", termoCorreto: "contador", origem: "contexto" }],
+      substituicoes: [...compreensao.substituicoes, { termoOuvido: "computador", termoCorreto: "contador", origem: "contexto", confianca: 95 }],
     }
   }
 
-  return { texto: textoOriginal, alterada: false, substituicoes: [] }
+  return compreensao
 }
 
 function distanciaLevenshtein(a, b) {
@@ -1360,7 +1366,9 @@ async function historicoPersistente(conversaId, usuarioId, limite = 18) {
   })
   return mensagens.reverse().map((item) => ({
     autor: item.autor === "usuario" ? "usuario" : "nexa",
-    texto: item.texto,
+    texto: item.autor === "usuario" && item.dados?.transcricaoCorrigida
+      ? item.dados.transcricaoCorrigida
+      : item.texto,
   }))
 }
 
@@ -2397,7 +2405,7 @@ async function conversar(req, res) {
       conversa,
       usuarioId: req.usuario.id,
       autor: "usuario",
-      texto: mensagemAlterada ? mensagem : mensagemOriginal,
+      texto: mensagemOriginal,
       dados: {
         origem,
         paginaAtual: paginaAtual || null,
