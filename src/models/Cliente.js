@@ -13,6 +13,27 @@ const Cliente = sequelize.define("Cliente", {
     defaultValue: true,
   },
 
+  portalBloqueado: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+
+  portalBloqueioMotivo: {
+    type: DataTypes.STRING(180),
+    allowNull: true,
+  },
+
+  portalBloqueadoEm: {
+    type: DataTypes.DATE,
+    allowNull: true,
+  },
+
+  portalBloqueadoPor: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+
   cpf: {
     type: DataTypes.STRING,
     allowNull: false,

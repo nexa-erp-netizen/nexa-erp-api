@@ -37,6 +37,18 @@ const Usuario = sequelize.define("Usuario", {
     allowNull: false,
     defaultValue: false,
   },
+
+  ativo: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  },
+
+  bloqueadoPeloCliente: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
 }, {
   indexes: [{ unique: true, fields: ["escritorioId", "email"] }],
 })

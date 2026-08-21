@@ -170,6 +170,9 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
       senha,
       10
     )
+    const clientePortalBloqueado = perfil === "Cliente"
+      ? await Cliente.findOne({ where: { nome: clienteVinculado, escritorioId: req.usuario.escritorioId, portalBloqueado: true } })
+      : null
 
     const usuario = await Usuario.create({
       nome,
@@ -180,6 +183,8 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
         perfil === "Cliente" ? clienteVinculado : null,
       empresaId: empresaId || null,
       escritorioId: req.usuario.escritorioId,
+      ativo: !clientePortalBloqueado,
+      bloqueadoPeloCliente: Boolean(clientePortalBloqueado),
     })
 
     res.status(201).json({
@@ -216,6 +221,27 @@ router.post("/login", async (req, res) => {
     if (!usuario) {
       return res.status(401).json({
         message: "Usuário ou senha inválidos",
+      })
+    }
+
+    if (usuario.ativo === false) {
+      if (usuario.perfil === "Cliente" && usuario.clienteVinculado) {
+        const clienteBloqueado = await Cliente.findOne({
+          where: {
+            nome: usuario.clienteVinculado,
+            escritorioId: usuario.escritorioId,
+            portalBloqueado: true,
+          },
+        })
+        if (clienteBloqueado) {
+          return res.status(403).json({
+            message: "Seu acesso ao Portal está temporariamente bloqueado. Entre em contato com o escritório para regularização.",
+            portalBloqueado: true,
+          })
+        }
+      }
+      return res.status(403).json({
+        message: "Este acesso está bloqueado. Procure o administrador do escritório.",
       })
     }
 

@@ -25,6 +25,7 @@ router.get("/", autenticar, async (req, res) => {
         "perfil",
         "clienteVinculado",
         "empresaId",
+        "ativo",
         "createdAt",
       ],
       order: [["createdAt", "DESC"]],
@@ -79,6 +80,9 @@ router.post("/", autenticar, async (req, res) => {
     }
 
     const senhaCriptografada = await bcrypt.hash(senha, 10)
+    const clientePortalBloqueado = perfil === "Cliente"
+      ? await Cliente.findOne({ where: { nome: clienteVinculado, portalBloqueado: true } })
+      : null
 
     const usuario = await Usuario.create({
       nome,
@@ -88,6 +92,8 @@ router.post("/", autenticar, async (req, res) => {
       clienteVinculado:
         perfil === "Cliente" ? clienteVinculado : null,
       empresaId: req.usuario.empresaId || null,
+      ativo: !clientePortalBloqueado,
+      bloqueadoPeloCliente: Boolean(clientePortalBloqueado),
     })
 
     res.status(201).json({
@@ -138,6 +144,16 @@ router.put("/:id", autenticar, async (req, res) => {
         perfil === "Cliente" ? clienteVinculado : null,
     }
 
+    if (perfil === "Cliente" && clienteVinculado) {
+      const clientePortalBloqueado = await Cliente.findOne({
+        where: { nome: clienteVinculado, escritorioId: usuario.escritorioId, portalBloqueado: true },
+      })
+      if (clientePortalBloqueado) {
+        dadosAtualizados.ativo = false
+        dadosAtualizados.bloqueadoPeloCliente = true
+      }
+    }
+
     if (senha) {
       dadosAtualizados.senha = await bcrypt.hash(senha, 10)
     }
@@ -183,6 +199,47 @@ router.delete("/:id", autenticar, async (req, res) => {
     res.status(500).json({
       message: "Erro ao excluir usuário",
     })
+  }
+})
+
+router.patch("/:id/acesso", autenticar, async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Administrador") {
+      return res.status(403).json({ message: "Acesso não autorizado" })
+    }
+
+    const usuario = await Usuario.findByPk(req.params.id)
+    if (!usuario) return res.status(404).json({ message: "Usuário não encontrado" })
+
+    if (Number(usuario.id) === Number(req.usuario.id) && req.body.ativo === false) {
+      return res.status(400).json({ message: "Você não pode bloquear o próprio acesso" })
+    }
+
+    const ativo = req.body.ativo === true
+    if (ativo && usuario.perfil === "Cliente" && usuario.clienteVinculado) {
+      const cliente = await Cliente.findOne({
+        where: {
+          nome: usuario.clienteVinculado,
+          escritorioId: usuario.escritorioId,
+          portalBloqueado: true,
+        },
+      })
+      if (cliente) {
+        return res.status(409).json({
+          message: "O Portal deste cliente está bloqueado. Desbloqueie-o primeiro na Central do Cliente.",
+        })
+      }
+    }
+    await usuario.update({ ativo })
+
+    return res.json({
+      id: usuario.id,
+      ativo,
+      message: ativo ? "Usuário desbloqueado com sucesso" : "Usuário bloqueado com sucesso",
+    })
+  } catch (error) {
+    console.error("ERRO AO ALTERAR ACESSO DO USUÁRIO:", error)
+    return res.status(500).json({ message: "Erro ao alterar acesso do usuário" })
   }
 })
 

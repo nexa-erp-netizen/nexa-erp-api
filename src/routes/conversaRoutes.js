@@ -28,6 +28,7 @@ const {
 
 const { statusVoz, transcreverVoz, sintetizarVoz } = require("../controllers/vozController")
 const { gerarRelatorio, analisarDocumentoEnviado } = require("../controllers/nexaFerramentasController")
+const { analisarTela } = require("../controllers/nexaVisaoController")
 
 const router = express.Router()
 const uploadAudio = multer({
@@ -35,6 +36,7 @@ const uploadAudio = multer({
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
 })
 const uploadDocumento = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } })
+const uploadTela = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024, files: 1 } })
 
 router.get("/voz/status", autenticar, statusVoz)
 router.post("/voz/sintetizar", autenticar, sintetizarVoz)
@@ -54,6 +56,7 @@ router.get("/memorias", autenticar, listarMemorias)
 router.delete("/memorias/:id", autenticar, excluirMemoria)
 router.post("/ferramentas/relatorio", autenticar, gerarRelatorio)
 router.post("/ferramentas/documento", autenticar, uploadDocumento.single("arquivo"), analisarDocumentoEnviado)
+router.post("/visao/analisar", autenticar, uploadTela.single("imagem"), analisarTela)
 router.post("/", autenticar, conversar)
 router.post("/contexto", autenticar, contexto)
 router.get("/status", autenticar, status)

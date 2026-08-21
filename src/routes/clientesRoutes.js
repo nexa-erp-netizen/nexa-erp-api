@@ -1,6 +1,8 @@
 const express = require("express")
 const fs = require("fs")
 const Cliente = require("../models/Cliente")
+const Usuario = require("../models/Usuario")
+const sequelize = require("../config/database")
 const upload = require("../middlewares/upload")
 const supabase = require("../config/supabase")
 
@@ -343,6 +345,64 @@ res.json(clienteAtualizado)
     res.status(500).json({
       message: "Erro ao atualizar cliente",
     })
+  }
+})
+
+router.patch("/:id/acesso-portal", autenticar, async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    if (req.usuario.perfil !== "Administrador") {
+      await transaction.rollback()
+      return res.status(403).json({ message: "Somente o administrador pode alterar o acesso ao Portal." })
+    }
+
+    const cliente = await Cliente.findByPk(req.params.id, { transaction })
+    if (!cliente) {
+      await transaction.rollback()
+      return res.status(404).json({ message: "Cliente não encontrado" })
+    }
+
+    const bloqueado = req.body.bloqueado === true
+    const motivo = bloqueado
+      ? String(req.body.motivo || "Inadimplência").trim().slice(0, 180)
+      : null
+
+    await cliente.update({
+      portalBloqueado: bloqueado,
+      portalBloqueioMotivo: motivo,
+      portalBloqueadoEm: bloqueado ? new Date() : null,
+      portalBloqueadoPor: bloqueado ? req.usuario.id : null,
+    }, { transaction })
+
+    const whereUsuario = {
+      perfil: "Cliente",
+      clienteVinculado: cliente.nome,
+    }
+    if (cliente.escritorioId) whereUsuario.escritorioId = cliente.escritorioId
+
+    if (bloqueado) {
+      await Usuario.update(
+        { ativo: false, bloqueadoPeloCliente: true },
+        { where: { ...whereUsuario, ativo: true }, transaction },
+      )
+    } else {
+      await Usuario.update(
+        { ativo: true, bloqueadoPeloCliente: false },
+        { where: { ...whereUsuario, bloqueadoPeloCliente: true }, transaction },
+      )
+    }
+
+    await transaction.commit()
+    return res.json({
+      cliente: await Cliente.findByPk(cliente.id),
+      message: bloqueado
+        ? "Acesso do cliente ao Portal bloqueado com sucesso"
+        : "Acesso do cliente ao Portal desbloqueado com sucesso",
+    })
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback()
+    console.error("ERRO AO ALTERAR ACESSO DO CLIENTE AO PORTAL:", error)
+    return res.status(500).json({ message: "Erro ao alterar acesso ao Portal" })
   }
 })
 
