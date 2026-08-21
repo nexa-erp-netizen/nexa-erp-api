@@ -54,6 +54,7 @@ require("./src/models/MovimentoBancario")
 require("./src/models/FechamentoConciliacaoBancaria")
 require("./src/models/IncidenteSistema")
 require("./src/models/DocumentoAnaliseNexa")
+require("./src/models/MelhoriaNexa")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 const { capturarErroGlobal, monitorarRespostas } = require("./src/middlewares/incidenteMiddleware")
@@ -103,6 +104,7 @@ const rescisoesRoutes = require("./src/routes/rescisoesRoutes")
 const contasBancariasClientesRoutes = require("./src/routes/contasBancariasClientesRoutes")
 const extratosBancariosRoutes = require("./src/routes/extratosBancariosRoutes")
 const incidentesRoutes = require("./src/routes/incidentesRoutes")
+const melhoriasNexaRoutes = require("./src/routes/melhoriasNexaRoutes")
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3000
@@ -121,7 +123,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.35.6",
+    versao: "3.36.1",
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })
@@ -189,6 +191,7 @@ app.use("/das-mei", dasMeiRoutes)
 app.use("/whatsapp-assist", whatsappAssistRoutes)
 app.use("/acessos-clientes", acessosClientesRoutes)
 app.use("/incidentes", incidentesRoutes)
+app.use("/melhorias-nexa", melhoriasNexaRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
   try {

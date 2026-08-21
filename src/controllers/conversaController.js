@@ -34,6 +34,7 @@ const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoSe
 const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
 const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
 const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../services/nexaFerramentasService")
+const { analisarProdutoPelaNexa } = require("../services/nexaAnalistaProdutoService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1560,6 +1561,20 @@ function interpretarJson(texto) {
     }
   }
 
+  // Alguns modelos podem encerrar a geração depois do campo "resposta" e
+  // antes de fechar todo o JSON. Nunca exponha a estrutura JSON no chat.
+  const respostaParcial = limpo.match(/^[\s\S]*?["']resposta["']\s*:\s*["']([\s\S]*)/i)
+  if (respostaParcial?.[1]) {
+    const respostaLimpa = respostaParcial[1]
+      .replace(/["']?\s*[,}]?\s*$/, "")
+      .replace(/\\n/g, "\n")
+      .replace(/\\"/g, '"')
+      .trim()
+    if (respostaLimpa) {
+      return { resposta: respostaLimpa, pontos: [], recomendacao: "", fundamentos: [] }
+    }
+  }
+
   const textoAntesDoJson = inicioJson > 0 ? limpo.slice(0, inicioJson).trim() : ""
   return {
     resposta: textoAntesDoJson || limpo || "Não consegui formular a resposta.",
@@ -2699,6 +2714,17 @@ async function conversar(req, res) {
     if (consultaIncidentes) {
       await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: consultaIncidentes.resposta, dados: consultaIncidentes })
       return res.json(anexarMetadadosConversa({ ...consultaIncidentes, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
+    const analiseProduto = await analisarProdutoPelaNexa({
+      mensagem,
+      usuario: usuarioCompleto,
+      paginaAtual: req.body?.paginaAtual || "",
+      clienteId: clienteId || conversa.clienteId || null,
+    })
+    if (analiseProduto) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: analiseProduto.resposta, dados: analiseProduto })
+      return res.json(anexarMetadadosConversa({ ...analiseProduto, respondidoEm: new Date().toISOString() }, conversa))
     }
 
     if (clienteAtualBanco && parecePedidoAoGoogleDrive(mensagem)) {

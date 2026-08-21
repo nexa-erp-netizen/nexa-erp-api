@@ -49,11 +49,12 @@ async function obterMensagens(req, res) {
     const conversa = await ConversaNexa.findOne({ where: { id: req.params.id, usuarioId: req.usuario.id } })
     if (!conversa) return res.status(404).json({ message: "Conversa não encontrada" })
 
-    const mensagens = await MensagemNexa.findAll({
+    const mensagensRecentes = await MensagemNexa.findAll({
       where: { conversaId: conversa.id, usuarioId: req.usuario.id },
-      order: [["createdAt", "ASC"]],
-      limit: 300,
+      order: [["createdAt", "DESC"]],
+      limit: 120,
     })
+    const mensagens = mensagensRecentes.reverse()
     return res.json({ conversa, mensagens })
   } catch (error) {
     console.error("ERRO AO ABRIR CONVERSA DA NEXA:", error)
@@ -65,11 +66,12 @@ async function obterConversaRecente(req, res) {
   try {
     const conversa = await obterConversaAtiva(req.usuario.id)
     if (!conversa) return res.json({ conversa: null, mensagens: [] })
-    const mensagens = await MensagemNexa.findAll({
+    const mensagensRecentes = await MensagemNexa.findAll({
       where: { conversaId: conversa.id, usuarioId: req.usuario.id },
-      order: [["createdAt", "ASC"]],
-      limit: 300,
+      order: [["createdAt", "DESC"]],
+      limit: 120,
     })
+    const mensagens = mensagensRecentes.reverse()
     return res.json({ conversa, mensagens })
   } catch (error) {
     console.error("ERRO AO ABRIR CONVERSA RECENTE DA NEXA:", error)
