@@ -33,6 +33,7 @@ const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRe
 const { processarNexaAction } = require("../services/nexaActionsService")
 const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoService")
 const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
+const { responderModoDesenvolvedor } = require("../services/nexaModoDesenvolvedorService")
 const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
 const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../services/nexaFerramentasService")
 const { analisarProdutoPelaNexa } = require("../services/nexaAnalistaProdutoService")
@@ -2721,6 +2722,12 @@ async function conversar(req, res) {
     if (autodiagnostico) {
       await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: autodiagnostico.resposta, dados: autodiagnostico })
       return res.json(anexarMetadadosConversa({ ...autodiagnostico, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
+    const modoDesenvolvedor = await responderModoDesenvolvedor({ mensagem, usuario: usuarioCompleto })
+    if (modoDesenvolvedor) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: modoDesenvolvedor.resposta, dados: modoDesenvolvedor })
+      return res.json(anexarMetadadosConversa({ ...modoDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
     }
 
     const consultaIncidentes = await consultarIncidentesPelaNexa({ mensagem, usuario: usuarioCompleto })

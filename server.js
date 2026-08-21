@@ -53,6 +53,7 @@ require("./src/models/ImportacaoExtratoBancario")
 require("./src/models/MovimentoBancario")
 require("./src/models/FechamentoConciliacaoBancaria")
 require("./src/models/IncidenteSistema")
+require("./src/models/PlanoCorrecaoNexa")
 require("./src/models/DocumentoAnaliseNexa")
 require("./src/models/MelhoriaNexa")
 const { autenticar } = require("./src/middlewares/authMiddleware")
@@ -123,7 +124,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.36.4",
+    versao: "3.37.0",
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })

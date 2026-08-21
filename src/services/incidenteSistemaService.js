@@ -45,7 +45,7 @@ async function registrarIncidente(dados) {
     metodo: textoSeguro(dados.metodo, 10), statusHttp: Number(dados.statusHttp) || null,
     componente: textoSeguro(dados.componente, 200), contexto: sanear(dados.contexto),
     usuarioId: Number(dados.usuarioId) || null, clienteId: Number(dados.clienteId) || null,
-    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || "3.32.1",
+    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || "3.37.0",
     primeiraOcorrenciaEm: agora, ultimaOcorrenciaEm: agora,
     diagnostico: diagnostico.causaProvavel, categoria: diagnostico.categoria,
     causaProvavel: diagnostico.causaProvavel, correcaoSugerida: diagnostico.correcaoSugerida,

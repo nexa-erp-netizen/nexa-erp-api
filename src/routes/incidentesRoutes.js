@@ -1,6 +1,8 @@
 const express = require("express")
 const IncidenteSistema = require("../models/IncidenteSistema")
 const { registrarIncidente } = require("../services/incidenteSistemaService")
+const { diagnosticoSaude, criarPlanoCorrecao } = require("../services/nexaModoDesenvolvedorService")
+const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 
 const router = express.Router()
 
@@ -15,6 +17,23 @@ router.post("/capturar", async (req, res) => {
 })
 
 router.use((req, res, next) => req.usuario.perfil === "Administrador" ? next() : res.status(403).json({ message: "Acesso restrito ao administrador." }))
+
+router.get("/saude", async (_req, res) => {
+  res.json(await diagnosticoSaude())
+})
+
+router.get("/planos", async (req, res) => {
+  const where = req.query.status ? { status: String(req.query.status) } : {}
+  res.json(await PlanoCorrecaoNexa.findAll({ where, order: [["createdAt", "DESC"]], limit: 100 }))
+})
+
+router.post("/:id/plano-correcao", async (req, res) => {
+  const incidente = await IncidenteSistema.findByPk(req.params.id)
+  if (!incidente) return res.status(404).json({ message: "Incidente não encontrado." })
+  const plano = await criarPlanoCorrecao({ incidente, usuario: req.usuario })
+  if (incidente.status === "Aberto") await incidente.update({ status: "Em diagnóstico" })
+  res.status(201).json(plano)
+})
 
 router.get("/", async (req, res) => {
   const where = {}
