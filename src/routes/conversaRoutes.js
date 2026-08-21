@@ -12,6 +12,7 @@ const {
   criarConversa,
   obterMensagens,
   obterConversaRecente,
+  definirConversaAtiva,
   atualizarConversa,
   excluirConversa,
   listarMemorias,
@@ -43,6 +44,7 @@ router.delete("/vocabulario-voz/:id", autenticar, excluirVocabularioVoz)
 router.get("/sessoes", autenticar, listarConversas)
 router.post("/sessoes", autenticar, criarConversa)
 router.get("/sessoes-recente", autenticar, obterConversaRecente)
+router.patch("/sessoes/:id/ativa", autenticar, definirConversaAtiva)
 router.get("/sessoes/:id/mensagens", autenticar, obterMensagens)
 router.patch("/sessoes/:id", autenticar, atualizarConversa)
 router.delete("/sessoes/:id", autenticar, excluirConversa)

@@ -32,6 +32,7 @@ const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRe
 const { processarNexaAction } = require("../services/nexaActionsService")
 const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoService")
 const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
+const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1321,7 +1322,8 @@ function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias, c
 async function obterOuCriarConversa({ usuarioId, conversaId, tipoContexto, clienteId, interessadoNome, primeiraMensagem }) {
   let conversa = null
   if (conversaId) {
-    conversa = await ConversaNexa.findOne({ where: { id: conversaId, usuarioId } })
+    const ativa = await obterConversaAtiva(usuarioId)
+    conversa = ativa || await ConversaNexa.findOne({ where: { id: conversaId, usuarioId } })
   }
 
   if (!conversa) {
@@ -1341,6 +1343,8 @@ async function obterOuCriarConversa({ usuarioId, conversaId, tipoContexto, clien
     if (tipoContexto === "interessado") atualizacoes.interessadoNome = String(interessadoNome || conversa.interessadoNome || "Novo atendimento").trim()
     await conversa.update(atualizacoes)
   }
+
+  await ativarConversa(usuarioId, conversa)
 
   return conversa
 }

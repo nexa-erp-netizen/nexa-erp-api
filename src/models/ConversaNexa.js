@@ -29,6 +29,11 @@ const ConversaNexa = sequelize.define("ConversaNexa", {
     allowNull: false,
     defaultValue: false,
   },
+  ativa: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
   ultimaMensagemEm: {
     type: DataTypes.DATE,
     allowNull: true,

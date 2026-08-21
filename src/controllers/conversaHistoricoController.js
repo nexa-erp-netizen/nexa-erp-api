@@ -1,6 +1,7 @@
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
 const MemoriaNexa = require("../models/MemoriaNexa")
+const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
 
 function tituloAutomatico(texto) {
   const limpo = String(texto || "Nova conversa").replace(/\s+/g, " ").trim()
@@ -35,6 +36,7 @@ async function criarConversa(req, res) {
       interessadoNome: tipoContexto === "interessado" ? String(req.body?.interessadoNome || "Novo atendimento").trim() : null,
       ultimaMensagemEm: new Date(),
     })
+    await ativarConversa(req.usuario.id, conversa)
     return res.status(201).json(conversa)
   } catch (error) {
     console.error("ERRO AO CRIAR CONVERSA DA NEXA:", error)
@@ -61,10 +63,7 @@ async function obterMensagens(req, res) {
 
 async function obterConversaRecente(req, res) {
   try {
-    const conversa = await ConversaNexa.findOne({
-      where: { usuarioId: req.usuario.id, arquivada: false },
-      order: [["ultimaMensagemEm", "DESC"], ["updatedAt", "DESC"]],
-    })
+    const conversa = await obterConversaAtiva(req.usuario.id)
     if (!conversa) return res.json({ conversa: null, mensagens: [] })
     const mensagens = await MensagemNexa.findAll({
       where: { conversaId: conversa.id, usuarioId: req.usuario.id },
@@ -75,6 +74,17 @@ async function obterConversaRecente(req, res) {
   } catch (error) {
     console.error("ERRO AO ABRIR CONVERSA RECENTE DA NEXA:", error)
     return res.status(500).json({ message: "Erro ao abrir a conversa mais recente" })
+  }
+}
+
+async function definirConversaAtiva(req, res) {
+  try {
+    const conversa = await ativarConversa(req.usuario.id, Number(req.params.id))
+    if (!conversa) return res.status(404).json({ message: "Conversa não encontrada" })
+    return res.json(conversa)
+  } catch (error) {
+    console.error("ERRO AO DEFINIR CONVERSA ATIVA DA NEXA:", error)
+    return res.status(500).json({ message: "Erro ao sincronizar a conversa ativa" })
   }
 }
 
@@ -145,6 +155,7 @@ module.exports = {
   criarConversa,
   obterMensagens,
   obterConversaRecente,
+  definirConversaAtiva,
   atualizarConversa,
   excluirConversa,
   listarMemorias,
