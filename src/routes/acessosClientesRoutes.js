@@ -2,6 +2,7 @@ const express = require("express")
 const { Op } = require("sequelize")
 const AcessoCliente = require("../models/AcessoCliente")
 const Cliente = require("../models/Cliente")
+const { capturarExcecaoRota } = require("../middlewares/incidenteMiddleware")
 const router = express.Router()
 
 const normalizar = (valor) => String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase()
@@ -48,6 +49,7 @@ router.post("/atividade", async (req, res) => {
     res.status(201).json({ ok: true })
   } catch (error) {
     console.error("ERRO AO REGISTRAR ACESSO DO CLIENTE:", error)
+    await capturarExcecaoRota({ error, req, res, titulo: "Falha ao registrar acesso do cliente", componente: "acessosClientesRoutes/atividade" })
     res.status(500).json({ message: "Erro ao registrar atividade" })
   }
 })
@@ -63,6 +65,7 @@ router.get("/", async (req, res) => {
     res.json(eventos.map((item) => ({ ...item.toJSON(), online: new Date(item.updatedAt || item.createdAt).getTime() >= limiteOnline })))
   } catch (error) {
     console.error("ERRO AO LISTAR ACESSOS:", error)
+    await capturarExcecaoRota({ error, req, res, titulo: "Falha ao listar acessos do cliente", componente: "acessosClientesRoutes/listar" })
     res.status(500).json({ message: "Erro ao listar acessos" })
   }
 })

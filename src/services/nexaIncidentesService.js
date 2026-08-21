@@ -23,9 +23,21 @@ async function consultarIncidentesPelaNexa({ mensagem, usuario }) {
   if (idSolicitado) {
     const item = await IncidenteSistema.findByPk(Number(idSolicitado))
     if (!item) return { resposta: `Não encontrei o incidente #${idSolicitado}.`, modo: "nexa-incidentes" }
+    const texto = normalizar(mensagem)
+    if (/\b(reabra|reabrir|abra novamente|reative|reativar)\b/.test(texto)) {
+      await item.update({ status: "Aberto", resolvidoEm: null, reaberturas: Number(item.reaberturas || 0) + 1, ultimaValidacaoEm: new Date(), resultadoValidacao: { estado: "reaberto-manualmente", usuarioId: usuario.id } })
+      return { resposta: `Incidente #${item.id} reaberto. Se a falha ocorrer novamente, a Nexa acrescentará a nova evidência ao mesmo incidente.`, modo: "nexa-incidente-reaberto", incidente: item }
+    }
+    if (/\b(encerre|encerrar|feche|fechar|ignore|ignorar|arquive|arquivar|marque como corrigido|marcar como corrigido|resolvido)\b/.test(texto)) {
+      const corrigido = /\b(corrigido|resolvido|funcionando|corrigida|resolvida)\b/.test(texto)
+      const status = corrigido ? "Corrigido" : "Ignorado"
+      const motivo = corrigido ? "Validação informada pelo administrador: funcionamento normal." : "Falha temporária encerrada pelo administrador."
+      await item.update({ status, resolvidoEm: new Date(), correcao: motivo, tipoFalha: corrigido ? item.tipoFalha : "Temporária", ultimaValidacaoEm: new Date(), resultadoValidacao: { estado: corrigido ? "validado-com-sucesso" : "falha-temporaria", usuarioId: usuario.id } })
+      return { resposta: `Incidente #${item.id} encerrado como ${status.toLowerCase()}. Se a mesma falha voltar, ele será reaberto automaticamente.`, modo: "nexa-incidente-encerrado", incidente: item }
+    }
     await garantirDiagnostico(item)
     return {
-      resposta: `Incidente #${item.id}: ${item.titulo}. Categoria: ${item.categoria || "não classificada"}. Causa provável: ${item.causaProvavel || item.diagnostico || "ainda não determinada"}. Correção sugerida: ${item.correcaoSugerida || "requer análise técnica"}. Risco ${String(item.risco || "médio").toLowerCase()}, confiança de ${item.confiancaDiagnostico || 0}%. ${item.autocorrecaoPermitida ? "A correção está classificada como automatizável, mas ainda será validada antes da execução." : "A alteração exige laboratório e testes antes de qualquer execução."}`,
+      resposta: `Incidente #${item.id}: ${item.titulo}. Tipo: ${item.tipoFalha || "em observação"}. Categoria: ${item.categoria || "não classificada"}. Causa provável: ${item.causaProvavel || item.diagnostico || "ainda não determinada"}. Correção sugerida: ${item.correcaoSugerida || "requer análise técnica"}. Risco ${String(item.risco || "médio").toLowerCase()}, confiança de ${item.confiancaDiagnostico || 0}%. ${item.autocorrecaoPermitida ? "A correção está classificada como automatizável, mas ainda será validada antes da execução." : "A alteração exige laboratório e testes antes de qualquer execução."}`,
       modo: "nexa-incidente-detalhado", atividade: "autodiagnostico", provedor: "sistema", modelo: "Nexa Dev Diagnóstico 1.0",
       incidente: item,
     }
