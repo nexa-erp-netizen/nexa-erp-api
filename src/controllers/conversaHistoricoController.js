@@ -59,6 +59,25 @@ async function obterMensagens(req, res) {
   }
 }
 
+async function obterConversaRecente(req, res) {
+  try {
+    const conversa = await ConversaNexa.findOne({
+      where: { usuarioId: req.usuario.id, arquivada: false },
+      order: [["ultimaMensagemEm", "DESC"], ["updatedAt", "DESC"]],
+    })
+    if (!conversa) return res.json({ conversa: null, mensagens: [] })
+    const mensagens = await MensagemNexa.findAll({
+      where: { conversaId: conversa.id, usuarioId: req.usuario.id },
+      order: [["createdAt", "ASC"]],
+      limit: 300,
+    })
+    return res.json({ conversa, mensagens })
+  } catch (error) {
+    console.error("ERRO AO ABRIR CONVERSA RECENTE DA NEXA:", error)
+    return res.status(500).json({ message: "Erro ao abrir a conversa mais recente" })
+  }
+}
+
 async function atualizarConversa(req, res) {
   try {
     const conversa = await ConversaNexa.findOne({ where: { id: req.params.id, usuarioId: req.usuario.id } })
@@ -125,6 +144,7 @@ module.exports = {
   listarConversas,
   criarConversa,
   obterMensagens,
+  obterConversaRecente,
   atualizarConversa,
   excluirConversa,
   listarMemorias,

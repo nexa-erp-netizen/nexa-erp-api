@@ -22,6 +22,13 @@ const IncidenteSistema = sequelize.define("IncidenteSistema", {
   ultimaOcorrenciaEm: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   diagnostico: { type: DataTypes.TEXT, allowNull: true },
   correcao: { type: DataTypes.TEXT, allowNull: true },
+  categoria: { type: DataTypes.STRING(100), allowNull: true },
+  causaProvavel: { type: DataTypes.TEXT, allowNull: true },
+  correcaoSugerida: { type: DataTypes.TEXT, allowNull: true },
+  risco: { type: DataTypes.STRING(15), allowNull: true },
+  confiancaDiagnostico: { type: DataTypes.INTEGER, allowNull: true },
+  autocorrecaoPermitida: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  codigoCorrecao: { type: DataTypes.STRING(80), allowNull: true },
   resolvidoEm: { type: DataTypes.DATE, allowNull: true },
 }, {
   tableName: "incidentes_sistema",

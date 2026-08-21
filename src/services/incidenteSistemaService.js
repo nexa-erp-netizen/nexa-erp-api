@@ -1,4 +1,5 @@
 const crypto = require("crypto")
+const { diagnosticarIncidente } = require("./motorDiagnosticoIncidenteService")
 
 const CHAVES_SENSIVEIS = /senha|password|token|authorization|cookie|secret|chave|credential|certificado|cpf|cnpj/i
 
@@ -35,6 +36,7 @@ function nivelDoIncidente(statusHttp, origem) {
 async function registrarIncidente(dados) {
   const IncidenteSistema = require("../models/IncidenteSistema")
   const agora = new Date()
+  const diagnostico = diagnosticarIncidente(dados)
   const entrada = {
     fingerprint: fingerprint(dados), origem: textoSeguro(dados.origem, 20) || "api",
     nivel: dados.nivel || nivelDoIncidente(dados.statusHttp, dados.origem), status: "Aberto",
@@ -43,12 +45,17 @@ async function registrarIncidente(dados) {
     metodo: textoSeguro(dados.metodo, 10), statusHttp: Number(dados.statusHttp) || null,
     componente: textoSeguro(dados.componente, 200), contexto: sanear(dados.contexto),
     usuarioId: Number(dados.usuarioId) || null, clienteId: Number(dados.clienteId) || null,
-    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || "3.32.0",
+    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || "3.32.1",
     primeiraOcorrenciaEm: agora, ultimaOcorrenciaEm: agora,
+    diagnostico: diagnostico.causaProvavel, categoria: diagnostico.categoria,
+    causaProvavel: diagnostico.causaProvavel, correcaoSugerida: diagnostico.correcaoSugerida,
+    risco: diagnostico.risco, confiancaDiagnostico: diagnostico.confianca,
+    autocorrecaoPermitida: diagnostico.autocorrecaoPermitida,
+    codigoCorrecao: diagnostico.codigoCorrecao || null,
   }
   const existente = await IncidenteSistema.findOne({ where: { fingerprint: entrada.fingerprint, status: "Aberto" } })
   if (existente) {
-    await existente.update({ ocorrencias: Number(existente.ocorrencias || 1) + 1, ultimaOcorrenciaEm: agora, contexto: entrada.contexto, usuarioId: entrada.usuarioId || existente.usuarioId, clienteId: entrada.clienteId || existente.clienteId })
+    await existente.update({ ocorrencias: Number(existente.ocorrencias || 1) + 1, ultimaOcorrenciaEm: agora, contexto: entrada.contexto, usuarioId: entrada.usuarioId || existente.usuarioId, clienteId: entrada.clienteId || existente.clienteId, diagnostico: entrada.diagnostico, categoria: entrada.categoria, causaProvavel: entrada.causaProvavel, correcaoSugerida: entrada.correcaoSugerida, risco: entrada.risco, confiancaDiagnostico: entrada.confiancaDiagnostico, autocorrecaoPermitida: entrada.autocorrecaoPermitida, codigoCorrecao: entrada.codigoCorrecao })
     return existente
   }
   return IncidenteSistema.create(entrada)
