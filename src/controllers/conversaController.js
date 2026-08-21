@@ -2003,11 +2003,44 @@ async function gerarResposta(parametros) {
 
 function compactarResultadoParaConversa(resultado) {
   const consulta = resultado?.consulta || null
+  const incidente = resultado?.incidente || null
+  const plano = resultado?.planoCorrecao || null
   return {
     respostaBase: String(resultado?.resposta || "").slice(0, 1800),
     pontos: Array.isArray(resultado?.pontos) ? resultado.pontos.slice(0, 8) : [],
     recomendacao: String(resultado?.recomendacao || "").slice(0, 600),
     acao: resultado?.acao || null,
+    incidente: incidente ? {
+      id: incidente.id,
+      titulo: incidente.titulo,
+      status: incidente.status,
+      tipoFalha: incidente.tipoFalha,
+      categoria: incidente.categoria,
+      causaProvavel: incidente.causaProvavel || incidente.diagnostico,
+      correcaoSugerida: incidente.correcaoSugerida,
+      ocorrencias: incidente.ocorrencias,
+      reaberturas: incidente.reaberturas,
+    } : null,
+    incidenteId: resultado?.incidenteId || incidente?.id || null,
+    saude: resultado?.saude ? {
+      api: resultado.saude.api,
+      banco: resultado.saude.banco,
+      latenciaBancoMs: resultado.saude.latenciaBancoMs,
+      incidentesAbertos: resultado.saude.incidentesAbertos,
+      incidentesCriticos: resultado.saude.incidentesCriticos,
+      ocorrenciasUltimas24h: resultado.saude.ocorrenciasUltimas24h,
+      ultimoIncidente: resultado.saude.ultimoIncidente,
+    } : null,
+    planoCorrecao: plano ? {
+      id: plano.id,
+      status: plano.status,
+      titulo: plano.titulo,
+      diagnostico: plano.diagnostico,
+      risco: plano.risco,
+      exigeConfirmacao: plano.exigeConfirmacao,
+      quantidadeEtapas: Array.isArray(plano.etapas) ? plano.etapas.length : 0,
+      quantidadeTestes: Array.isArray(plano.testesPrevistos) ? plano.testesPrevistos.length : 0,
+    } : null,
     consulta: consulta ? {
       tipo: consulta.tipo,
       titulo: consulta.titulo,
@@ -2075,6 +2108,7 @@ async function naturalizarResultadoSistema({
   const consultaPendencias = tipoConsulta === "pendencias-gerais"
   const consultaNovidades = ["pagamentos-hoje", "resolvidas-hoje"].includes(tipoConsulta)
   const consultaComListaCompleta = consultaPrioridades || consultaPendencias || consultaNovidades || ["mensagens-pendentes", "documentos-pendentes"].includes(tipoConsulta)
+  const atividadeDesenvolvedor = ["modo-desenvolvedor", "incidentes", "plano-correcao", "saude-sistema"].includes(atividade)
   const instrucaoAtividade = atividade === "navegacao"
     ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
     : consultaPrioridades
@@ -2083,7 +2117,9 @@ async function naturalizarResultadoSistema({
         ? "Os dados vieram do ERP. Relacione todos os clientes presentes nos itens. Considere somente fiscal, contábil, documentos recebidos dos clientes, honorários e financeiro. Documentos enviados ao cliente ou disponíveis para baixar não são pendência. Ao final, informe a prioridade principal. Não omita clientes."
         : consultaNovidades
           ? "Os dados vieram do ERP. Relacione todos os pagamentos ou pendências resolvidas presentes nos itens, com cliente, motivo e valor quando existir."
-          : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
+          : atividadeDesenvolvedor
+            ? "Você está no Modo Desenvolvedor. Explique naturalmente o resultado técnico já confirmado, como uma desenvolvedora falando com o administrador. Seja direta. Preserve exatamente número, status, quantidade, causa, risco e ação executada. Se nenhuma ação foi executada, deixe isso claro."
+            : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
 
   const mensagens = [
     {
@@ -2092,7 +2128,7 @@ async function naturalizarResultadoSistema({
 Fale como uma colega de equipe: natural, direta, cordial e contextual.
 ${instrucaoAtividade}
 Você pode usar humor leve e inteligente quando couber, mas nunca em valores, prazos, obrigações ou riscos.
-Não mencione ferramenta, API, banco de dados, JSON, modelo ou processamento.
+${atividadeDesenvolvedor ? "Você pode mencionar API, banco, rota e incidente quando forem relevantes, mas nunca mencione JSON, modelo de IA ou processamento interno." : "Não mencione ferramenta, API, banco de dados, JSON, modelo ou processamento."}
 Não invente nada e não altere números, nomes, datas ou status.
 Evite confirmações robóticas como “comando concluído”, “consulta realizada” e “tela aberta com segurança”.
 Responda em uma a três frases. Retorne SOMENTE JSON válido no formato {"resposta":"texto"}.`,
@@ -2143,6 +2179,15 @@ ${JSON.stringify(contextoConfirmado)}`,
     const texto = String(interpretado.resposta || "").trim()
     if (!texto) return base
 
+    if (atividadeDesenvolvedor) {
+      const incidenteId = contextoConfirmado.incidenteId
+      const exigeNumero = Boolean(incidenteId)
+      const temNumero = !exigeNumero || new RegExp(`(?:#\\s*|incidente\\s*(?:n[uú]mero\\s*)?#?\\s*)${incidenteId}\\b`, "i").test(texto)
+      const statusConfirmado = normalizar(contextoConfirmado?.incidente?.status)
+      const contradizEncerramento = ["corrigido", "ignorado"].includes(statusConfirmado) && /\b(aberto|em diagnostico|aguardando)\b/i.test(normalizar(texto))
+      if (!temNumero || contradizEncerramento) return base
+    }
+
     // Em consultas completas, naturalidade nunca pode custar informação.
     // Se o modelo omitir qualquer cliente retornado pelo ERP, usa a resposta
     // determinística já montada pelo sistema, que contém a lista completa.
@@ -2165,8 +2210,8 @@ ${JSON.stringify(contextoConfirmado)}`,
       ...base,
       resposta: texto,
       ...(origem === "voz" ? { fala: texto } : {}),
-      modo: `${resultado?.modo || "sistema"}-conversacional-v2.1`,
-      modelo: `${MODELO_PADRAO} + Nexa Conversacional v2.1`,
+      modo: `${resultado?.modo || "sistema"}-${atividadeDesenvolvedor ? "developer-conversacional-v1" : "conversacional-v2.1"}`,
+      modelo: `${MODELO_PADRAO} + ${atividadeDesenvolvedor ? "Nexa Developer Conversacional 1.0" : "Nexa Conversacional v2.1"}`,
     }
   } catch (error) {
     console.warn("NATURALIZACAO CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
@@ -2726,14 +2771,34 @@ async function conversar(req, res) {
 
     const modoDesenvolvedor = await responderModoDesenvolvedor({ mensagem, usuario: usuarioCompleto })
     if (modoDesenvolvedor) {
-      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: modoDesenvolvedor.resposta, dados: modoDesenvolvedor })
-      return res.json(anexarMetadadosConversa({ ...modoDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
+      const respostaDesenvolvedor = await naturalizarResultadoSistema({
+        mensagem,
+        nomeUsuario,
+        historico,
+        resultado: modoDesenvolvedor,
+        origem,
+        paginaAtual,
+        clienteAtual: clienteAtualResumo,
+        atividade: modoDesenvolvedor.atividade || "modo-desenvolvedor",
+      })
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDesenvolvedor.resposta, dados: respostaDesenvolvedor })
+      return res.json(anexarMetadadosConversa({ ...respostaDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
     }
 
     const consultaIncidentes = await consultarIncidentesPelaNexa({ mensagem, usuario: usuarioCompleto })
     if (consultaIncidentes) {
-      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: consultaIncidentes.resposta, dados: consultaIncidentes })
-      return res.json(anexarMetadadosConversa({ ...consultaIncidentes, respondidoEm: new Date().toISOString() }, conversa))
+      const respostaIncidentes = await naturalizarResultadoSistema({
+        mensagem,
+        nomeUsuario,
+        historico,
+        resultado: consultaIncidentes,
+        origem,
+        paginaAtual,
+        clienteAtual: clienteAtualResumo,
+        atividade: "incidentes",
+      })
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaIncidentes.resposta, dados: respostaIncidentes })
+      return res.json(anexarMetadadosConversa({ ...respostaIncidentes, respondidoEm: new Date().toISOString() }, conversa))
     }
 
     const analiseProduto = await analisarProdutoPelaNexa({
