@@ -33,7 +33,7 @@ const { processarNexaAction } = require("../services/nexaActionsService")
 const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoService")
 const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
 const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
-const { detectarPedidoRelatorio } = require("../services/nexaFerramentasService")
+const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../services/nexaFerramentasService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -2641,7 +2641,7 @@ async function conversar(req, res) {
         const relatorioDoClienteAtual = /\b(deste|desse|do|para o) cliente\b|\bcliente atual\b/i.test(mensagem)
         respostaFerramenta = {
           resposta: `Preparei o relatório de ${tipo === "cobrancas" ? "serviços e cobranças" : tipo} em ${formato === "xls" ? "Excel" : "PDF"}. Use o botão abaixo para gerar e baixar com os dados atuais do ERP.`,
-          arquivoNexa: { tipo, formato, clienteId: relatorioDoClienteAtual ? (clienteId || null) : null, titulo: `Baixar relatório em ${formato === "xls" ? "Excel" : "PDF"}` },
+          arquivoNexa: { tipo, formato, clienteId: relatorioDoClienteAtual ? (clienteId || null) : null, conversaId: tipo === "documento" ? conversa.id : null, titulo: `Baixar relatório em ${formato === "xls" ? "Excel" : "PDF"}` },
           atividade: "ferramenta-universal",
           modo: "nexa-ferramentas",
           provedor: "sistema",
@@ -2677,6 +2677,17 @@ async function conversar(req, res) {
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
     const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
+
+    const respostaDocumento = await responderPerguntaDocumento({
+      mensagem,
+      conversaId: conversa.id,
+      usuarioId: req.usuario.id,
+      clienteId: clienteId || conversa.clienteId || null,
+    })
+    if (respostaDocumento) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDocumento.resposta, dados: respostaDocumento })
+      return res.json(anexarMetadadosConversa({ ...respostaDocumento, respondidoEm: new Date().toISOString() }, conversa))
+    }
 
     const autodiagnostico = await diagnosticarSaldoPelaNexa({ mensagem, cliente: clienteAtualBanco, usuario: usuarioCompleto })
     if (autodiagnostico) {
