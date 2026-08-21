@@ -339,6 +339,11 @@ function pareceComandoNavegacao(texto) {
   const paginaEncontrada = configuracaoPaginaNoTexto(texto)
   if (!paginaEncontrada) return false
 
+  // “Mostre os clientes inadimplentes” é consulta de dados, não abertura da
+  // página Clientes. Estados e filtros explícitos sempre prevalecem.
+  if (/\bclientes?\b[\s\S]{0,45}\b(inadimpl|em atraso|devendo|que devem|pendentes?)\b/.test(texto)
+    || /\b(inadimpl|em atraso|devendo|que devem)\b[\s\S]{0,45}\bclientes?\b/.test(texto)) return false
+
   // Frases curtas ditadas por voz costumam chegar com ponto ou interrogação no fim.
   // Sem limpar essa pontuação, “Serviços e cobranças.” deixava de ser reconhecido
   // como destino exato e podia cair na página geral de Serviços.

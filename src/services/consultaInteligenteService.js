@@ -665,9 +665,55 @@ async function consultaFinanceiro(clientes, cliente, texto) {
     })),
   ]
 
+  const pedidoClientesInadimplentes = /\bclientes? inadimplentes?\b|\bclientes? (?:em atraso|que devem|devendo)\b/.test(texto)
   const filtro = periodo(texto)
-  const filtrados = ordenarData(filtrarPeriodo(itens, filtro, "vencimento"), "vencimento")
+  const filtradosBase = ordenarData(filtrarPeriodo(itens, filtro, "vencimento"), "vencimento")
+  const filtrados = pedidoClientesInadimplentes
+    ? filtradosBase.filter((item) => {
+      const dias = diasAte(item.vencimento)
+      return (dias !== null && dias < 0) || /atrasad|vencid|inadimpl/.test(normalizar(item.statusOriginal))
+    })
+    : filtradosBase
   const total = filtrados.reduce((soma, item) => soma + item.valorNumero, 0)
+
+  if (pedidoClientesInadimplentes) {
+    const grupos = new Map()
+    filtrados.forEach((item) => {
+      const chave = normalizar(item.cliente)
+      const atual = grupos.get(chave) || { cliente: item.cliente, clienteId: item.clienteId || null, quantidade: 0, valorNumero: 0, vencimentoMaisAntigo: item.vencimento }
+      atual.quantidade += 1
+      atual.valorNumero += item.valorNumero
+      if (item.vencimento && (!atual.vencimentoMaisAntigo || item.vencimento < atual.vencimentoMaisAntigo)) atual.vencimentoMaisAntigo = item.vencimento
+      grupos.set(chave, atual)
+    })
+    const inadimplentes = [...grupos.values()].map((item) => ({
+      cliente: item.cliente,
+      clienteId: item.clienteId,
+      titulo: `${item.quantidade} cobrança${item.quantidade === 1 ? "" : "s"} em atraso`,
+      detalhe: `Vencimento mais antigo: ${formatarData(item.vencimentoMaisAntigo)}`,
+      data: item.vencimentoMaisAntigo,
+      dataFormatada: formatarData(item.vencimentoMaisAntigo),
+      status: "Inadimplente",
+      valor: formatarMoeda(item.valorNumero),
+      paginaSugerida: "Financeiro",
+    }))
+    return respostaConsulta({
+      resposta: inadimplentes.length
+        ? `Encontrei ${inadimplentes.length} cliente${inadimplentes.length === 1 ? "" : "s"} inadimplente${inadimplentes.length === 1 ? "" : "s"}, totalizando ${formatarMoeda(total)} em atraso.`
+        : "Não há clientes inadimplentes no momento.",
+      pontos: inadimplentes.map((item) => `${item.cliente}: ${item.valor} em atraso`),
+      consulta: {
+        tipo: "clientes-inadimplentes",
+        titulo: "Clientes inadimplentes",
+        resumo: inadimplentes.length ? `${inadimplentes.length} cliente${inadimplentes.length === 1 ? "" : "s"} • ${formatarMoeda(total)} em atraso.` : "Nenhum cliente inadimplente.",
+        total: inadimplentes.length,
+        valorTotalFormatado: formatarMoeda(total),
+        itens: inadimplentes,
+        paginaSugerida: "Financeiro",
+        acaoSugerida: acaoPagina("Financeiro"),
+      },
+    })
+  }
   const exibidos = filtrados.slice(0, 40).map((item) => ({
     id: item.id,
     cliente: item.cliente,
@@ -1604,7 +1650,10 @@ async function detectarConsultaInteligente({ mensagem, clienteId, usuario, inten
   if (intencao === "mensagens-pendentes") return consultaMensagensPendentes(clientes, clienteEscopo)
   if (intencao === "documentos-pendentes") return consultaDocumentosPendentes(clientes, clienteEscopo)
   if (intencao === "fiscal") return consultaFiscal(clientes, localizado.cliente, texto)
-  if (intencao === "financeiro") return consultaFinanceiro(clientes, localizado.cliente, texto)
+  if (intencao === "financeiro") {
+    const consultaGlobalInadimplentes = /\bclientes? inadimplentes?\b|\bclientes? (?:em atraso|que devem|devendo)\b/.test(texto)
+    return consultaFinanceiro(clientes, consultaGlobalInadimplentes ? null : localizado.cliente, texto)
+  }
   if (intencao === "documentos") return consultaDocumentos(clientes, localizado.cliente, texto)
   if (intencao === "certificados") return consultaValidades(clientes, localizado.cliente, texto, "certificados")
   if (intencao === "procuracoes") return consultaValidades(clientes, localizado.cliente, texto, "procuracoes")

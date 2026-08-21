@@ -65,6 +65,8 @@ const INTENCOES_CONSULTA = [
   {
     intencao: "financeiro",
     padroes: [
+      /\b(?:mostre|liste|informe|quais|quem sao)? ?(?:os )?clientes? inadimplentes?\b/,
+      /\bclientes? (?:em atraso|que devem|devendo)\b/,
       /\bquem (?:esta )?devendo(?: honorarios?)?\b/,
       /\bquem deve para o escritorio\b/,
       /\bhonorarios? (?:pendentes?|a receber|em atraso)\b/,
@@ -73,7 +75,7 @@ const INTENCOES_CONSULTA = [
   },
 ]
 
-const VERBO_NAVEGACAO = /\b(abra|abre|abrir|acesse|acessar|entre|entrar|va|vai|volte|voltar|retorne|retornar|navegue|ir|me leve|mostre a tela)\b/
+const VERBO_NAVEGACAO = /\b(abra|abre|abri|abrir|acesse|acessar|entre|entrar|va|vai|volte|voltar|retorne|retornar|navegue|ir|me leve|mostre a tela)\b/
 const DESTINO_NAVEGACAO = /\b(dashboard|inicio|home|fiscal|financeiro|clientes?|central do cliente|historico|anotacoes?|cadastro (?:dele|dela|desse cliente|deste cliente|desse cliente|dessa empresa|desta empresa)|servicos? e cobrancas?|servicos? avulsos?|movimentos?|lancamentos? contabeis?|documentos? digitais?|agenda|relatorios?|usuarios?|backup|sobre|portal do cliente)\b/
 const CODIGO_CLIENTE = /\bcli[- ]?0*\d+\b/
 const REFERENCIA_CLIENTE = /\b(?:abra|abre|abrir|acesse|entre|entrar|va para|ir para)\s+(?:o cliente|a cliente|o cadastro de|a empresa)?\s*[a-z][a-z0-9 '&.-]{1,80}(?:\s+e\s+(?:abra|entre|va|acesse))?/

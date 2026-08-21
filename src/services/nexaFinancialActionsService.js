@@ -63,6 +63,54 @@ function intencaoReceberCobranca(mensagem) {
   return acao && estado && objeto
 }
 
+function intencaoCorrigirLancamentoIncompleto(mensagem) {
+  const texto = normalizar(mensagem)
+  const acao = /\b(corrija|corrigir|corrige|altere|alterar|ajuste|ajustar)\b/.test(texto)
+  const objeto = /\b(lancamento|movimento|cobranca|honorario|mensalidade)\b/.test(texto)
+  const destinoDefinido = /\b(recebido|recebida|pago|paga|quitado|quitada|data correta|valor correto|descricao correta)\b/.test(texto)
+  return acao && objeto && !destinoDefinido
+}
+
+async function iniciarCorrecaoLancamentoIncompleto({ mensagem, clienteIdAtual, usuario }) {
+  if (usuario?.perfil === "Cliente") return respostaBase({ resposta: "Seu perfil não permite corrigir lançamentos do escritório.", acaoGuiadaConcluida: true })
+  const { Cliente } = models()
+  const cliente = clienteIdAtual ? await Cliente.findByPk(clienteIdAtual) : null
+  return respostaBase({
+    resposta: "O que deve ser corrigido nesse lançamento: ele foi pago ou recebido, ou estão errados a data, o valor ou a descrição?",
+    acaoGuiadaPendente: {
+      tipo: "lancamento-corrigir-esclarecer",
+      etapa: "esclarecimento",
+      pedidoOriginal: String(mensagem || "").trim(),
+      clienteId: cliente?.id || null,
+      clienteNome: cliente?.nome || "",
+    },
+    consulta: { tipo: "correcao-lancamento-esclarecimento", titulo: "Corrigir lançamento", resumo: "Aguardando o dado que está incorreto.", total: 0, itens: [] },
+  })
+}
+
+async function continuarCorrecaoLancamentoIncompleto(pendente, mensagem, usuario) {
+  if (respostaCancelaExecucao(mensagem)) return respostaBase({ resposta: "Correção cancelada. Nenhum lançamento foi alterado.", acaoGuiadaConcluida: true, acaoCancelada: true })
+  const texto = normalizar(mensagem)
+  if (/\b(recebido|recebida|pago|paga|quitado|quitada|ja pagou|foi pago|foi recebido)\b/.test(texto)) {
+    return iniciarRecebimentoCobranca({
+      mensagem: `${pendente.pedidoOriginal || "corrigir lançamento"} marcar como recebido ${mensagem}`,
+      clienteIdAtual: pendente.clienteId,
+      usuario,
+    })
+  }
+  return respostaBase({
+    resposta: "Abra o lançamento correto e informe o novo valor, data ou descrição. Nenhuma alteração foi feita.",
+    acaoGuiadaConcluida: true,
+    acao: {
+      tipo: "navegar",
+      pagina: "Lançamentos Contábeis",
+      alvo: "pagina",
+      segura: true,
+      cliente: pendente.clienteId ? { id: pendente.clienteId, nome: pendente.clienteNome } : null,
+    },
+  })
+}
+
 function mesMencionado(mensagem) {
   const texto = normalizar(mensagem)
   const meses = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
@@ -341,9 +389,11 @@ async function continuarMovimento(pendente, mensagem, usuario) {
 async function processarNexaFinancialAction({ mensagem, pendente, clienteIdAtual, usuario }) {
   if (pendente?.tipo === "servico-cobranca-receber") return continuarRecebimentoCobranca(pendente, mensagem, usuario)
   if (pendente?.tipo === "movimento-cliente-novo") return continuarMovimento(pendente, mensagem, usuario)
+  if (pendente?.tipo === "lancamento-corrigir-esclarecer") return continuarCorrecaoLancamentoIncompleto(pendente, mensagem, usuario)
   if (intencaoReceberCobranca(mensagem)) return iniciarRecebimentoCobranca({ mensagem, clienteIdAtual, usuario })
+  if (intencaoCorrigirLancamentoIncompleto(mensagem)) return iniciarCorrecaoLancamentoIncompleto({ mensagem, clienteIdAtual, usuario })
   if (intencaoNovoMovimento(mensagem)) return iniciarMovimento({ mensagem, clienteIdAtual, usuario })
   return null
 }
 
-module.exports = { processarNexaFinancialAction, intencaoNovoMovimento, intencaoReceberCobranca, numeroMonetario, dataIso, tipoMovimento, extrairDadosIniciais, localizarCliente }
+module.exports = { processarNexaFinancialAction, intencaoNovoMovimento, intencaoReceberCobranca, intencaoCorrigirLancamentoIncompleto, numeroMonetario, dataIso, tipoMovimento, extrairDadosIniciais, localizarCliente }
