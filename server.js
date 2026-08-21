@@ -52,8 +52,10 @@ require("./src/models/ContaBancariaCliente")
 require("./src/models/ImportacaoExtratoBancario")
 require("./src/models/MovimentoBancario")
 require("./src/models/FechamentoConciliacaoBancaria")
+require("./src/models/IncidenteSistema")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
+const { capturarErroGlobal, monitorarRespostas } = require("./src/middlewares/incidenteMiddleware")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -99,6 +101,7 @@ const feriasRoutes = require("./src/routes/feriasRoutes")
 const rescisoesRoutes = require("./src/routes/rescisoesRoutes")
 const contasBancariasClientesRoutes = require("./src/routes/contasBancariasClientesRoutes")
 const extratosBancariosRoutes = require("./src/routes/extratosBancariosRoutes")
+const incidentesRoutes = require("./src/routes/incidentesRoutes")
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3000
@@ -117,7 +120,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.31.4",
+    versao: "3.32.0",
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })
@@ -139,6 +142,7 @@ app.use(
 app.use("/auth", authRoutes)
 app.use(autenticar)
 app.use(contextoDoEscritorio)
+app.use(monitorarRespostas)
 app.use("/escritorios", escritoriosRoutes)
 app.use("/clientes", clientesRoutes)
 app.use("/funcionarios", funcionariosRoutes)
@@ -183,6 +187,7 @@ app.use("/credenciais-fiscais", credenciaisFiscaisRoutes)
 app.use("/das-mei", dasMeiRoutes)
 app.use("/whatsapp-assist", whatsappAssistRoutes)
 app.use("/acessos-clientes", acessosClientesRoutes)
+app.use("/incidentes", incidentesRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
   try {
@@ -384,6 +389,8 @@ app.get("/dashboard", autenticar, async (req, res) => {
     })
   }
 })
+
+app.use(capturarErroGlobal)
 
 async function prepararMultiempresa() {
   const [escritorio] = await Escritorio.findOrCreate({

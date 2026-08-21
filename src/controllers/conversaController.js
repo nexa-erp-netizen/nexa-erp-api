@@ -30,10 +30,12 @@ const { tituloAutomatico } = require("./conversaHistoricoController")
 const { detectarSiteParaAbrir } = require("../services/siteNexaService")
 const { responderConfirmacaoAlteracaoRegime } = require("../services/alteracaoRegimeService")
 const { processarNexaAction } = require("../services/nexaActionsService")
+const { diagnosticarSaldoPelaNexa } = require("../services/nexaAutodiagnosticoService")
+const { consultarIncidentesPelaNexa } = require("../services/nexaIncidentesService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
-const MODELO_PADRAO = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
+const MODELO_PADRAO = process.env.GROQ_MODEL || "openai/gpt-oss-120b"
 const MODELO_PESQUISA_WEB_CONFIGURADO = process.env.GROQ_WEB_MODEL || "groq/compound"
 const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("groq/compound")
   ? MODELO_PESQUISA_WEB_CONFIGURADO
@@ -2640,6 +2642,18 @@ async function conversar(req, res) {
 
     const clienteAtualBanco = clienteId ? await Cliente.findByPk(clienteId) : null
     const clienteAtualResumo = clienteAtualBanco ? { id: clienteAtualBanco.id, nome: nomeCliente(clienteAtualBanco) } : null
+
+    const autodiagnostico = await diagnosticarSaldoPelaNexa({ mensagem, cliente: clienteAtualBanco, usuario: usuarioCompleto })
+    if (autodiagnostico) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: autodiagnostico.resposta, dados: autodiagnostico })
+      return res.json(anexarMetadadosConversa({ ...autodiagnostico, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
+    const consultaIncidentes = await consultarIncidentesPelaNexa({ mensagem, usuario: usuarioCompleto })
+    if (consultaIncidentes) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: consultaIncidentes.resposta, dados: consultaIncidentes })
+      return res.json(anexarMetadadosConversa({ ...consultaIncidentes, respondidoEm: new Date().toISOString() }, conversa))
+    }
 
     if (clienteAtualBanco && parecePedidoAoGoogleDrive(mensagem)) {
       const resultadoDrive = await consultarDocumentosComDrive({

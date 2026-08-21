@@ -10,6 +10,7 @@ const LancamentoContabil = require("../models/LancamentoContabil")
 const FechamentoConciliacaoBancaria = require("../models/FechamentoConciliacaoBancaria")
 const sequelize = require("../config/database")
 const { lerExtrato } = require("../services/extratoBancarioParser")
+const { calcularSaldoAnterior, diagnosticarSaldoAnterior } = require("../services/saldoConciliacaoService")
 const PDFDocument = require("pdfkit")
 
 const router = express.Router()
@@ -148,6 +149,43 @@ router.get("/fechamentos", async (req, res) => {
   }
 })
 
+router.get("/diagnostico-saldo", async (req, res) => {
+  try {
+    const contaBancariaId = Number(req.query.contaBancariaId)
+    const competencia = String(req.query.competencia || "")
+    if (!contaBancariaId || !/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) {
+      return res.status(400).json({ message: "Informe a conta bancária e a competência no formato AAAA-MM." })
+    }
+    const conta = await ContaBancariaCliente.findByPk(contaBancariaId)
+    if (!conta) return res.status(404).json({ message: "Conta bancária não encontrada." })
+    const periodo = periodoCompetencia(competencia)
+    const movimentos = await MovimentoBancario.findAll({
+      where: { contaBancariaId, data: { [Op.lt]: periodo.inicio } },
+      order: [["data", "ASC"], ["id", "ASC"]],
+    })
+    const diagnostico = diagnosticarSaldoAnterior({
+      saldoInicial: conta.saldoInicial,
+      dataSaldoInicial: conta.dataSaldoInicial,
+      inicioCompetencia: periodo.inicio,
+      movimentos,
+    })
+    res.json({
+      conta: { id: conta.id, clienteId: conta.clienteId, cliente: conta.cliente, banco: conta.bancoNome },
+      competencia,
+      ...diagnostico,
+      movimentosConsiderados: diagnostico.movimentosConsiderados.map(resumoMovimento),
+      movimentosAnterioresAoMarco: diagnostico.movimentosAnterioresAoMarco.map(resumoMovimento),
+      alteracaoExecutada: false,
+      recomendacao: diagnostico.inconsistente
+        ? "Manter os movimentos para auditoria e excluí-los somente do cálculo por serem anteriores ao marco inicial da conta."
+        : "Nenhuma correção de dados é necessária.",
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ message: "Erro ao diagnosticar o saldo anterior." })
+  }
+})
+
 router.post("/fechamentos", async (req, res) => {
   try {
     const contaBancariaId = Number(req.body.contaBancariaId)
@@ -165,7 +203,13 @@ router.post("/fechamentos", async (req, res) => {
     if (naoConcluidos.length) return res.status(409).json({ message: `Faltam ${naoConcluidos.length} movimento(s) para concluir este mês.`, pendentes: naoConcluidos.length })
 
     const anteriores = await MovimentoBancario.findAll({ where: { contaBancariaId, data: { [Op.lt]: periodo.inicio } } })
-    const saldoInicial = Number(conta.saldoInicial || 0) + anteriores.reduce((total, m) => total + Number(m.valorAssinado || 0), 0)
+    const calculoSaldo = calcularSaldoAnterior({
+      saldoInicial: conta.saldoInicial,
+      dataSaldoInicial: conta.dataSaldoInicial,
+      inicioCompetencia: periodo.inicio,
+      movimentos: anteriores,
+    })
+    const saldoInicial = calculoSaldo.saldoAnterior
     const totalEntradas = movimentos.filter(m => m.natureza === "Entrada").reduce((total, m) => total + Number(m.valor || 0), 0)
     const totalSaidas = movimentos.filter(m => m.natureza === "Saída").reduce((total, m) => total + Number(m.valor || 0), 0)
     const dados = {
@@ -356,6 +400,9 @@ function periodoCompetencia(competencia) {
 }
 
 function competenciaBr(valor) { const [ano, mes] = String(valor).split("-"); return `${mes}/${ano}` }
+function resumoMovimento(item) {
+  return { id: item.id, data: item.data, descricao: item.descricao, valorAssinado: Number(item.valorAssinado || 0), statusConciliacao: item.statusConciliacao }
+}
 function moedaPdf(valor) { return Number(valor || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) }
 
 function statusValido(status) {
