@@ -123,7 +123,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.36.3",
+    versao: "3.36.4",
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })

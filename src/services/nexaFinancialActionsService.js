@@ -73,18 +73,12 @@ function intencaoCorrigirLancamentoIncompleto(mensagem) {
 
 async function iniciarCorrecaoLancamentoIncompleto({ mensagem, clienteIdAtual, usuario }) {
   if (usuario?.perfil === "Cliente") return respostaBase({ resposta: "Seu perfil não permite corrigir lançamentos do escritório.", acaoGuiadaConcluida: true })
-  const { Cliente } = models()
-  const cliente = clienteIdAtual ? await Cliente.findByPk(clienteIdAtual) : null
-  return respostaBase({
-    resposta: "O que deve ser corrigido nesse lançamento: ele foi pago ou recebido, ou estão errados a data, o valor ou a descrição?",
-    acaoGuiadaPendente: {
-      tipo: "lancamento-corrigir-esclarecer",
-      etapa: "esclarecimento",
-      pedidoOriginal: String(mensagem || "").trim(),
-      clienteId: cliente?.id || null,
-      clienteNome: cliente?.nome || "",
-    },
-    consulta: { tipo: "correcao-lancamento-esclarecimento", titulo: "Corrigir lançamento", resumo: "Aguardando o dado que está incorreto.", total: 0, itens: [] },
+  return iniciarRecebimentoCobranca({
+    mensagem,
+    clienteIdAtual,
+    usuario,
+    somenteAtrasadas: true,
+    origemCorrecao: true,
   })
 }
 
@@ -98,16 +92,10 @@ async function continuarCorrecaoLancamentoIncompleto(pendente, mensagem, usuario
       usuario,
     })
   }
-  return respostaBase({
-    resposta: "Abra o lançamento correto e informe o novo valor, data ou descrição. Nenhuma alteração foi feita.",
-    acaoGuiadaConcluida: true,
-    acao: {
-      tipo: "navegar",
-      pagina: "Lançamentos Contábeis",
-      alvo: "pagina",
-      segura: true,
-      cliente: pendente.clienteId ? { id: pendente.clienteId, nome: pendente.clienteNome } : null,
-    },
+  return iniciarCorrecaoLancamentoIncompleto({
+    mensagem: `${pendente.pedidoOriginal || "corrigir lançamento atrasado"} ${mensagem}`,
+    clienteIdAtual: pendente.clienteId,
+    usuario,
   })
 }
 
@@ -125,7 +113,7 @@ function dataBrCurta(valor) {
   return ano && mes && dia ? `${dia}/${mes}/${ano}` : String(valor || "")
 }
 
-async function iniciarRecebimentoCobranca({ mensagem, clienteIdAtual, usuario }) {
+async function iniciarRecebimentoCobranca({ mensagem, clienteIdAtual, usuario, somenteAtrasadas = false, origemCorrecao = false }) {
   if (usuario?.perfil === "Cliente") return respostaBase({ resposta: "Seu perfil não permite alterar cobranças do escritório.", acaoGuiadaConcluida: true })
   const { Cliente, ServicoAvulso } = models()
   const clientes = await listarClientes(usuario)
@@ -144,17 +132,24 @@ async function iniciarRecebimentoCobranca({ mensagem, clienteIdAtual, usuario })
   const termo = normalizar(mensagem).includes("honorario") ? "honorario" : null
   let cobrancas = await ServicoAvulso.findAll({ where, order: [["vencimento", "ASC"], ["createdAt", "DESC"]] })
   if (termo) cobrancas = cobrancas.filter((item) => normalizar(item.descricao).includes(termo))
+  if (somenteAtrasadas) {
+    const hoje = new Date().toISOString().slice(0, 10)
+    cobrancas = cobrancas.filter((item) => {
+      const status = normalizar(item.status)
+      return status.includes("atras") || status.includes("vencid") || (item.vencimento && String(item.vencimento).slice(0, 10) < hoje)
+    })
+  }
 
-  if (!cobrancas.length) return respostaBase({ resposta: `Não encontrei cobrança aberta${competencia ? ` na competência ${competencia.slice(5)}/${competencia.slice(0, 4)}` : ""} para ${cliente.nome}.`, acaoGuiadaConcluida: true })
+  if (!cobrancas.length) return respostaBase({ resposta: `${somenteAtrasadas ? "Não encontrei lançamento atrasado" : "Não encontrei cobrança aberta"}${competencia ? ` na competência ${competencia.slice(5)}/${competencia.slice(0, 4)}` : ""} para ${cliente.nome}. Nenhuma alteração foi feita.`, acaoGuiadaConcluida: true })
   if (cobrancas.length > 1) {
     const opcoes = cobrancas.slice(0, 5).map((item) => `${item.descricao}, vencimento ${dataBrCurta(item.vencimento)}, ${moeda(item.valorTotal)}`)
-    return respostaBase({ resposta: `Encontrei mais de uma cobrança aberta para ${cliente.nome}: ${opcoes.join("; ")}. Informe a descrição ou a competência.`, acaoGuiadaConcluida: true })
+    return respostaBase({ resposta: `Encontrei ${cobrancas.length} lançamentos atrasados para ${cliente.nome}: ${opcoes.join("; ")}. Diga a descrição ou a competência do lançamento que devo corrigir.`, acaoGuiadaConcluida: true })
   }
 
   const item = cobrancas[0]
   const resumoCobranca = `${item.descricao} de ${moeda(item.valorTotal)}, vencimento ${dataBrCurta(item.vencimento)}, para ${cliente.nome}`
   return respostaBase({
-    resposta: `Vou alterar ${resumoCobranca} de “${item.status || "Pendente"}” para “Recebido” e sincronizar o Financeiro. Responda “confirmar” para executar ou “cancelar”. Nada foi alterado ainda.`,
+    resposta: `${origemCorrecao ? "Identifiquei o lançamento atrasado: " : "Vou alterar "}${resumoCobranca}. ${origemCorrecao ? `O status atual é “${item.status || "Pendente"}` + "”. " : ""}Vou marcá-lo como “Recebido” e sincronizar o Financeiro. Responda “confirmar” para executar ou “cancelar”.`,
     acaoGuiadaPendente: { tipo: "servico-cobranca-receber", etapa: "confirmacao", servicoId: item.id, clienteId: cliente.id, clienteNome: cliente.nome, statusAnterior: item.status || "Pendente", resumo: resumoCobranca },
     consulta: { tipo: "confirmacao-servico-cobranca", titulo: "Confirmar recebimento", resumo: resumoCobranca, total: 1, itens: [{ clienteId: cliente.id, cliente: cliente.nome, status: "Aguardando confirmação" }] },
   })
