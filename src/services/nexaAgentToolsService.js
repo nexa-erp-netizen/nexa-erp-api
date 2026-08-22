@@ -41,6 +41,12 @@ function limparRegistro(registro) {
   return Object.fromEntries(Object.entries(bruto).filter(([campo]) => !CAMPOS_SENSIVEIS.test(campo)))
 }
 
+function resumirRegistro(registro) {
+  const limpo = limparRegistro(registro)
+  const camposUteis = ["id", "status", "tipo", "descricao", "obrigacao", "competencia", "vencimento", "valor", "data", "dataPagamento", "dataRecebimento", "origem", "situacao", "ativo", "portalBloqueado"]
+  return Object.fromEntries(camposUteis.filter((campo) => limpo[campo] !== undefined && limpo[campo] !== null && limpo[campo] !== "").map((campo) => [campo, limpo[campo]]))
+}
+
 async function mapearSistema() {
   return { modulos: catalogoSistema(), somenteLeitura: true }
 }
@@ -121,7 +127,7 @@ async function contextoCompletoCliente(argumentos, contexto) {
         quantidadeEncontrada: registros.length,
         abertos: status.filter((valor) => abertoPeloStatus(valor) === true).length,
         encerrados: status.filter((valor) => abertoPeloStatus(valor) === false).length,
-        registros: limpos.slice(0, 8),
+        registros: registros.slice(0, 3).map(resumirRegistro),
         resultadoLimitado: registros.length >= 20,
       }
     } catch (error) {

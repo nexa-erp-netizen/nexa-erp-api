@@ -115,6 +115,25 @@ function revisaoDaDecisao(decisao) {
   }
 }
 
+function nomeClienteDaMensagem(mensagem) {
+  const texto = String(mensagem || "")
+  return texto.match(/\bcliente\s+(.+?)(?:[?.!,;]|$)/i)?.[1]?.trim() || ""
+}
+
+function respostaContingenciaCliente(resultado) {
+  if (!resultado?.encontrado) return null
+  const cliente = resultado.cliente || {}
+  const nome = cliente.nome || "Cliente"
+  const cadastro = [cliente.regime, cliente.situacaoEmpresa].filter(Boolean).join(" • ")
+  const modulos = Array.isArray(resultado.modulosComDados) ? resultado.modulosComDados : []
+  const indisponiveis = modulos.filter((item) => item?.indisponivel).map((item) => item.modulo)
+  const abertos = modulos.filter((item) => Number(item?.abertos) > 0).map((item) => `${item.modulo}: ${item.abertos}`)
+  const inicio = `${nome}${cadastro ? ` está cadastrado como ${cadastro}` : " foi localizado no cadastro"}.`
+  if (indisponiveis.length) return `${inicio} A análise está incompleta porque não consegui verificar ${indisponiveis.join(", ")}. Posso investigar essa falha e preparar a correção; deseja que eu continue?`
+  if (abertos.length) return `${inicio} Encontrei registros abertos em ${abertos.join("; ")}. Posso analisar cada um, identificar inconsistências e preparar a correção necessária; deseja que eu continue?`
+  return `${inicio} Conferi também os módulos vinculados e não encontrei registros abertos.`
+}
+
 async function executarNexaAgent({ mensagem, usuario, historico, paginaAtual, clienteId, clienteAtual }) {
   if (!ATIVO || !process.env.GROQ_API_KEY) return null
   let execucao = null
@@ -128,7 +147,7 @@ async function executarNexaAgent({ mensagem, usuario, historico, paginaAtual, cl
     const mensagens = [{
       role: "system",
       content: `Você é o núcleo de decisão da Nexa ERP. Interprete o objetivo real, inclusive com erros de escrita, e decida cada próximo passo pelo significado e pelo contexto; não procure frases cadastradas.
-Você conhece a estrutura do ERP por este catálogo: ${JSON.stringify(catalogoSistema())}
+Módulos consultáveis do ERP: ${JSON.stringify(catalogoSistema().map((item) => item.modulo))}
 Use quantas consultas forem necessárias, até o limite desta execução, para combinar fatos de módulos diferentes. Nunca invente dados.
 As ferramentas são somente de leitura e o isolamento por escritório é aplicado pelo servidor. Não peça nem revele senhas, documentos pessoais ou credenciais.
 Para navegar, criar, alterar, corrigir, concluir, excluir ou publicar, escolha delegar_fluxo_existente; o fluxo operacional aplicará validações e confirmação.
@@ -176,7 +195,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
       ferramentas.push(decisao.ferramenta)
       observacoes.push({ ferramenta: decisao.ferramenta, resultado: observacao })
       mensagens.push({ role: "assistant", content: JSON.stringify(decisao) })
-      mensagens.push({ role: "user", content: `Observação confirmada: ${JSON.stringify(observacao).slice(0, 12000)}\nDecida o próximo passo. Se os dados bastarem, responda agora.` })
+      mensagens.push({ role: "user", content: `Observação confirmada: ${JSON.stringify(observacao).slice(0, 6500)}\nDecida o próximo passo. Se os dados bastarem, responda agora.` })
     }
     mensagens.push({ role: "system", content: "A etapa de consultas terminou. Agora só é permitido responder ou esclarecer; não solicite outra ferramenta e não delegue." })
     mensagens.push({ role: "user", content: permitirDetalhes ? "Finalize usando somente as observações confirmadas." : "Finalize em no máximo 3 frases e cerca de 80 palavras, usando somente as observações confirmadas." })
@@ -191,8 +210,25 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
   } catch (error) {
     if (execucao) await execucao.update({ status: "Falhou", etapas, ferramentasUsadas: ferramentas, erro: String(error.message || error).slice(0, 1500), finalizadoEm: new Date() }).catch(() => null)
     console.warn("NEXA AGENT CORE INDISPONIVEL:", error?.message || error)
+    if (coberturaCompletaObrigatoria) {
+      try {
+        const existente = observacoes.find((item) => item?.ferramenta === "contexto_completo_cliente")?.resultado
+        const resultado = existente || await executarFerramenta("contexto_completo_cliente", { clienteId, nome: nomeClienteDaMensagem(mensagem) }, { usuario, clienteId })
+        const texto = respostaContingenciaCliente(resultado)
+        if (texto) {
+          return {
+            ...montarResposta(texto, execucao, ["contexto_completo_cliente"], permitirDetalhes, { contingencia: true, cobertura: resumoCoberturaCliente([{ ferramenta: "contexto_completo_cliente", resultado }]) }),
+            modo: "nexa-agente-contingencia",
+            provedor: "sistema",
+            modelo: "Nexa Agent Fallback 1.0",
+          }
+        }
+      } catch (fallbackError) {
+        console.warn("CONTINGENCIA LOCAL DA NEXA INDISPONIVEL:", fallbackError?.message || fallbackError)
+      }
+    }
     return null
   }
 }
 
-module.exports = { executarNexaAgent, extrairJson, limitarResposta, pedidoDetalhado, exigeContextoCompletoCliente, revisaoDaDecisao, resumoCoberturaCliente, anexarCoberturaObrigatoria }
+module.exports = { executarNexaAgent, extrairJson, limitarResposta, pedidoDetalhado, exigeContextoCompletoCliente, revisaoDaDecisao, resumoCoberturaCliente, anexarCoberturaObrigatoria, nomeClienteDaMensagem, respostaContingenciaCliente }

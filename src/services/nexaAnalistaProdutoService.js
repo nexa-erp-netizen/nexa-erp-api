@@ -44,7 +44,7 @@ async function snapshotSistema() {
     IncidenteSistema.findAll({ where: { status: "Aberto" }, attributes: ["titulo", "categoria", "nivel", "ocorrencias", "componente"], order: [["ultimaOcorrenciaEm", "DESC"]], limit: 12 }),
   ])
   return {
-    versao: "3.38.3",
+    versao: "3.38.4",
     modulos: MODULOS,
     volumes: { clientes, usuarios, obrigacoesFiscais: fiscais, registrosFinanceiros: financeiros, documentos },
     incidentesAbertos: incidentesAbertos.map((item) => item.toJSON()),
