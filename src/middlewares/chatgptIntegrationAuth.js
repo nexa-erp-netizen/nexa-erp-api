@@ -42,7 +42,7 @@ async function autenticarIntegracaoChatGPT(req, res, next) {
   }
 
   const usuario = await Usuario.findOne({ where: { email: emailConfigurado } })
-  if (!usuario || !["Administrador", "Funcionário"].includes(usuario.perfil)) {
+  if (!usuario || usuario.perfil !== "Administrador") {
     return res.status(403).json({ error: "Usuário da integração não autorizado" })
   }
 

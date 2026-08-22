@@ -107,6 +107,7 @@ const contasBancariasClientesRoutes = require("./src/routes/contasBancariasClien
 const extratosBancariosRoutes = require("./src/routes/extratosBancariosRoutes")
 const incidentesRoutes = require("./src/routes/incidentesRoutes")
 const melhoriasNexaRoutes = require("./src/routes/melhoriasNexaRoutes")
+const diagnosticoChatGPTRoutes = require("./src/routes/diagnosticoChatGPTRoutes")
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3000
@@ -125,7 +126,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.39.0",
+    versao: "3.39.1",
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })
@@ -194,6 +195,7 @@ app.use("/whatsapp-assist", whatsappAssistRoutes)
 app.use("/acessos-clientes", acessosClientesRoutes)
 app.use("/incidentes", incidentesRoutes)
 app.use("/melhorias-nexa", melhoriasNexaRoutes)
+app.use("/diagnostico-chatgpt", diagnosticoChatGPTRoutes)
 
 app.get("/dashboard", autenticar, async (req, res) => {
   try {

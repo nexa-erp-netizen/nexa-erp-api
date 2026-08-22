@@ -1,6 +1,6 @@
 const express = require("express")
 const multer = require("multer")
-const { autenticar } = require("../middlewares/authMiddleware")
+const { autenticar, autorizarPerfis } = require("../middlewares/authMiddleware")
 const {
   conversar,
   contexto,
@@ -37,6 +37,9 @@ const uploadAudio = multer({
 })
 const uploadDocumento = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } })
 const uploadTela = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024, files: 1 } })
+
+// A Nexa Inteligente contém dados amplos do escritório e fica exclusiva do Administrador.
+router.use(autenticar, autorizarPerfis("Administrador"))
 
 router.get("/voz/status", autenticar, statusVoz)
 router.post("/voz/sintetizar", autenticar, sintetizarVoz)

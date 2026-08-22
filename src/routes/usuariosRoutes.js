@@ -8,6 +8,7 @@ const {
 } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
+const PERFIS_PERMITIDOS = ["Administrador", "Empresa", "Funcionário", "Cliente"]
 
 router.get("/", autenticar, async (req, res) => {
   try {
@@ -61,6 +62,10 @@ router.post("/", autenticar, async (req, res) => {
       return res.status(400).json({
         message: "Preencha todos os campos",
       })
+    }
+
+    if (!PERFIS_PERMITIDOS.includes(perfil)) {
+      return res.status(400).json({ message: "Perfil de usuário inválido" })
     }
 
     if (perfil === "Cliente" && !clienteVinculado) {
@@ -135,6 +140,10 @@ router.put("/:id", autenticar, async (req, res) => {
       perfil,
       clienteVinculado,
     } = req.body
+
+    if (!PERFIS_PERMITIDOS.includes(perfil)) {
+      return res.status(400).json({ message: "Perfil de usuário inválido" })
+    }
 
     const dadosAtualizados = {
       nome,
