@@ -1,5 +1,6 @@
 const { normalizar, respostaConfirmaExecucao, respostaCancelaExecucao } = require("./regimeParserService")
 const { processarNexaFinancialAction } = require("./nexaFinancialActionsService")
+const { proibeAlteracao } = require("./nexaNegacaoAcaoService")
 
 function clienteModel() {
   return require("../models/Cliente")
@@ -357,6 +358,9 @@ async function continuarAtualizacaoCliente(pendente, mensagem, usuario) {
 }
 
 async function processarNexaAction({ mensagem, pendente = null, clienteIdAtual = null, usuario }) {
+  // Uma proibição explícita tem prioridade sobre palavras de ação presentes na
+  // mesma frase. Sem ação pendente, o pedido segue para os fluxos de consulta.
+  if (!pendente && proibeAlteracao(mensagem)) return null
   const financeiro = await processarNexaFinancialAction({ mensagem, pendente, clienteIdAtual, usuario })
   if (financeiro) return financeiro
   if (pendente?.tipo === "cliente-novo") return continuarNovoCliente(pendente, mensagem, usuario)

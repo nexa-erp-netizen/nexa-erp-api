@@ -102,8 +102,14 @@ function anexarCoberturaObrigatoria(texto, cobertura) {
   return `${base}\n\nA análise foi completa: também conferi ${escopo} e não encontrei outro registro aberto.`
 }
 
-function montarResposta(texto, execucao, ferramentas, permitirDetalhes, revisao = null) {
-  return { resposta: limitarResposta(texto, permitirDetalhes), pontos: [], recomendacao: "", fundamentos: [], modo: "nexa-agente-v1.2", atividade: "agente", provedor: "groq", modelo: `${MODELO} + Nexa Agent Core 1.2`, agente: true, execucaoAgenteId: execucao?.id || null, ferramentasUsadas: ferramentas, revisaoAgente: revisao, respondidoEm: new Date().toISOString() }
+function montarResposta(texto, execucao, ferramentas, permitirDetalhes, revisao = null, extras = {}) {
+  return { resposta: limitarResposta(texto, permitirDetalhes), pontos: [], recomendacao: "", fundamentos: [], modo: "nexa-agente-v2", atividade: "agente", provedor: "intercambiavel", modelo: `${MODELO} + Nexa Intelligence Core 2.0`, agente: true, execucaoAgenteId: execucao?.id || null, ferramentasUsadas: ferramentas, revisaoAgente: revisao, ...extras, respondidoEm: new Date().toISOString() }
+}
+
+function planoPendenteDasObservacoes(observacoes) {
+  const proposta = (Array.isArray(observacoes) ? observacoes : [])
+    .find((item) => item?.ferramenta === "preparar_correcao_registro")?.resultado?.proposta
+  return proposta?.planoId ? { planoCorrecaoPendente: proposta } : {}
 }
 
 function revisaoDaDecisao(decisao) {
@@ -155,8 +161,10 @@ Não reutilize uma análise de documento anterior quando a mensagem atual pedir 
 Módulos consultáveis do ERP: ${JSON.stringify(catalogoSistema().map((item) => item.modulo))}
 Use quantas consultas forem necessárias, até o limite desta execução, para combinar fatos de módulos diferentes. Nunca invente dados.
 As ferramentas são somente de leitura e o isolamento por escritório é aplicado pelo servidor. Não peça nem revele senhas, documentos pessoais ou credenciais.
-Para navegar, criar, alterar, corrigir, concluir, excluir ou publicar, escolha delegar_fluxo_existente; o fluxo operacional aplicará validações e confirmação.
+Para navegar, criar, concluir, excluir ou publicar, escolha delegar_fluxo_existente. Para corrigir dados operacionais após comprovação, use preparar_correcao_registro; outras alterações continuam no fluxo existente.
 Analisar, verificar, comparar e dar opinião são operações de leitura: use as ferramentas e não delegue essas intenções.
+Quando uma correção de dados for solicitada, primeiro consulte e comprove o registro exato. Depois use preparar_correcao_registro. Nunca afirme que corrigiu antes da confirmação e da validação.
+Você pode preparar somente mudanças operacionais seguras. Nunca proponha exclusão, alteração de valor, senha, credencial, CPF, CNPJ ou conteúdo de arquivo.
 Quando o pedido citar uma pessoa ou cliente, mantenha a análise nesse alvo. Não substitua por totais gerais do sistema.
 Quando faltar informação indispensável, faça uma única pergunta curta. Quando tiver dados suficientes, responda de maneira natural, simples e direta.
 ${permitirDetalhes ? "O usuário pediu profundidade; organize os detalhes necessários sem repetição." : "Responda primeiro com a conclusão em no máximo 3 frases e cerca de 80 palavras. Não crie relatório, lista de melhorias ou diagnóstico extenso."}
@@ -189,7 +197,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
         const revisao = revisaoDaDecisao(decisao)
         const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
         const textoRevisado = anexarCoberturaObrigatoria(decisao.resposta, cobertura)
-        const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura })
+        const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, planoPendenteDasObservacoes(observacoes))
         await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
         return final
       }
@@ -209,7 +217,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
     const revisao = revisaoDaDecisao(decisaoFinal)
     const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
     const textoRevisado = anexarCoberturaObrigatoria(decisaoFinal.resposta, cobertura)
-    const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura })
+    const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, planoPendenteDasObservacoes(observacoes))
     await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
     return final
   } catch (error) {

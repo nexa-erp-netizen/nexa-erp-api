@@ -38,6 +38,7 @@ const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtiv
 const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../services/nexaFerramentasService")
 const { analisarProdutoPelaNexa } = require("../services/nexaAnalistaProdutoService")
 const { executarNexaAgent } = require("../services/nexaAgentCoreService")
+const { responderConfirmacaoPlano } = require("../services/nexaCorrecaoAutonomaService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -1421,6 +1422,15 @@ async function ultimaAcaoGuiadaPendente(conversaId, usuarioId) {
   return ultimaResposta?.dados?.acaoGuiadaPendente || null
 }
 
+async function ultimoPlanoCorrecaoPendente(conversaId, usuarioId) {
+  if (!conversaId) return null
+  const ultimaResposta = await MensagemNexa.findOne({
+    where: { conversaId, usuarioId, autor: "nexa" },
+    order: [["createdAt", "DESC"], ["id", "DESC"]],
+  })
+  return ultimaResposta?.dados?.planoCorrecaoPendente || null
+}
+
 async function ultimaConfirmacaoNavegacaoPendente(conversaId, usuarioId) {
   if (!conversaId) return null
   const ultimaResposta = await MensagemNexa.findOne({
@@ -2679,6 +2689,13 @@ async function conversar(req, res) {
       }, conversa))
     }
 
+
+    const planoCorrecaoPendente = await ultimoPlanoCorrecaoPendente(conversa.id, req.usuario.id)
+    const confirmacaoPlano = await responderConfirmacaoPlano({ mensagem, planoPendente: planoCorrecaoPendente, usuario: usuarioCompleto })
+    if (confirmacaoPlano) {
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: confirmacaoPlano.resposta, dados: confirmacaoPlano })
+      return res.json(anexarMetadadosConversa({ ...confirmacaoPlano, atividade: "correcao-autonoma", provedor: "sistema", modelo: "Nexa Correction Engine 1.0", respondidoEm: new Date().toISOString() }, conversa))
+    }
 
     const acaoGuiadaPendente = await ultimaAcaoGuiadaPendente(conversa.id, req.usuario.id)
     const acaoGuiadaResolvida = await processarNexaAction({

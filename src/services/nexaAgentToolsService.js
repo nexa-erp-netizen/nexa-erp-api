@@ -2,6 +2,7 @@ const { Op } = require("sequelize")
 const sequelize = require("../config/database")
 const Cliente = require("../models/Cliente")
 const IncidenteSistema = require("../models/IncidenteSistema")
+const { prepararCorrecao } = require("./nexaCorrecaoAutonomaService")
 
 const CAMPOS_SENSIVEIS = /(senha|password|token|secret|chave|certificado|credencial|arquivo|anexo|conteudo|dadosCriptografados|cpf|cnpj|email|telefone|endereco)/i
 const MODELOS_BLOQUEADOS = new Set(["Usuario", "CredencialAcessoFiscal", "CertificadoDigital", "GoogleDriveConexao", "ExecucaoAgenteNexa"])
@@ -25,6 +26,7 @@ function definicoesFerramentas() {
     { nome: "contexto_completo_cliente", descricao: "Cruza cadastro e todos os módulos autorizados vinculados ao cliente. Use antes de concluir uma análise geral da situação de um cliente.", parametros: { clienteId: "opcional se houver cliente atual", nome: "opcional para localizar pelo nome" } },
     { nome: "listar_incidentes", descricao: "Lista incidentes abertos, todos ou um incidente específico.", parametros: { status: "abertos|todos", incidenteId: "opcional" } },
     { nome: "verificar_saude_sistema", descricao: "Verifica API, banco e incidentes recentes.", parametros: {} },
+    { nome: "preparar_correcao_registro", descricao: "Prepara, mas não executa, uma correção operacional após investigar e comprovar a divergência. Restrita ao administrador e a campos seguros; valores e exclusões são proibidos.", parametros: { modelo: "módulo exato", registroId: "ID comprovado", alteracoes: "objeto com campos seguros", justificativa: "causa comprovada" } },
   ]
 }
 
@@ -166,7 +168,18 @@ async function verificarSaude(_argumentos, contexto) {
   return { api: "online", banco: "conectado", tempoRespostaMs: Date.now() - inicio, incidentesAbertos: abertos, incidentesCriticos: criticos, ocorrenciasUltimas24h: recentes }
 }
 
-const EXECUTORES = { mapear_sistema: mapearSistema, consultar_modulo: consultarModulo, buscar_clientes: buscarClientes, contexto_completo_cliente: contextoCompletoCliente, listar_incidentes: listarIncidentes, verificar_saude_sistema: verificarSaude }
+async function prepararCorrecaoRegistro(argumentos, contexto) {
+  const proposta = await prepararCorrecao({
+    modelo: argumentos?.modelo,
+    registroId: argumentos?.registroId,
+    alteracoes: argumentos?.alteracoes,
+    justificativa: argumentos?.justificativa,
+    usuario: contexto?.usuario,
+  })
+  return { proposta, executada: false, exigeConfirmacao: true }
+}
+
+const EXECUTORES = { mapear_sistema: mapearSistema, consultar_modulo: consultarModulo, buscar_clientes: buscarClientes, contexto_completo_cliente: contextoCompletoCliente, listar_incidentes: listarIncidentes, verificar_saude_sistema: verificarSaude, preparar_correcao_registro: prepararCorrecaoRegistro }
 
 async function executarFerramenta(nome, argumentos, contexto) {
   const executor = EXECUTORES[nome]
