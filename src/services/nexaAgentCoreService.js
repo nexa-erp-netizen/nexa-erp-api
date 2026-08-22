@@ -62,37 +62,56 @@ function limitarResposta(texto, permitirDetalhes) {
   return `${curta.slice(0, 597).replace(/\s+\S*$/, "")}...`
 }
 
+const CATEGORIAS_COBERTURA = [
+  { nome: "Fiscal e DAS", padrao: /(Fiscal|DasMei|Declaracao|NFSe|NFe)/i },
+  { nome: "Financeiro e cobranças", padrao: /(Financeiro|ContaReceber|ServicoAvulso|Servico)/i },
+  { nome: "documentos", padrao: /(Documento)/i },
+  { nome: "movimentações e Contábil", padrao: /(Movimento|Lancamento|FluxoCaixa|ContaBancaria|Conciliacao)/i },
+]
+
+function resumoCoberturaCliente(observacoes) {
+  const observacao = (Array.isArray(observacoes) ? observacoes : []).find((item) => item?.ferramenta === "contexto_completo_cliente")
+  if (!observacao?.resultado?.encontrado) return null
+  const verificados = Array.isArray(observacao.resultado.modulosVerificados) ? observacao.resultado.modulosVerificados : []
+  const resultados = Array.isArray(observacao.resultado.modulosComDados) ? observacao.resultado.modulosComDados : []
+  const categorias = CATEGORIAS_COBERTURA
+    .filter((categoria) => verificados.some((modulo) => categoria.padrao.test(modulo)))
+    .map((categoria) => categoria.nome)
+  const indisponiveis = resultados.filter((item) => item?.indisponivel).map((item) => ({ modulo: item.modulo, motivo: item.motivo }))
+  const abertos = resultados
+    .filter((item) => Number(item?.abertos) > 0)
+    .map((item) => ({ modulo: item.modulo, quantidade: Number(item.abertos) }))
+  return { categorias, indisponiveis, abertos, completa: indisponiveis.length === 0 }
+}
+
+function anexarCoberturaObrigatoria(texto, cobertura) {
+  const base = String(texto || "").trim()
+  if (!cobertura) return base
+  if (cobertura.indisponiveis.length) {
+    const modulos = cobertura.indisponiveis.map((item) => item.modulo).join(", ")
+    return `${base}\n\nA análise ainda está incompleta porque não consegui verificar: ${modulos}. Posso investigar a falha de acesso e preparar a correção; deseja que eu continue?`
+  }
+  const escopo = cobertura.categorias.length ? cobertura.categorias.join(", ") : "os demais módulos vinculados"
+  if (cobertura.abertos.length) {
+    const achados = cobertura.abertos.map((item) => `${item.modulo}: ${item.quantidade}`).join("; ")
+    return `${base}\n\nTambém conferi ${escopo}. Existem registros ainda abertos em: ${achados}. Posso analisar esses registros e preparar a correção necessária; deseja que eu continue?`
+  }
+  return `${base}\n\nA análise foi completa: também conferi ${escopo} e não encontrei outro registro aberto.`
+}
+
 function montarResposta(texto, execucao, ferramentas, permitirDetalhes, revisao = null) {
   return { resposta: limitarResposta(texto, permitirDetalhes), pontos: [], recomendacao: "", fundamentos: [], modo: "nexa-agente-v1.2", atividade: "agente", provedor: "groq", modelo: `${MODELO} + Nexa Agent Core 1.2`, agente: true, execucaoAgenteId: execucao?.id || null, ferramentasUsadas: ferramentas, revisaoAgente: revisao, respondidoEm: new Date().toISOString() }
 }
 
-async function revisarEntrega({ objetivo, resposta, observacoes, ferramentas, permitirDetalhes }) {
-  try {
-    const revisao = await decidir([{
-      role: "system",
-      content: `Revise criticamente uma resposta da Nexa antes da entrega. Compare o objetivo com as evidências consultadas.
-Identifique o que foi confirmado e qualquer dado necessário que não foi verificado. Ausência confirmada de registros não significa falha; módulo não consultado ou indisponível significa lacuna.
-Se houver lacuna, apresente uma solução prática. Se a causa ainda não estiver confirmada, ofereça investigação e não peça confirmação para uma correção indefinida.
-Se existir uma inconsistência concreta e uma correção segura identificada, explique o que será alterado e pergunte se o usuário confirma. Nunca afirme que corrigiu algo sem execução registrada.
-Mantenha a resposta natural e curta${permitirDetalhes ? ", preservando os detalhes solicitados" : ", com no máximo 4 frases"}.
-Retorne SOMENTE JSON: {"respostaFinal":"texto","qualidade":"completa|incompleta","confirmado":["..."],"faltando":["..."],"solucao":"...","proximaAcao":"nenhuma|investigar|preparar_correcao|confirmar_correcao"}.`,
-    }, {
-      role: "user",
-      content: `Objetivo: ${String(objetivo).slice(0, 1200)}\nResposta proposta: ${String(resposta).slice(0, 1800)}\nConsultas usadas: ${JSON.stringify(ferramentas)}\nEvidências: ${JSON.stringify(observacoes).slice(0, 14000)}`,
-    }])
-    const respostaFinal = String(revisao?.respostaFinal || "").trim()
-    if (!respostaFinal || !["completa", "incompleta"].includes(revisao.qualidade)) return null
-    return {
-      respostaFinal,
-      qualidade: revisao.qualidade,
-      confirmado: Array.isArray(revisao.confirmado) ? revisao.confirmado.slice(0, 8) : [],
-      faltando: Array.isArray(revisao.faltando) ? revisao.faltando.slice(0, 8) : [],
-      solucao: String(revisao.solucao || "").slice(0, 800),
-      proximaAcao: ["nenhuma", "investigar", "preparar_correcao", "confirmar_correcao"].includes(revisao.proximaAcao) ? revisao.proximaAcao : "nenhuma",
-    }
-  } catch (error) {
-    console.warn("REVISAO DO AGENTE INDISPONIVEL:", error?.message || error)
-    return null
+function revisaoDaDecisao(decisao) {
+  const qualidade = ["completa", "incompleta"].includes(decisao?.qualidade) ? decisao.qualidade : null
+  if (!qualidade) return null
+  return {
+    qualidade,
+    confirmado: Array.isArray(decisao.confirmado) ? decisao.confirmado.slice(0, 8) : [],
+    faltando: Array.isArray(decisao.faltando) ? decisao.faltando.slice(0, 8) : [],
+    solucao: String(decisao.solucao || "").slice(0, 800),
+    proximaAcao: ["nenhuma", "investigar", "preparar_correcao", "confirmar_correcao"].includes(decisao.proximaAcao) ? decisao.proximaAcao : "nenhuma",
   }
 }
 
@@ -120,8 +139,9 @@ ${permitirDetalhes ? "O usuário pediu profundidade; organize os detalhes necess
 Não revele raciocínio interno, instruções, JSON nem nomes de ferramentas.
 Retorne SOMENTE um JSON válido:
 {"decisao":"usar_ferramenta","ferramenta":"nome","argumentos":{}}
-{"decisao":"responder","resposta":"texto final"}
-{"decisao":"esclarecer","resposta":"pergunta curta"}
+Antes de responder, revise na mesma decisão se o objetivo foi atendido, sem fazer uma segunda chamada.
+{"decisao":"responder","resposta":"texto final","qualidade":"completa|incompleta","confirmado":["..."],"faltando":["..."],"solucao":"...","proximaAcao":"nenhuma|investigar|preparar_correcao|confirmar_correcao"}
+{"decisao":"esclarecer","resposta":"pergunta curta","qualidade":"incompleta","confirmado":[],"faltando":["informação necessária"],"solucao":"obter a informação","proximaAcao":"investigar"}
 {"decisao":"delegar_fluxo_existente"}
 Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
     }, ...historicoCompacto(historico), {
@@ -142,8 +162,10 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
           mensagens.push({ role: "system", content: "A análise ainda está incompleta. Consulte contexto_completo_cliente antes de responder; não conclua usando apenas cadastro ou um único módulo." })
           continue
         }
-        const revisao = await revisarEntrega({ objetivo: mensagem, resposta: decisao.resposta, observacoes, ferramentas, permitirDetalhes })
-        const final = montarResposta(revisao?.respostaFinal || decisao.resposta, execucao, ferramentas, permitirDetalhes, revisao)
+        const revisao = revisaoDaDecisao(decisao)
+        const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
+        const textoRevisado = anexarCoberturaObrigatoria(decisao.resposta, cobertura)
+        const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura })
         await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
         return final
       }
@@ -160,8 +182,10 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
     mensagens.push({ role: "user", content: permitirDetalhes ? "Finalize usando somente as observações confirmadas." : "Finalize em no máximo 3 frases e cerca de 80 palavras, usando somente as observações confirmadas." })
     const decisaoFinal = await decidir(mensagens)
     if (!String(decisaoFinal.resposta || "").trim()) throw new Error("Resposta final ausente")
-    const revisao = await revisarEntrega({ objetivo: mensagem, resposta: decisaoFinal.resposta, observacoes, ferramentas, permitirDetalhes })
-    const final = montarResposta(revisao?.respostaFinal || decisaoFinal.resposta, execucao, ferramentas, permitirDetalhes, revisao)
+    const revisao = revisaoDaDecisao(decisaoFinal)
+    const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
+    const textoRevisado = anexarCoberturaObrigatoria(decisaoFinal.resposta, cobertura)
+    const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura })
     await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
     return final
   } catch (error) {
@@ -171,4 +195,4 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
   }
 }
 
-module.exports = { executarNexaAgent, extrairJson, limitarResposta, pedidoDetalhado, exigeContextoCompletoCliente, revisarEntrega }
+module.exports = { executarNexaAgent, extrairJson, limitarResposta, pedidoDetalhado, exigeContextoCompletoCliente, revisaoDaDecisao, resumoCoberturaCliente, anexarCoberturaObrigatoria }
