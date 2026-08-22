@@ -20,7 +20,9 @@ const MODULOS = [
 
 function parecePedidoAnaliseProduto(mensagem) {
   const texto = String(mensagem || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
-  const alvo = /\b(sistema|nexa|erp|produto|plataforma|modulos?)\b/.test(texto)
+  // Dizer "Nexa, analise a cliente..." é apenas chamar a assistente, não
+  // solicitar uma avaliação do produto inteiro.
+  const alvo = /\b(sistema|erp|produto|plataforma|modulos?)\b/.test(texto)
   const avaliacao = /\b(o que (?:voce )?acha|o que achou|avali|analis|melhor|ideia|sugest|opinia|parecer|acrescent|adicionar|retirar|remover|simplificar|mudaria|falta)\w*/.test(texto)
   return alvo && avaliacao
 }
@@ -42,7 +44,7 @@ async function snapshotSistema() {
     IncidenteSistema.findAll({ where: { status: "Aberto" }, attributes: ["titulo", "categoria", "nivel", "ocorrencias", "componente"], order: [["ultimaOcorrenciaEm", "DESC"]], limit: 12 }),
   ])
   return {
-    versao: "3.37.2",
+    versao: "3.38.1",
     modulos: MODULOS,
     volumes: { clientes, usuarios, obrigacoesFiscais: fiscais, registrosFinanceiros: financeiros, documentos },
     incidentesAbertos: incidentesAbertos.map((item) => item.toJSON()),
