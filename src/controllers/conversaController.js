@@ -37,6 +37,7 @@ const { responderModoDesenvolvedor } = require("../services/nexaModoDesenvolvedo
 const { ativarConversa, obterConversaAtiva } = require("../services/conversaAtivaService")
 const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../services/nexaFerramentasService")
 const { analisarProdutoPelaNexa } = require("../services/nexaAnalistaProdutoService")
+const { executarNexaAgent } = require("../services/nexaAgentCoreService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -2109,6 +2110,7 @@ async function naturalizarResultadoSistema({
   const consultaNovidades = ["pagamentos-hoje", "resolvidas-hoje"].includes(tipoConsulta)
   const consultaComListaCompleta = consultaPrioridades || consultaPendencias || consultaNovidades || ["mensagens-pendentes", "documentos-pendentes"].includes(tipoConsulta)
   const atividadeDesenvolvedor = ["modo-desenvolvedor", "incidentes", "plano-correcao", "saude-sistema"].includes(atividade)
+  const pedidoDetalheTecnico = atividadeDesenvolvedor && /\b(detalh\w*|tecnic\w*|categoria|risco|confianca|rota|latencia|milissegundo|causa raiz|log|codigo)\b/.test(normalizar(mensagem))
   const instrucaoAtividade = atividade === "navegacao"
     ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
     : consultaPrioridades
@@ -2118,20 +2120,22 @@ async function naturalizarResultadoSistema({
         : consultaNovidades
           ? "Os dados vieram do ERP. Relacione todos os pagamentos ou pendências resolvidas presentes nos itens, com cliente, motivo e valor quando existir."
           : atividadeDesenvolvedor
-            ? "Você está no Modo Desenvolvedor. Explique naturalmente o resultado técnico já confirmado, como uma desenvolvedora falando com o administrador. Seja direta. Preserve exatamente número, status, quantidade, causa, risco e ação executada. Se nenhuma ação foi executada, deixe isso claro."
+            ? (pedidoDetalheTecnico
+              ? "Você está no Modo Desenvolvedor. O administrador pediu detalhes. Explique os fatos técnicos confirmados em português simples, defina qualquer termo necessário e não transforme a resposta em um relatório. Nunca contradiga número, status, quantidade, causa ou ação executada."
+              : "Você está no Modo Desenvolvedor, mas fale como uma colega experiente conversando com alguém que não programa. Primeiro diga, em linguagem comum, o que aconteceu e se precisa fazer algo. Traduza timeout como demora para responder, serviço dependente como outro serviço usado pelo sistema e latência como velocidade da conexão. Não cite categoria, percentual de confiança, risco, rota, milissegundos ou quantidade de etapas, salvo se forem indispensáveis. Não liste todos os dados recebidos. Nunca contradiga número, status, quantidade, causa ou ação executada.")
             : "Os DADOS CONFIRMADOS vieram diretamente do ERP. Responda à pergunta com esses dados exatos e destaque apenas o que realmente ajuda."
 
   const mensagens = [
     {
       role: "system",
       content: `Você é a Nexa, colega digital do escritório contábil de ${nomeUsuario}.
-Fale como uma colega de equipe: natural, direta, cordial e contextual.
+Fale como uma colega de equipe: natural, espontânea, direta, cordial e contextual. Varie a construção das frases conforme a pergunta; não pareça um texto pronto.
 ${instrucaoAtividade}
 Você pode usar humor leve e inteligente quando couber, mas nunca em valores, prazos, obrigações ou riscos.
 ${atividadeDesenvolvedor ? "Você pode mencionar API, banco, rota e incidente quando forem relevantes, mas nunca mencione JSON, modelo de IA ou processamento interno." : "Não mencione ferramenta, API, banco de dados, JSON, modelo ou processamento."}
 Não invente nada e não altere números, nomes, datas ou status.
 Evite confirmações robóticas como “comando concluído”, “consulta realizada” e “tela aberta com segurança”.
-Responda em uma a três frases. Retorne SOMENTE JSON válido no formato {"resposta":"texto"}.`,
+${atividadeDesenvolvedor && !pedidoDetalheTecnico ? "Responda normalmente em uma ou duas frases curtas, usando palavras simples." : "Responda em uma a três frases."} Retorne SOMENTE JSON válido no formato {"resposta":"texto"}.`,
     },
     ...historicoRecente.map((item) => ({
       role: item.autor === "usuario" ? "user" : "assistant",
@@ -2167,8 +2171,8 @@ ${JSON.stringify(contextoConfirmado)}`,
       body: JSON.stringify({
         model: MODELO_PADRAO,
         messages: mensagens,
-        max_tokens: consultaComListaCompleta ? 1200 : 520,
-        temperature: consultaComListaCompleta ? 0.35 : 0.68,
+        max_tokens: consultaComListaCompleta ? 1200 : (atividadeDesenvolvedor ? 300 : 520),
+        temperature: consultaComListaCompleta ? 0.35 : (atividadeDesenvolvedor ? 0.82 : 0.68),
       }),
     })
 
@@ -2761,6 +2765,25 @@ async function conversar(req, res) {
     if (respostaDocumento) {
       await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDocumento.resposta, dados: respostaDocumento })
       return res.json(anexarMetadadosConversa({ ...respostaDocumento, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
+    // Perguntas abertas passam pelo núcleo agente. Quando a intenção exige uma
+    // ação, ele devolve o controle aos fluxos operacionais seguros existentes.
+    const respostaAgente = await executarNexaAgent({
+      mensagem,
+      usuario: usuarioCompleto,
+      historico,
+      paginaAtual,
+      clienteId: clienteId || conversa.clienteId || null,
+      clienteAtual: clienteAtualResumo,
+    })
+    if (respostaAgente) {
+      const respostaFinalAgente = {
+        ...respostaAgente,
+        ...(origem === "voz" ? { fala: respostaAgente.resposta } : {}),
+      }
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaFinalAgente.resposta, dados: respostaFinalAgente })
+      return res.json(anexarMetadadosConversa(respostaFinalAgente, conversa))
     }
 
     const autodiagnostico = await diagnosticarSaldoPelaNexa({ mensagem, cliente: clienteAtualBanco, usuario: usuarioCompleto })
