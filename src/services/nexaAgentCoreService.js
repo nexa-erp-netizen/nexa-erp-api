@@ -39,7 +39,10 @@ async function decidir(mensagens) {
 }
 
 function historicoCompacto(historico) {
-  return (Array.isArray(historico) ? historico : []).slice(-8).map((item) => ({ role: item.autor === "usuario" ? "user" : "assistant", content: String(item.texto || "").slice(0, 900) }))
+  return (Array.isArray(historico) ? historico : [])
+    .filter((item) => item?.autor === "usuario" || !/(document|leitura-documentos)/i.test(`${item?.modo || ""} ${item?.atividade || ""}`))
+    .slice(-8)
+    .map((item) => ({ role: item.autor === "usuario" ? "user" : "assistant", content: String(item.texto || "").slice(0, 900) }))
 }
 
 function pedidoDetalhado(mensagem) {
@@ -147,6 +150,8 @@ async function executarNexaAgent({ mensagem, usuario, historico, paginaAtual, cl
     const mensagens = [{
       role: "system",
       content: `Você é o núcleo de decisão da Nexa ERP. Interprete o objetivo real, inclusive com erros de escrita, e decida cada próximo passo pelo significado e pelo contexto; não procure frases cadastradas.
+O objetivo atual é soberano. O histórico serve apenas para continuidade e nunca pode substituir, contradizer ou desviar o pedido atual.
+Não reutilize uma análise de documento anterior quando a mensagem atual pedir banco de dados, ERP, cadastro ou módulos. Palavras negadas, como "não analise documentos", são proibições e não intenções.
 Módulos consultáveis do ERP: ${JSON.stringify(catalogoSistema().map((item) => item.modulo))}
 Use quantas consultas forem necessárias, até o limite desta execução, para combinar fatos de módulos diferentes. Nunca invente dados.
 As ferramentas são somente de leitura e o isolamento por escritório é aplicado pelo servidor. Não peça nem revele senhas, documentos pessoais ou credenciais.
@@ -165,7 +170,7 @@ Antes de responder, revise na mesma decisão se o objetivo foi atendido, sem faz
 Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
     }, ...historicoCompacto(historico), {
       role: "user",
-      content: `Objetivo atual: ${String(mensagem).slice(0, 1500)}\nContexto atual: ${JSON.stringify({ paginaAtual: paginaAtual || null, clienteAtual: clienteAtual || null, perfil: usuario?.perfil || null })}`,
+      content: `PEDIDO ATUAL — PRIORIDADE MÁXIMA: ${String(mensagem).slice(0, 1500)}\nContexto atual: ${JSON.stringify({ paginaAtual: paginaAtual || null, clienteAtual: clienteAtual || null, perfil: usuario?.perfil || null })}`,
     }]
 
     for (let indice = 0; indice < MAX_ETAPAS; indice += 1) {

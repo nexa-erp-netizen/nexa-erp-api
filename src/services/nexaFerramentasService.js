@@ -8,6 +8,7 @@ const ServicoAvulso = require("../models/ServicoAvulso")
 const DocumentoAnaliseNexa = require("../models/DocumentoAnaliseNexa")
 const { criptografarDocumento, descriptografarDocumento } = require("./cofreDocumentosNexaService")
 const crypto = require("crypto")
+const { parecePerguntaSobreDocumento } = require("./nexaDocumentoIntentService")
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
@@ -234,14 +235,6 @@ async function analisarDocumento({ arquivo, pergunta = "", clienteId = null }) {
     contextoErpUtilizado: Boolean(contextoErp),
     clienteNome: contextoErp?.cliente?.nome || null,
   }
-}
-
-function parecePerguntaSobreDocumento(mensagem) {
-  const texto = normalizar(mensagem)
-  return /\b(documento|arquivo|pdf|docx|contrato|guia|nota|planilha|anexo|nele|nela|desse documento|deste documento)\b/.test(texto)
-    || /\b(qual|quais|quando|quanto|onde|quem|explique|resuma|compare|confira|verifique|identifique)\b.{0,40}\b(valor|data|vencimento|cnpj|cpf|risco|erro|divergencia|informacao)\b/.test(texto)
-    || /\b(tem|ha|existe)\b.{0,25}\b(erro|risco|divergencia|problema)\b/.test(texto)
-    || /\b(o que voce acha|qual sua analise|esta correto|esta certo)\b/.test(texto)
 }
 
 async function responderPerguntaDocumento({ mensagem, conversaId, usuarioId, clienteId = null }) {

@@ -1376,6 +1376,8 @@ async function historicoPersistente(conversaId, usuarioId, limite = 18) {
     texto: item.autor === "usuario" && item.dados?.transcricaoCorrigida
       ? item.dados.transcricaoCorrigida
       : item.texto,
+    modo: item.dados?.modo || "",
+    atividade: item.dados?.atividade || "",
   }))
 }
 
@@ -1513,6 +1515,8 @@ function limparHistorico(historico) {
     .map((item) => ({
       autor: ["voce", "usuario", "user"].includes(normalizar(item?.autor)) ? "usuario" : "nexa",
       texto: String(item?.texto || "").slice(0, 2500),
+      modo: String(item?.modo || item?.dados?.modo || "").slice(0, 80),
+      atividade: String(item?.atividade || item?.dados?.atividade || "").slice(0, 80),
     }))
     .filter((item) => item.texto)
 }
