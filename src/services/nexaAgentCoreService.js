@@ -1,8 +1,7 @@
 const ExecucaoAgenteNexa = require("../models/ExecucaoAgenteNexa")
 const { definicoesFerramentas, catalogoSistema, executarFerramenta } = require("./nexaAgentToolsService")
+const aiProvider = require("./nexaAiProviderService")
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-const MODELO = process.env.GROQ_AGENT_MODEL || process.env.GROQ_MODEL || "openai/gpt-oss-120b"
 const ATIVO = String(process.env.NEXA_AGENT_CORE_ENABLED || "true").toLowerCase() !== "false"
 const MAX_ETAPAS = Math.max(2, Math.min(6, Number(process.env.NEXA_AGENT_MAX_STEPS) || 4))
 
@@ -21,21 +20,8 @@ function extrairJson(texto) {
 }
 
 async function decidir(mensagens) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 35000)
-  try {
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-      signal: controller.signal,
-      body: JSON.stringify({ model: MODELO, messages: mensagens, temperature: 0.2, max_tokens: 900, response_format: { type: "json_object" } }),
-    })
-    const dados = await resposta.json().catch(() => ({}))
-    if (!resposta.ok) throw new Error(dados?.error?.message || `Groq respondeu com status ${resposta.status}`)
-    return extrairJson(extrairTexto(dados))
-  } finally {
-    clearTimeout(timeout)
-  }
+  const result = await aiProvider.generate(mensagens, { temperature: 0.2, maxTokens: 900, timeout: 45000, json: true })
+  return { ...extrairJson(result.text), _provider: result.provider, _model: result.model }
 }
 
 function historicoCompacto(historico) {
@@ -103,7 +89,7 @@ function anexarCoberturaObrigatoria(texto, cobertura) {
 }
 
 function montarResposta(texto, execucao, ferramentas, permitirDetalhes, revisao = null, extras = {}) {
-  return { resposta: limitarResposta(texto, permitirDetalhes), pontos: [], recomendacao: "", fundamentos: [], modo: "nexa-agente-v2", atividade: "agente", provedor: "intercambiavel", modelo: `${MODELO} + Nexa Intelligence Core 2.0`, agente: true, execucaoAgenteId: execucao?.id || null, ferramentasUsadas: ferramentas, revisaoAgente: revisao, ...extras, respondidoEm: new Date().toISOString() }
+  return { resposta: limitarResposta(texto, permitirDetalhes), pontos: [], recomendacao: "", fundamentos: [], modo: "nexa-agente-v3", atividade: "agente", provedor: extras.provedor || aiProvider.preferredProvider, modelo: extras.modelo || "Nexa Intelligence Core 3.0", agente: true, execucaoAgenteId: execucao?.id || null, ferramentasUsadas: ferramentas, revisaoAgente: revisao, ...extras, respondidoEm: new Date().toISOString() }
 }
 
 function planoPendenteDasObservacoes(observacoes) {
@@ -144,7 +130,7 @@ function respostaContingenciaCliente(resultado) {
 }
 
 async function executarNexaAgent({ mensagem, usuario, historico, paginaAtual, clienteId, clienteAtual }) {
-  if (!ATIVO || !process.env.GROQ_API_KEY) return null
+  if (!ATIVO || !aiProvider.providerOrder().length) return null
   let execucao = null
   const etapas = []
   const ferramentas = []
@@ -183,6 +169,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
 
     for (let indice = 0; indice < MAX_ETAPAS; indice += 1) {
       const decisao = await decidir(mensagens)
+      const metadadosModelo = { provedor: decisao._provider, modelo: `${decisao._model} + Nexa Intelligence Core 3.0` }
       etapas.push({ ordem: indice + 1, decisao: decisao.decisao, ferramenta: decisao.ferramenta || null })
       if (decisao.decisao === "delegar_fluxo_existente") {
         await execucao.update({ status: "Delegada", etapas, ferramentasUsadas: ferramentas, finalizadoEm: new Date() })
@@ -197,7 +184,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
         const revisao = revisaoDaDecisao(decisao)
         const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
         const textoRevisado = anexarCoberturaObrigatoria(decisao.resposta, cobertura)
-        const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, planoPendenteDasObservacoes(observacoes))
+        const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, { ...planoPendenteDasObservacoes(observacoes), ...metadadosModelo })
         await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
         return final
       }
@@ -217,7 +204,7 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
     const revisao = revisaoDaDecisao(decisaoFinal)
     const cobertura = coberturaCompletaObrigatoria ? resumoCoberturaCliente(observacoes) : null
     const textoRevisado = anexarCoberturaObrigatoria(decisaoFinal.resposta, cobertura)
-    const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, planoPendenteDasObservacoes(observacoes))
+    const final = montarResposta(textoRevisado, execucao, ferramentas, permitirDetalhes, revisao ? { ...revisao, cobertura } : { cobertura }, { ...planoPendenteDasObservacoes(observacoes), provedor: decisaoFinal._provider, modelo: `${decisaoFinal._model} + Nexa Intelligence Core 3.0` })
     await execucao.update({ status: "Concluída", etapas, ferramentasUsadas: ferramentas, resultado: final.resposta, finalizadoEm: new Date() })
     return final
   } catch (error) {

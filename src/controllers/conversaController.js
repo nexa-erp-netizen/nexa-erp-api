@@ -39,6 +39,7 @@ const { detectarPedidoRelatorio, responderPerguntaDocumento } = require("../serv
 const { analisarProdutoPelaNexa } = require("../services/nexaAnalistaProdutoService")
 const { executarNexaAgent } = require("../services/nexaAgentCoreService")
 const { responderConfirmacaoPlano } = require("../services/nexaCorrecaoAutonomaService")
+const aiProvider = require("../services/nexaAiProviderService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
@@ -48,7 +49,7 @@ const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("
   ? MODELO_PESQUISA_WEB_CONFIGURADO
   : "groq/compound"
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
-const PROVEDOR_PADRAO = String(process.env.NEXA_AI_PROVIDER || "groq").toLowerCase()
+const PROVEDOR_PADRAO = aiProvider.preferredProvider
 const NEXA_CONVERSACIONAL_V2_ATIVA = String(process.env.NEXA_CONVERSACIONAL_V2 || "true").toLowerCase() !== "false"
 const NEXA_MODEL_ROUTER_ATIVO = String(process.env.NEXA_MODEL_ROUTER || "true").toLowerCase() !== "false"
 
@@ -1638,7 +1639,7 @@ function normalizarRotaModelo(valor) {
 }
 
 async function rotearMensagemComModelo({ mensagem, nomeUsuario, historico, paginaAtual = "", clienteAtual = null }) {
-  if (!NEXA_MODEL_ROUTER_ATIVO || PROVEDOR_PADRAO !== "groq" || !process.env.GROQ_API_KEY) return null
+  if (!NEXA_MODEL_ROUTER_ATIVO || !aiProvider.providerOrder().length) return null
 
   const historicoRecente = limparHistorico(historico).slice(-10)
   const mensagens = [
@@ -1677,26 +1678,9 @@ Retorne SOMENTE JSON válido:
     },
   ]
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 22000)
   try {
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODELO_PADRAO,
-        messages: mensagens,
-        max_tokens: 220,
-        temperature: 0.05,
-      }),
-    })
-    const dados = await resposta.json().catch(() => ({}))
-    if (!resposta.ok) throw new Error(dados?.error?.message || `Groq respondeu com status ${resposta.status}`)
-    const objeto = extrairObjetoJsonLivre(extrairTextoGroq(dados))
+    const gerado = await aiProvider.generate(mensagens, { maxTokens: 220, temperature: 0.05, timeout: 22000, json: true })
+    const objeto = extrairObjetoJsonLivre(gerado.text)
     const rota = normalizarRotaModelo(objeto?.rota)
     if (!rota) return null
     const intencaoCandidata = normalizar(objeto?.intencao).replace(/\s+/g, "-")
@@ -1706,32 +1690,16 @@ Retorne SOMENTE JSON válido:
       intencao,
       resposta: String(objeto?.resposta || "").trim(),
       motivo: String(objeto?.motivo || "").trim(),
-      modelo: MODELO_PADRAO,
+      modelo: gerado.model,
+      provedor: gerado.provider,
     }
   } catch (error) {
     console.warn("ROTEADOR CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
     return null
-  } finally {
-    clearTimeout(timeout)
   }
 }
 
 async function gerarRespostaPadrao({ mensagem, nomeUsuario, contexto, historico, conversaCasual = false, respostaCurta = true }) {
-  if (PROVEDOR_PADRAO !== "groq") {
-    const erro = new Error(`Provedor de IA não suportado: ${PROVEDOR_PADRAO}`)
-    erro.statusCode = 503
-    erro.providerFailure = true
-    throw erro
-  }
-
-  const apiKey = process.env.GROQ_API_KEY
-  if (!apiKey) {
-    const erro = new Error("A Groq ainda não foi configurada na API. Adicione GROQ_API_KEY nas variáveis do Render.")
-    erro.statusCode = 503
-    erro.providerFailure = true
-    throw erro
-  }
-
   const mensagens = [
     { role: "system", content: instrucoesNexa(nomeUsuario, { conversaCasual, respostaCurta }) },
     ...limparHistorico(historico).map((item) => ({
@@ -1748,58 +1716,15 @@ ${JSON.stringify(contexto)}`,
     },
   ]
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 45000)
-
   try {
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODELO_PADRAO,
-        messages: mensagens,
-        max_tokens: respostaCurta ? 320 : 1200,
-        temperature: conversaCasual ? 0.9 : (respostaCurta ? 0.45 : 0.55),
-      }),
-    })
-
-    const dados = await resposta.json().catch(() => ({}))
-    if (!resposta.ok) {
-      const detalhe = dados?.error?.message || `Falha da Groq (${resposta.status})`
-      const erro = new Error(detalhe)
-      erro.statusCode = resposta.status === 429 ? 429 : 502
-      erro.providerFailure = true
-      throw erro
-    }
-
-    const texto = extrairTextoGroq(dados)
-    if (!texto) {
-      const erro = new Error("A Groq não retornou uma resposta.")
-      erro.statusCode = 502
-      erro.providerFailure = true
-      throw erro
-    }
-
-    return interpretarJson(texto)
+    const gerado = await aiProvider.generate(mensagens, { maxTokens: respostaCurta ? 320 : 1200, temperature: conversaCasual ? 0.9 : (respostaCurta ? 0.45 : 0.55), timeout: 45000 })
+    return { ...interpretarJson(gerado.text), provedorUsado: gerado.provider, modeloUsado: gerado.model }
   } catch (error) {
-    if (error?.name === "AbortError") {
-      const timeoutError = new Error("A Groq demorou mais de 45 segundos para responder.")
-      timeoutError.statusCode = 504
-      timeoutError.providerFailure = true
-      throw timeoutError
-    }
-
     if (!error.statusCode) {
       error.statusCode = 502
       error.providerFailure = true
     }
     throw error
-  } finally {
-    clearTimeout(timeout)
   }
 }
 
@@ -2109,7 +2034,7 @@ async function naturalizarResultadoSistema({
     atividade,
   }
 
-  if (!NEXA_CONVERSACIONAL_V2_ATIVA || PROVEDOR_PADRAO !== "groq" || !process.env.GROQ_API_KEY) {
+  if (!NEXA_CONVERSACIONAL_V2_ATIVA || !aiProvider.providerOrder().length) {
     return {
       ...base,
       ...(origem === "voz" ? { fala: resultado?.fala || resultado?.resposta } : {}),
@@ -2171,29 +2096,9 @@ ${JSON.stringify(contextoConfirmado)}`,
     },
   ]
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
-
   try {
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: MODELO_PADRAO,
-        messages: mensagens,
-        max_tokens: consultaComListaCompleta ? 1200 : (atividadeDesenvolvedor ? 300 : 520),
-        temperature: consultaComListaCompleta ? 0.35 : (atividadeDesenvolvedor ? 0.82 : 0.68),
-      }),
-    })
-
-    const dados = await resposta.json().catch(() => ({}))
-    if (!resposta.ok) throw new Error(dados?.error?.message || `Groq respondeu com status ${resposta.status}`)
-
-    const interpretado = interpretarJson(extrairTextoGroq(dados))
+    const gerado = await aiProvider.generate(mensagens, { maxTokens: consultaComListaCompleta ? 1200 : (atividadeDesenvolvedor ? 300 : 520), temperature: consultaComListaCompleta ? 0.35 : (atividadeDesenvolvedor ? 0.82 : 0.68), timeout: 30000, json: true })
+    const interpretado = interpretarJson(gerado.text)
     const texto = String(interpretado.resposta || "").trim()
     if (!texto) return base
 
@@ -2229,7 +2134,8 @@ ${JSON.stringify(contextoConfirmado)}`,
       resposta: texto,
       ...(origem === "voz" ? { fala: texto } : {}),
       modo: `${resultado?.modo || "sistema"}-${atividadeDesenvolvedor ? "developer-conversacional-v1" : "conversacional-v2.1"}`,
-      modelo: `${MODELO_PADRAO} + ${atividadeDesenvolvedor ? "Nexa Developer Conversacional 1.0" : "Nexa Conversacional v2.1"}`,
+      provedor: gerado.provider,
+      modelo: `${gerado.model} + ${atividadeDesenvolvedor ? "Nexa Developer Conversacional 1.0" : "Nexa Conversacional v2.1"}`,
     }
   } catch (error) {
     console.warn("NATURALIZACAO CONVERSACIONAL DA NEXA INDISPONIVEL:", error?.message || error)
@@ -2237,8 +2143,6 @@ ${JSON.stringify(contextoConfirmado)}`,
       ...base,
       ...(origem === "voz" ? { fala: resultado?.fala || resultado?.resposta } : {}),
     }
-  } finally {
-    clearTimeout(timeout)
   }
 }
 
@@ -2255,13 +2159,20 @@ async function status(req, res) {
       pesquisaWebAtiva: PESQUISA_WEB_ATIVA,
       modeloPesquisaWeb: MODELO_PESQUISA_WEB,
     },
+    openai: {
+      configurada: Boolean(process.env.OPENAI_API_KEY),
+      online: Boolean(process.env.OPENAI_API_KEY),
+      modelo: aiProvider.models.openai,
+      principal: PROVEDOR_PADRAO === "openai",
+      mensagem: process.env.OPENAI_API_KEY ? "OpenAI configurada" : "OpenAI não configurada",
+    },
     ollama: {
       tipo: "local",
       verificadoNoNavegador: true,
     },
   }
 
-  if (PROVEDOR_PADRAO !== "groq" || !apiKey) {
+  if (!apiKey) {
     return res.json(base)
   }
 
@@ -3066,9 +2977,9 @@ async function conversar(req, res) {
     const respostaFinal = {
       ...resultado,
       ...(origem === "voz" ? { fala: resultado.resposta } : {}),
-      modo: resultado.pesquisaWeb ? "groq-pesquisa-web" : "groq-online",
-      provedor: "groq",
-      modelo: resultado.modeloUsado || MODELO_PADRAO,
+      modo: resultado.pesquisaWeb ? "groq-pesquisa-web" : `${resultado.provedorUsado || PROVEDOR_PADRAO}-online`,
+      provedor: resultado.provedorUsado || PROVEDOR_PADRAO,
+      modelo: resultado.modeloUsado || aiProvider.models[resultado.provedorUsado || PROVEDOR_PADRAO] || MODELO_PADRAO,
       respondidoEm: new Date().toISOString(),
       memoriaAtiva: true,
       memoriasUsadas: memorias.length,
