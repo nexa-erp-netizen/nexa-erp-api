@@ -9,6 +9,7 @@ const EXTENSOES_PERMITIDAS = /\.(?:js|jsx|css)$/i
 const MAX_ARQUIVOS_CONTEXTO = 4
 const MAX_ARQUIVOS_ALTERADOS = 2
 const MAX_CONTEUDO_TOTAL = 70000
+const MAX_ARQUIVOS_ANALISE = 6
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -38,6 +39,87 @@ function pedidoPublicarCodigo(mensagem) {
 function pedidoStatusCodigo(mensagem) {
   const texto = normalizar(mensagem)
   return /\b(status|resultado|teste|pronto)\w*\b/.test(texto) || pedidoPublicarCodigo(mensagem)
+}
+
+function pedidoAcessoArquivos(mensagem) {
+  const texto = normalizar(mensagem)
+  const mencionaProjeto = /\b(api|web|github|repositorio|arquivos?|codigo|sistema)\b/.test(texto)
+  const perguntaAcesso = /\b(acess|conect|ler|leitura|abrir|enxerg|visualiz|consult)\w*\b/.test(texto)
+  return mencionaProjeto && perguntaAcesso
+}
+
+function pedidoAnalisarCodigo(mensagem) {
+  const texto = normalizar(mensagem)
+  const pedeAnalise = /\b(analis|revis|verific|investig|procure|localiz|audit)\w*\b/.test(texto)
+  const mencionaCodigo = /\b(api|web|codigo|arquivos?|repositorio|layout|interface|tela|modulo|sistema)\b/.test(texto)
+  const proibe = /\b(?:nao|sem)\b[\s\S]{0,35}\b(?:analis|revis|verific|investig|procure|localiz|audit)\w*\b/.test(texto)
+  return pedeAnalise && mencionaCodigo && !proibe
+}
+
+function repositoriosNaMensagem(mensagem) {
+  const texto = normalizar(mensagem)
+  const tipos = []
+  if (/\b(api|backend|servidor|banco)\b/.test(texto)) tipos.push("api")
+  if (/\b(web|frontend|interface|layout|tela|visual)\b/.test(texto)) tipos.push("web")
+  return tipos.length ? [...new Set(tipos)] : ["api", "web"]
+}
+
+function selecionarArquivosParaAnalise(arquivos, mensagem, tipo) {
+  const ignorar = /(^|\/)(node_modules|dist|build|coverage|\.git|public\/assets)(\/|$)|\.(?:png|jpe?g|gif|svg|ico|pdf|zip|lock)$/i
+  const palavras = normalizar(mensagem).split(/[^a-z0-9]+/).filter((palavra) => palavra.length >= 4)
+  return arquivos
+    .filter((arquivo) => !ignorar.test(arquivo) && /\.(?:js|jsx|ts|tsx|css)$/i.test(arquivo) && arquivo.startsWith("src/"))
+    .map((arquivo) => {
+      const caminho = normalizar(arquivo)
+      let pontos = 0
+      for (const palavra of palavras) if (caminho.includes(palavra)) pontos += 5
+      if (tipo === "web" && /pages?|components?|routes?|app\./.test(caminho)) pontos += 2
+      if (tipo === "api" && /controllers?|services?|routes?/.test(caminho)) pontos += 2
+      return { arquivo, pontos }
+    })
+    .filter((item) => item.pontos > 0)
+    .sort((a, b) => b.pontos - a.pontos || a.arquivo.localeCompare(b.arquivo))
+    .slice(0, MAX_ARQUIVOS_ANALISE)
+    .map((item) => item.arquivo)
+}
+
+async function analisarCodigoSomenteLeitura({ mensagem }) {
+  const tipos = repositoriosNaMensagem(mensagem)
+  const contextos = []
+  const consultados = []
+  for (const tipo of tipos) {
+    const arvore = await github.listarArvore(tipo)
+    const candidatos = selecionarArquivosParaAnalise(arvore.arquivos, mensagem, tipo)
+    consultados.push({ tipo, commit: arvore.sha, totalArquivos: arvore.arquivos.length, candidatos })
+    for (const caminho of candidatos) {
+      const arquivo = await github.lerArquivo(tipo, caminho)
+      contextos.push(`\n--- ${tipo.toUpperCase()}: ${arquivo.caminho} ---\n${arquivo.conteudo}`)
+    }
+  }
+  if (!contextos.length) {
+    return {
+      resposta: "Consegui acessar os repositórios, mas o pedido está amplo demais para localizar os arquivos certos com segurança. Informe a tela, módulo, função ou erro que deseja analisar.",
+      modo: "nexa-dev-leitura",
+      atividade: "analise-codigo",
+      consultados,
+    }
+  }
+  const resultado = await aiProvider.generate([{
+    role: "system",
+    content: "Você analisa o código da Nexa ERP em modo somente leitura. Responda em português simples e direto. Comece pela conclusão. Depois liste apenas problemas comprovados nos arquivos, indicando arquivo e solução recomendada. Não invente arquivos, dados, testes ou erros. Não produza código completo e não afirme que alterou ou publicou algo. Se faltar evidência, diga exatamente o que falta.",
+  }, {
+    role: "user",
+    content: `Pedido do administrador: ${mensagem}\n\nAnalise somente os arquivos abaixo:${contextos.join("\n").slice(0, MAX_CONTEUDO_TOTAL)}`,
+  }], { temperature: 0.1, maxTokens: 1800, timeout: 90000 })
+  return {
+    resposta: resultado.text,
+    modo: "nexa-dev-leitura",
+    atividade: "analise-codigo",
+    provedor: resultado.provider,
+    modelo: resultado.model,
+    consultados,
+    somenteLeitura: true,
+  }
 }
 
 function tipoRepositorio(incidente) {
@@ -175,6 +257,28 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   if (usuario?.perfil !== "Administrador" && /\b(github|codigo|public|modo desenvolvedor)\b/.test(texto)) return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
   if (usuario?.perfil !== "Administrador") return null
 
+  if (pedidoAnalisarCodigo(mensagem)) {
+    return analisarCodigoSomenteLeitura({ mensagem })
+  }
+
+  if (pedidoAcessoArquivos(mensagem)) {
+    const conexao = await github.verificarConexao()
+    if (!conexao.conectado) return { resposta: `Ainda não consigo acessar os arquivos: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
+    const detalhes = []
+    for (const tipo of repositoriosNaMensagem(mensagem)) {
+      const arvore = await github.listarArvore(tipo)
+      detalhes.push({ tipo, totalArquivos: arvore.arquivos.length, commit: arvore.sha })
+    }
+    return {
+      resposta: `Sim. Tenho acesso de leitura aos arquivos ${detalhes.map((item) => `da ${item.tipo.toUpperCase()} (${item.totalArquivos} arquivos)`).join(" e ")} pelo GitHub. Posso localizar e analisar o código. Qual tela, módulo ou erro você quer que eu verifique?`,
+      modo: "nexa-dev-github",
+      atividade: "leitura-codigo",
+      conexao,
+      detalhes,
+      somenteLeitura: true,
+    }
+  }
+
   if (/\b(status|conexao|conectad|teste)\w*\b/.test(texto) && /\b(github|repositorio|modo desenvolvedor)\b/.test(texto)) {
     const conexao = await github.verificarConexao()
     return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado.\n\n- **API:** repositório disponível.\n- **Web:** repositório disponível.\n- **Publicação:** somente depois dos testes e da sua autorização." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
@@ -207,4 +311,4 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   return null
 }
 
-module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo }
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo, pedidoAcessoArquivos, pedidoAnalisarCodigo, repositoriosNaMensagem, selecionarArquivosParaAnalise, analisarCodigoSomenteLeitura }

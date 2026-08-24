@@ -7,8 +7,9 @@ function normalizar(valor) {
 
 function pareceComandoDesenvolvedor(mensagem) {
   const texto = normalizar(mensagem)
-  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao|github|repositorio|publicar correcao|publique|status da correcao|status do plano)\b/.test(texto)
+  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao|github|repositorio|arquivos? da api|arquivos? (?:da )?web|codigo da api|codigo (?:da )?web|analisar (?:o )?codigo|analisar (?:os )?arquivos|revisar (?:o )?codigo|auditar (?:o )?codigo|publicar correcao|publique|status da correcao|status do plano)\b/.test(texto)
     || (/\b(diagnosti\w*|analis\w*|verifi\w*|prepar\w*)\b/.test(texto) && /\b(incidente|erro|falha)\s*#?\s*\d+\b/.test(texto))
+    || (/\b(analis\w*|revis\w*|verifi\w*|investig\w*|audit\w*)\b/.test(texto) && /\b(api|web|codigo|arquivos?|repositorio|layout|interface|tela|modulo)\b/.test(texto))
 }
 
 function idIncidente(mensagem) {

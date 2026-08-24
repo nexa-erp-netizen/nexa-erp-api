@@ -9,6 +9,10 @@ const {
   pedidoPrepararCodigo,
   pedidoPublicarCodigo,
   pedidoStatusCodigo,
+  pedidoAcessoArquivos,
+  pedidoAnalisarCodigo,
+  repositoriosNaMensagem,
+  selecionarArquivosParaAnalise,
 } = require("../src/services/nexaCodigoAutonomoService")
 
 test("separa incidentes da Web e da API", () => {
@@ -53,4 +57,28 @@ test("recusa arquivo novo, credencial e alteração extensa", () => {
   assert.throws(() => validarAlteracoes({ arquivos: [{ caminho: "src/services/novo.js", conteudo: "novo" }] }, originais, "api"), /Nenhuma mudança segura/)
   assert.throws(() => validarAlteracoes({ arquivos: [{ caminho: "src/services/testeService.js", conteudo: "const token = process.env.API_SECRET\n" }] }, originais, "api"), /credenciais/)
   assert.throws(() => validarAlteracoes({ arquivos: [{ caminho: "src/services/testeService.js", conteudo: "x".repeat(130000) }] }, originais, "api"), /grande demais/)
+})
+
+test("reconhece consulta e análise dos repositórios", () => {
+  assert.equal(pedidoAcessoArquivos("Você consegue acessar os arquivos da API e Web?"), true)
+  assert.equal(pedidoAnalisarCodigo("Analise o layout da tela de clientes"), true)
+  assert.equal(pedidoAnalisarCodigo("Não analise os arquivos da Web"), false)
+  assert.deepEqual(repositoriosNaMensagem("verifique a API e a Web"), ["api", "web"])
+  assert.deepEqual(repositoriosNaMensagem("analise o layout da tela"), ["web"])
+})
+
+test("seleciona arquivos relacionados sem incluir dependências ou artefatos", () => {
+  const arquivos = [
+    "src/pages/Clientes.jsx",
+    "src/components/ClienteCard.jsx",
+    "src/pages/Financeiro.jsx",
+    "dist/assets/index.js",
+    "node_modules/react/index.js",
+    "src/assets/logo.png",
+  ]
+  const selecionados = selecionarArquivosParaAnalise(arquivos, "analise o layout de clientes", "web")
+  assert.equal(selecionados[0], "src/pages/Clientes.jsx")
+  assert.equal(selecionados.includes("dist/assets/index.js"), false)
+  assert.equal(selecionados.includes("node_modules/react/index.js"), false)
+  assert.equal(selecionados.includes("src/assets/logo.png"), false)
 })
