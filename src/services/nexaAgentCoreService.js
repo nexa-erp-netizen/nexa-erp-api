@@ -112,7 +112,7 @@ function revisaoDaDecisao(decisao) {
 
 function nomeClienteDaMensagem(mensagem) {
   const texto = String(mensagem || "")
-  return texto.match(/\bcliente\s+(.+?)(?=\s+(?:e\s+(?:procure|analise|verifique|confira|identifique|informe|mostre)|para|sem|que)\b|[?.!,;]|$)/i)?.[1]?.trim() || ""
+  return texto.match(/\bcliente\s+(.+?)(?=\s+(?:e|para|sem|que|onde|quando|com)\b|[?.!,;]|$)/i)?.[1]?.trim() || ""
 }
 
 function respostaContingenciaCliente(resultado) {
