@@ -40,6 +40,21 @@ function nomeCliente(cliente) {
   return cliente?.nome || cliente?.razaoSocial || cliente?.nomeFantasia || "Cliente"
 }
 
+async function resolverClienteAlvo(argumentos, contexto) {
+  const nomeBuscado = normalizar(argumentos?.nome)
+  if (nomeBuscado) {
+    const candidatos = await Cliente.findAll({ order: [["nome", "ASC"]], limit: 200 })
+    const exato = candidatos.find((item) => normalizar(nomeCliente(item)) === nomeBuscado)
+    if (exato) return exato
+    const parciais = candidatos.filter((item) => normalizar(nomeCliente(item)).includes(nomeBuscado))
+    if (parciais.length === 1) return parciais[0]
+    if (parciais.length > 1) throw new Error(`Encontrei mais de um cliente com “${argumentos.nome}”; informe o nome completo`)
+    return null
+  }
+  const clienteId = Number(argumentos?.clienteId || contexto?.clienteId)
+  return Number.isInteger(clienteId) && clienteId > 0 ? Cliente.findByPk(clienteId) : null
+}
+
 function limparRegistro(registro) {
   const bruto = registro?.toJSON?.() || registro || {}
   return Object.fromEntries(Object.entries(bruto).filter(([campo]) => !CAMPOS_SENSIVEIS.test(campo)))
@@ -98,14 +113,8 @@ function abertoPeloStatus(status) {
 }
 
 async function contextoCompletoCliente(argumentos, contexto) {
-  let clienteId = Number(argumentos?.clienteId || contexto?.clienteId)
-  let cliente = Number.isInteger(clienteId) && clienteId > 0 ? await Cliente.findByPk(clienteId) : null
-  const nomeBuscado = normalizar(argumentos?.nome)
-  if (!cliente && nomeBuscado) {
-    const candidatos = await Cliente.findAll({ order: [["nome", "ASC"]], limit: 100 })
-    cliente = candidatos.find((item) => normalizar(nomeCliente(item)).includes(nomeBuscado)) || null
-    clienteId = Number(cliente?.id)
-  }
+  const cliente = await resolverClienteAlvo(argumentos, contexto)
+  const clienteId = Number(cliente?.id)
   if (!cliente) return { encontrado: false, motivo: "Cliente não localizado" }
   if (contexto?.usuario?.perfil === "Cliente" && normalizar(contexto.usuario.clienteVinculado) !== normalizar(nomeCliente(cliente))) throw new Error("Cliente fora da permissão do usuário")
 
@@ -158,14 +167,8 @@ async function listarIncidentes(argumentos, contexto) {
 
 async function detectarInconsistencias(argumentos, contexto) {
   if (contexto?.usuario?.perfil !== "Administrador") throw new Error("Acesso restrito ao administrador")
-  let clienteId = Number(argumentos?.clienteId || contexto?.clienteId)
-  let cliente = Number.isInteger(clienteId) && clienteId > 0 ? await Cliente.findByPk(clienteId) : null
-  const nomeBuscado = normalizar(argumentos?.nome)
-  if (!cliente && nomeBuscado) {
-    const candidatos = await Cliente.findAll({ order: [["nome", "ASC"]], limit: 100 })
-    cliente = candidatos.find((item) => normalizar(nomeCliente(item)).includes(nomeBuscado)) || null
-    clienteId = Number(cliente?.id)
-  }
+  const cliente = await resolverClienteAlvo(argumentos, contexto)
+  const clienteId = Number(cliente?.id)
   if (!cliente) throw new Error("Cliente não localizado para análise")
   return detectarInconsistenciasCliente({ clienteId, clienteNome: nomeCliente(cliente) })
 }
@@ -203,4 +206,4 @@ async function executarFerramenta(nome, argumentos, contexto) {
   return executor(argumentos || {}, contexto || {})
 }
 
-module.exports = { definicoesFerramentas, catalogoSistema, executarFerramenta }
+module.exports = { definicoesFerramentas, catalogoSistema, executarFerramenta, resolverClienteAlvo }

@@ -112,7 +112,7 @@ function revisaoDaDecisao(decisao) {
 
 function nomeClienteDaMensagem(mensagem) {
   const texto = String(mensagem || "")
-  return texto.match(/\bcliente\s+(.+?)(?:[?.!,;]|$)/i)?.[1]?.trim() || ""
+  return texto.match(/\bcliente\s+(.+?)(?=\s+(?:e\s+(?:procure|analise|verifique|confira|identifique|informe|mostre)|para|sem|que)\b|[?.!,;]|$)/i)?.[1]?.trim() || ""
 }
 
 function respostaContingenciaCliente(resultado) {
@@ -191,7 +191,11 @@ Ferramentas: ${JSON.stringify(definicoesFerramentas())}`,
       }
       if (decisao.decisao !== "usar_ferramenta" || !decisao.ferramenta) throw new Error("Decisão incompleta")
       let observacao
-      try { observacao = await executarFerramenta(decisao.ferramenta, decisao.argumentos, { usuario, clienteId }) }
+      const nomeExplicito = nomeClienteDaMensagem(mensagem)
+      const argumentosFerramenta = nomeExplicito && ["contexto_completo_cliente", "detectar_inconsistencias_cliente"].includes(decisao.ferramenta)
+        ? { ...(decisao.argumentos || {}), nome: nomeExplicito, clienteId: undefined }
+        : decisao.argumentos
+      try { observacao = await executarFerramenta(decisao.ferramenta, argumentosFerramenta, { usuario, clienteId }) }
       catch (error) { observacao = { erro: error.message } }
       ferramentas.push(decisao.ferramenta)
       observacoes.push({ ferramenta: decisao.ferramenta, resultado: observacao })
