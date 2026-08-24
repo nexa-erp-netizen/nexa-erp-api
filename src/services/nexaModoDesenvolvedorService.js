@@ -1,4 +1,5 @@
 const crypto = require("crypto")
+const { responderCodigoAutonomo } = require("./nexaCodigoAutonomoService")
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -6,7 +7,7 @@ function normalizar(valor) {
 
 function pareceComandoDesenvolvedor(mensagem) {
   const texto = normalizar(mensagem)
-  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao)\b/.test(texto)
+  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao|github|repositorio|publicar correcao|publique|status da correcao|status do plano)\b/.test(texto)
     || (/\b(diagnosti\w*|analis\w*|verifi\w*|prepar\w*)\b/.test(texto) && /\b(incidente|erro|falha)\s*#?\s*\d+\b/.test(texto))
 }
 
@@ -95,6 +96,13 @@ async function criarPlanoCorrecao({ incidente, usuario }) {
 async function responderModoDesenvolvedor({ mensagem, usuario }) {
   if (!pareceComandoDesenvolvedor(mensagem)) return null
   if (usuario?.perfil !== "Administrador") return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
+  try {
+    const codigo = await responderCodigoAutonomo({ mensagem, usuario })
+    if (codigo) return codigo
+  } catch (error) {
+    console.error("NEXA DEVELOPER CODE:", error?.message || error)
+    return { resposta: `Não consegui preparar essa correção com segurança: ${String(error?.message || "falha na integração").slice(0, 250)}. Nenhuma alteração foi publicada.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo" }
+  }
   const texto = normalizar(mensagem)
   const solicitado = idIncidente(mensagem)
   if (solicitado) {

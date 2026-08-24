@@ -1,0 +1,186 @@
+const crypto = require("crypto")
+const IncidenteSistema = require("../models/IncidenteSistema")
+const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
+const aiProvider = require("./nexaAiProviderService")
+const github = require("./nexaGitHubService")
+
+const CAMINHOS_PROIBIDOS = /(^|\/)(\.github|node_modules|config|models?|migrations?|middlewares?|auth|credenciais?|secrets?|backup)(\/|$)|(^|\/)(package(?:-lock)?\.json|\.env|server\.js)$/i
+const EXTENSOES_PERMITIDAS = /\.(?:js|jsx|css)$/i
+const MAX_ARQUIVOS_CONTEXTO = 4
+const MAX_ARQUIVOS_ALTERADOS = 2
+const MAX_CONTEUDO_TOTAL = 70000
+
+function normalizar(valor) {
+  return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+}
+
+function idNaMensagem(mensagem, tipo = "incidente") {
+  const padrao = tipo === "plano" ? /\b(?:plano|correcao)\s*#?\s*(\d+)\b/i : /\b(?:incidente|erro|falha)\s*#?\s*(\d+)\b/i
+  return Number(String(mensagem || "").match(padrao)?.[1]) || null
+}
+
+function tipoRepositorio(incidente) {
+  const texto = normalizar(`${incidente.origem} ${incidente.categoria} ${incidente.componente} ${incidente.mensagem}`)
+  return /\b(web|interface|layout|react|vite|jsx|css|tela|componente)\b/.test(texto) ? "web" : "api"
+}
+
+function caminhoPermitido(caminho, tipo) {
+  if (!caminho || caminho.includes("..") || CAMINHOS_PROIBIDOS.test(caminho) || !EXTENSOES_PERMITIDAS.test(caminho)) return false
+  return tipo === "web" ? caminho.startsWith("src/") : caminho.startsWith("src/")
+}
+
+function palavrasIncidente(incidente) {
+  return normalizar(`${incidente.titulo} ${incidente.mensagem} ${incidente.rota} ${incidente.componente} ${JSON.stringify(incidente.contexto || {})}`)
+    .split(/[^a-z0-9]+/).filter((palavra) => palavra.length >= 4)
+}
+
+function selecionarCandidatos(arquivos, incidente, tipo) {
+  const textoContexto = JSON.stringify(incidente.contexto || {})
+  const caminhosStack = [...textoContexto.matchAll(/(?:\/opt\/render\/project\/src\/)?(?:src\/)?([A-Za-z0-9_./-]+\.(?:js|jsx|css))/g)]
+    .map((item) => item[1].startsWith("src/") ? item[1] : `src/${item[1]}`)
+  const palavras = palavrasIncidente(incidente)
+  return arquivos.filter((arquivo) => caminhoPermitido(arquivo, tipo)).map((arquivo) => {
+    const normal = normalizar(arquivo)
+    let pontos = caminhosStack.includes(arquivo) ? 100 : 0
+    for (const palavra of palavras) if (normal.includes(palavra)) pontos += 3
+    if (normal.includes("controller") || normal.includes("service") || normal.includes("component") || normal.includes("page")) pontos += 1
+    return { arquivo, pontos }
+  }).filter((item) => item.pontos > 0).sort((a, b) => b.pontos - a.pontos).slice(0, MAX_ARQUIVOS_CONTEXTO).map((item) => item.arquivo)
+}
+
+function extrairJson(texto) {
+  const limpo = String(texto || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()
+  try { return JSON.parse(limpo) } catch (_error) {}
+  const inicio = limpo.indexOf("{")
+  const fim = limpo.lastIndexOf("}")
+  if (inicio >= 0 && fim > inicio) return JSON.parse(limpo.slice(inicio, fim + 1))
+  throw new Error("A IA não devolveu uma correção válida")
+}
+
+function validarAlteracoes(proposta, originais, tipo) {
+  const mapa = new Map(originais.map((item) => [item.caminho, item.conteudo]))
+  const arquivos = (Array.isArray(proposta?.arquivos) ? proposta.arquivos : []).filter((item) => mapa.has(item?.caminho) && caminhoPermitido(item.caminho, tipo) && typeof item.conteudo === "string" && item.conteudo !== mapa.get(item.caminho))
+  if (!arquivos.length) throw new Error("Nenhuma mudança segura foi produzida")
+  if (arquivos.length > MAX_ARQUIVOS_ALTERADOS) throw new Error("A correção ultrapassou o limite de dois arquivos")
+  for (const arquivo of arquivos) {
+    const anterior = mapa.get(arquivo.caminho)
+    const variacao = Math.abs(arquivo.conteudo.length - anterior.length)
+    if (arquivo.conteudo.length > 120000 || variacao > Math.max(12000, anterior.length * 0.45)) throw new Error(`A alteração em ${arquivo.caminho} ficou grande demais para publicação automática`)
+    if (/process\.env\.[A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)/.test(arquivo.conteudo) && !/process\.env\.[A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)/.test(anterior)) throw new Error("A correção tentou introduzir acesso a credenciais")
+  }
+  return arquivos
+}
+
+async function gerarCorrecao({ incidente, tipo, arquivos }) {
+  const contexto = arquivos.map((item) => `\n--- ${item.caminho} ---\n${item.conteudo}`).join("\n").slice(0, MAX_CONTEUDO_TOTAL)
+  const resultado = await aiProvider.generate([{
+    role: "system",
+    content: `Você corrige pequenos defeitos comprovados no código da Nexa ERP. Trabalhe apenas nos arquivos fornecidos e devolva o conteúdo integral dos arquivos alterados. Preserve comportamento não relacionado. Não altere autenticação, autorização, credenciais, banco, modelos, migrations, dependências, configuração, workflows ou segurança. Não crie arquivos. Limite a dois arquivos e à menor correção possível. Não inclua markdown. JSON obrigatório: {"resumo":"curto","causa":"curta","arquivos":[{"caminho":"existente","conteudo":"arquivo integral"}],"testes":["teste objetivo"]}`,
+  }, {
+    role: "user",
+    content: `Incidente confirmado: ${JSON.stringify({ id: incidente.id, titulo: incidente.titulo, mensagem: incidente.mensagem, rota: incidente.rota, metodo: incidente.metodo, statusHttp: incidente.statusHttp, componente: incidente.componente, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, contexto: incidente.contexto }).slice(0, 10000)}\nRepositório: ${tipo}. Corrija somente se a causa estiver comprovada pelos arquivos. Se não estiver, retorne arquivos vazio.${contexto}`,
+  }], { temperature: 0.1, maxTokens: 12000, timeout: 120000, json: true })
+  return { proposta: extrairJson(resultado.text), provedor: resultado.provider, modelo: resultado.model }
+}
+
+async function prepararCorrecaoCodigo({ incidenteId, usuario }) {
+  if (usuario?.perfil !== "Administrador") throw new Error("O Modo Desenvolvedor é restrito ao administrador")
+  const incidente = await IncidenteSistema.findByPk(Number(incidenteId))
+  if (!incidente) throw new Error(`Não encontrei o incidente #${incidenteId}`)
+  const tipo = tipoRepositorio(incidente)
+  const arvore = await github.listarArvore(tipo)
+  const candidatos = selecionarCandidatos(arvore.arquivos, incidente, tipo)
+  if (!candidatos.length) throw new Error("Não consegui localizar com segurança o arquivo responsável. Registrei o diagnóstico para revisão manual")
+  const originais = []
+  for (const caminho of candidatos) originais.push(await github.lerArquivo(tipo, caminho))
+  const gerada = await gerarCorrecao({ incidente, tipo, arquivos: originais })
+  const alteracoes = validarAlteracoes(gerada.proposta, originais, tipo)
+  const identificador = `${incidente.id}-${Date.now().toString(36)}`
+  const branch = `nexa/fix-${identificador}`
+  await github.criarBranch(tipo, branch, arvore.sha)
+  const commit = await github.criarCommit(tipo, { branch, shaBase: arvore.sha, arquivos: alteracoes, mensagem: `fix(nexa): incidente #${incidente.id}` })
+  const pr = await github.criarPullRequest(tipo, {
+    branch,
+    titulo: `Nexa: corrigir incidente #${incidente.id}`,
+    descricao: `Correção preparada automaticamente pela Nexa.\n\nProblema: ${incidente.titulo}\nCausa: ${gerada.proposta.causa || "confirmada no código"}\nArquivos: ${alteracoes.map((item) => item.caminho).join(", ")}\n\nA publicação depende da confirmação do Administrador.`,
+  })
+  const fingerprint = crypto.createHash("sha256").update(`codigo:${tipo}:${pr.number}:${commit.sha}`).digest("hex")
+  const plano = await PlanoCorrecaoNexa.create({
+    incidenteId: incidente.id,
+    fingerprint,
+    titulo: `Correção de código do incidente #${incidente.id}`,
+    status: "Em testes",
+    diagnostico: String(gerada.proposta.resumo || incidente.titulo).slice(0, 1500),
+    causaRaiz: String(gerada.proposta.causa || incidente.causaProvavel || "Causa localizada no código.").slice(0, 1500),
+    escopo: { tipo, repositorio: github.configuracaoGitHub().repos[tipo], branch, pullRequest: pr.number, pullRequestUrl: pr.html_url, commit: commit.sha, arquivos: alteracoes.map((item) => item.caminho), provedor: gerada.provedor, modelo: gerada.modelo },
+    etapas: ["Diagnóstico concluído", "Correção criada em branch separada", "Pull request criado", "Testes automáticos iniciados", "Aguardar autorização do Administrador"],
+    testesPrevistos: Array.isArray(gerada.proposta.testes) ? gerada.proposta.testes.slice(0, 10) : [],
+    rollback: "Fechar o pull request sem mesclar ou reverter o commit publicado.",
+    risco: "Baixo",
+    exigeConfirmacao: true,
+    usuarioId: usuario.id,
+  })
+  await incidente.update({ status: "Em diagnóstico", diagnostico: plano.diagnostico, correcaoSugerida: `PR #${pr.number}: ${plano.diagnostico}` })
+  return { plano, pr }
+}
+
+async function atualizarStatusPlano(plano) {
+  const escopo = plano.escopo || {}
+  const pr = await github.obterPullRequest(escopo.tipo, escopo.pullRequest)
+  const runs = await github.execucoesDaBranch(escopo.tipo, escopo.branch)
+  const relevantes = runs.filter((run) => run.head_sha === escopo.commit || run.head_branch === escopo.branch)
+  const emAndamento = relevantes.some((run) => ["queued", "in_progress", "waiting", "pending"].includes(run.status))
+  const falhou = relevantes.some((run) => run.status === "completed" && run.conclusion !== "success")
+  const passou = relevantes.length > 0 && relevantes.every((run) => run.status === "completed" && run.conclusion === "success")
+  let status = plano.status
+  if (falhou) status = "Testes falharam"
+  else if (passou) status = "Aguardando publicação"
+  else if (emAndamento || !relevantes.length) status = "Em testes"
+  const resultadoTestes = { quantidade: relevantes.length, emAndamento, falhou, passou, pullRequestEstado: pr.state, verificadoEm: new Date().toISOString() }
+  if (status !== plano.status || JSON.stringify(plano.resultadoTestes) !== JSON.stringify(resultadoTestes)) await plano.update({ status, resultadoTestes })
+  return { plano, pr, resultadoTestes }
+}
+
+async function planoPendente(usuario, planoId = null) {
+  const where = { usuarioId: usuario.id, status: ["Em testes", "Aguardando publicação", "Testes falharam"] }
+  if (planoId) where.id = planoId
+  return PlanoCorrecaoNexa.findOne({ where, order: [["createdAt", "DESC"]] })
+}
+
+async function responderCodigoAutonomo({ mensagem, usuario }) {
+  const texto = normalizar(mensagem)
+  if (usuario?.perfil !== "Administrador" && /\b(github|codigo|public|modo desenvolvedor)\b/.test(texto)) return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
+  if (usuario?.perfil !== "Administrador") return null
+
+  if (/\b(status|conexao|conectad|teste)\w*\b/.test(texto) && /\b(github|repositorio|modo desenvolvedor)\b/.test(texto)) {
+    const conexao = await github.verificarConexao()
+    return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado à API e à Web. Posso preparar correções em uma área separada, testar e pedir sua autorização antes de publicar." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
+  }
+
+  const incidenteId = idNaMensagem(mensagem, "incidente")
+  if (incidenteId && /\b(corrij|correcao|prepare|resolver|consert)\w*\b/.test(texto)) {
+    const { plano, pr } = await prepararCorrecaoCodigo({ incidenteId, usuario })
+    return { resposta: `Preparei a correção do incidente #${incidenteId} em uma área separada e iniciei os testes. Ainda não publiquei nada. Plano #${plano.id}.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, pullRequest: pr.number }
+  }
+
+  const planoId = idNaMensagem(mensagem, "plano")
+  if (/\b(status|resultado|teste|pronto|publicar|publique|publicacao)\w*\b/.test(texto)) {
+    const plano = await planoPendente(usuario, planoId)
+    if (!plano) return /\b(publicar|publique|publicacao)\w*\b/.test(texto) ? { resposta: "Não há correção de código pronta para publicar.", modo: "nexa-dev-codigo" } : null
+    const estado = await atualizarStatusPlano(plano)
+    if (/\b(publicar|publique|autorizo|confirmo)\w*\b/.test(texto)) {
+      if (estado.plano.status !== "Aguardando publicação") return { resposta: estado.plano.status === "Testes falharam" ? "Não vou publicar: os testes falharam. A correção precisa ser refeita." : "Os testes ainda não terminaram. Não publiquei nada.", modo: "nexa-dev-codigo", planoCodigoId: plano.id }
+      const merge = await github.publicarPullRequest(estado.plano.escopo.tipo, estado.plano.escopo.pullRequest, `Nexa: publicar plano #${plano.id}`)
+      if (!merge?.merged) throw new Error(merge?.message || "O GitHub não confirmou a publicação")
+      await estado.plano.update({ status: "Publicado", aprovadoEm: new Date(), executadoEm: new Date() })
+      await IncidenteSistema.update({ status: "Em diagnóstico", correcao: `Plano #${plano.id} publicado; aguardando validação da nova versão.` }, { where: { id: plano.incidenteId } })
+      return { resposta: `Publicação autorizada. A correção do plano #${plano.id} foi enviada e agora estou aguardando a nova versão entrar no ar.`, modo: "nexa-dev-codigo", atividade: "publicacao-codigo", planoCodigoId: plano.id }
+    }
+    if (estado.plano.status === "Aguardando publicação") return { resposta: `Os testes do plano #${plano.id} passaram. A correção está pronta. Deseja publicar?`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, aguardaConfirmacaoPublicacao: true }
+    if (estado.plano.status === "Testes falharam") return { resposta: `Os testes do plano #${plano.id} falharam. Não publicarei essa correção.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
+    return { resposta: `Os testes do plano #${plano.id} ainda estão em andamento. Nada foi publicado.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
+  }
+  return null
+}
+
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson }

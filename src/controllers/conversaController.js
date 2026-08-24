@@ -2055,7 +2055,7 @@ async function naturalizarResultadoSistema({
   const consultaPendencias = tipoConsulta === "pendencias-gerais"
   const consultaNovidades = ["pagamentos-hoje", "resolvidas-hoje"].includes(tipoConsulta)
   const consultaComListaCompleta = consultaPrioridades || consultaPendencias || consultaNovidades || ["mensagens-pendentes", "documentos-pendentes"].includes(tipoConsulta)
-  const atividadeDesenvolvedor = ["modo-desenvolvedor", "incidentes", "plano-correcao", "saude-sistema"].includes(atividade)
+  const atividadeDesenvolvedor = ["modo-desenvolvedor", "incidentes", "plano-correcao", "saude-sistema", "correcao-codigo", "publicacao-codigo"].includes(atividade)
   const pedidoDetalheTecnico = atividadeDesenvolvedor && /\b(detalh\w*|tecnic\w*|categoria|risco|confianca|rota|latencia|milissegundo|causa raiz|log|codigo)\b/.test(normalizar(mensagem))
   const instrucaoAtividade = atividade === "navegacao"
     ? "A navegação indicada em ACAO CONFIRMADA será executada logo após sua resposta. Confirme de forma breve e natural, sem dizer 'com segurança', 'comando concluído' ou frases técnicas."
@@ -2730,6 +2730,24 @@ async function conversar(req, res) {
       }
     }
 
+    // O Modo Desenvolvedor vem antes da conversa aberta para que confirmações
+    // de publicação nunca sejam absorvidas pela IA conversacional.
+    const modoDesenvolvedor = await responderModoDesenvolvedor({ mensagem, usuario: usuarioCompleto })
+    if (modoDesenvolvedor) {
+      const respostaDesenvolvedor = await naturalizarResultadoSistema({
+        mensagem,
+        nomeUsuario,
+        historico,
+        resultado: modoDesenvolvedor,
+        origem,
+        paginaAtual,
+        clienteAtual: clienteAtualResumo,
+        atividade: modoDesenvolvedor.atividade || "modo-desenvolvedor",
+      })
+      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDesenvolvedor.resposta, dados: respostaDesenvolvedor })
+      return res.json(anexarMetadadosConversa({ ...respostaDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
+    }
+
     // Perguntas abertas passam pelo núcleo agente. Quando a intenção exige uma
     // ação, ele devolve o controle aos fluxos operacionais seguros existentes.
     const respostaAgente = await executarNexaAgent({
@@ -2753,22 +2771,6 @@ async function conversar(req, res) {
     if (autodiagnostico) {
       await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: autodiagnostico.resposta, dados: autodiagnostico })
       return res.json(anexarMetadadosConversa({ ...autodiagnostico, respondidoEm: new Date().toISOString() }, conversa))
-    }
-
-    const modoDesenvolvedor = await responderModoDesenvolvedor({ mensagem, usuario: usuarioCompleto })
-    if (modoDesenvolvedor) {
-      const respostaDesenvolvedor = await naturalizarResultadoSistema({
-        mensagem,
-        nomeUsuario,
-        historico,
-        resultado: modoDesenvolvedor,
-        origem,
-        paginaAtual,
-        clienteAtual: clienteAtualResumo,
-        atividade: modoDesenvolvedor.atividade || "modo-desenvolvedor",
-      })
-      await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDesenvolvedor.resposta, dados: respostaDesenvolvedor })
-      return res.json(anexarMetadadosConversa({ ...respostaDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
     }
 
     const consultaIncidentes = await consultarIncidentesPelaNexa({ mensagem, usuario: usuarioCompleto })

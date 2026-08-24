@@ -1,0 +1,34 @@
+name: Nexa - Validar correção
+
+on:
+  push:
+    branches:
+      - "nexa/**"
+
+permissions:
+  contents: read
+
+jobs:
+  testar-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar código sem manter credencial
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci --ignore-scripts
+
+      - name: Testar API
+        env:
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+        run: npm test
