@@ -9,6 +9,7 @@ const ServicoAvulso = require("../models/ServicoAvulso")
 const Usuario = require("../models/Usuario")
 const ConversaNexa = require("../models/ConversaNexa")
 const MensagemNexa = require("../models/MensagemNexa")
+const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 const { detectarConsultaInteligente, responderConfirmacaoCliente } = require("../services/consultaInteligenteService")
 const { classificarMensagemOperacional } = require("../services/nexaRouterService")
 const {
@@ -1425,11 +1426,17 @@ async function ultimaAcaoGuiadaPendente(conversaId, usuarioId) {
 
 async function ultimoPlanoCorrecaoPendente(conversaId, usuarioId) {
   if (!conversaId) return null
-  const ultimaResposta = await MensagemNexa.findOne({
+  const respostasRecentes = await MensagemNexa.findAll({
     where: { conversaId, usuarioId, autor: "nexa" },
     order: [["createdAt", "DESC"], ["id", "DESC"]],
+    limit: 20,
   })
-  return ultimaResposta?.dados?.planoCorrecaoPendente || null
+  const candidato = respostasRecentes.find((item) => item?.dados?.planoCorrecaoPendente)?.dados?.planoCorrecaoPendente || null
+  if (!candidato?.planoId) return null
+  const plano = await PlanoCorrecaoNexa.findOne({
+    where: { id: candidato.planoId, usuarioId, status: "Aguardando confirmação" },
+  })
+  return plano ? candidato : null
 }
 
 async function ultimaConfirmacaoNavegacaoPendente(conversaId, usuarioId) {
