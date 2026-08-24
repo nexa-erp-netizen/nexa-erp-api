@@ -77,15 +77,9 @@ function anexarCoberturaObrigatoria(texto, cobertura) {
   const base = String(texto || "").trim()
   if (!cobertura) return base
   if (cobertura.indisponiveis.length) {
-    const modulos = cobertura.indisponiveis.map((item) => item.modulo).join(", ")
-    return `${base}\n\nA análise ainda está incompleta porque não consegui verificar: ${modulos}. Posso investigar a falha de acesso e preparar a correção; deseja que eu continue?`
+    return `${base}\n\nNão consegui consultar todas as áreas, então esta análise ainda não está completa. Nenhum dado foi alterado.`
   }
-  const escopo = cobertura.categorias.length ? cobertura.categorias.join(", ") : "os demais módulos vinculados"
-  if (cobertura.abertos.length) {
-    const achados = cobertura.abertos.map((item) => `${item.modulo}: ${item.quantidade}`).join("; ")
-    return `${base}\n\nTambém conferi ${escopo}. Existem registros ainda abertos em: ${achados}. Posso analisar esses registros e preparar a correção necessária; deseja que eu continue?`
-  }
-  return `${base}\n\nA análise foi completa: também conferi ${escopo} e não encontrei outro registro aberto.`
+  return base
 }
 
 function montarResposta(texto, execucao, ferramentas, permitirDetalhes, revisao = null, extras = {}) {
