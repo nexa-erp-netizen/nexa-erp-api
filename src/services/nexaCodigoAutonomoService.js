@@ -26,6 +26,18 @@ function pedidoPrepararCodigo(mensagem) {
   return pede && !proibe
 }
 
+function pedidoPublicarCodigo(mensagem) {
+  const texto = normalizar(mensagem)
+  const pede = /\b(publicar|publique|publicacao|autorizo|confirmo)\w*\b/.test(texto)
+  const proibe = /\b(?:nao|sem)\b[\s\S]{0,45}\b(?:publique|publicar|publicacao|altere|alterar)\w*\b/.test(texto)
+  return pede && !proibe
+}
+
+function pedidoStatusCodigo(mensagem) {
+  const texto = normalizar(mensagem)
+  return /\b(status|resultado|teste|pronto)\w*\b/.test(texto) || pedidoPublicarCodigo(mensagem)
+}
+
 function tipoRepositorio(incidente) {
   const texto = normalizar(`${incidente.origem} ${incidente.categoria} ${incidente.componente} ${incidente.mensagem}`)
   return /\b(web|interface|layout|react|vite|jsx|css|tela|componente)\b/.test(texto) ? "web" : "api"
@@ -171,11 +183,12 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   }
 
   const planoId = idNaMensagem(mensagem, "plano")
-  if (/\b(status|resultado|teste|pronto|publicar|publique|publicacao)\w*\b/.test(texto)) {
+  if (pedidoStatusCodigo(mensagem)) {
+    const querPublicar = pedidoPublicarCodigo(mensagem)
     const plano = await planoPendente(usuario, planoId)
-    if (!plano) return /\b(publicar|publique|publicacao)\w*\b/.test(texto) ? { resposta: "Não há correção de código pronta para publicar.", modo: "nexa-dev-codigo" } : null
+    if (!plano) return querPublicar ? { resposta: "Não há correção de código pronta para publicar.", modo: "nexa-dev-codigo" } : null
     const estado = await atualizarStatusPlano(plano)
-    if (/\b(publicar|publique|autorizo|confirmo)\w*\b/.test(texto)) {
+    if (querPublicar) {
       if (estado.plano.status !== "Aguardando publicação") return { resposta: estado.plano.status === "Testes falharam" ? "Não vou publicar: os testes falharam. A correção precisa ser refeita." : "Os testes ainda não terminaram. Não publiquei nada.", modo: "nexa-dev-codigo", planoCodigoId: plano.id }
       const merge = await github.publicarPullRequest(estado.plano.escopo.tipo, estado.plano.escopo.pullRequest, `Nexa: publicar plano #${plano.id}`)
       if (!merge?.merged) throw new Error(merge?.message || "O GitHub não confirmou a publicação")
@@ -190,4 +203,4 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   return null
 }
 
-module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo }
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo }

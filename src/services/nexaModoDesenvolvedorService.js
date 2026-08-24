@@ -93,6 +93,44 @@ async function criarPlanoCorrecao({ incidente, usuario }) {
   })
 }
 
+function avaliarNaturezaIncidente(incidente, saude, agora = new Date()) {
+  const texto = normalizar(`${incidente.titulo} ${incidente.mensagem} ${incidente.categoria} ${incidente.causaProvavel}`)
+  const statusHttp = Number(incidente.statusHttp || 0)
+  const ultima = incidente.ultimaOcorrenciaEm ? new Date(incidente.ultimaOcorrenciaEm) : null
+  const minutosSemRepetir = ultima && !Number.isNaN(ultima.getTime())
+    ? Math.max(0, Math.floor((agora.getTime() - ultima.getTime()) / 60000))
+    : null
+  const sinalTemporario = [502, 503, 504].includes(statusHttp)
+    || /timeout|timed out|tempo de resposta|servico dependente|indisponivel|falha ao acessar/.test(texto)
+  const sistemaSaudavel = saude?.api === "online" && saude?.banco === "conectado" && Number(saude?.incidentesCriticos || 0) === 0
+  const semRepeticaoRecente = minutosSemRepetir !== null && minutosSemRepetir >= 15
+  if (sinalTemporario && sistemaSaudavel && semRepeticaoRecente) {
+    return {
+      tipo: "Falha temporária",
+      conclusao: `A comunicação falhou naquele momento, mas o serviço está funcionando agora e o erro não se repetiu nos últimos ${minutosSemRepetir} minutos.`,
+      precisaCorrecaoCodigo: false,
+      recomendacao: "Não há correção de código para publicar. Vou manter o incidente registrado e reabri-lo automaticamente se a falha voltar.",
+      minutosSemRepetir,
+    }
+  }
+  if (Number(incidente.ocorrencias || 0) > 1) {
+    return {
+      tipo: "Falha recorrente",
+      conclusao: `A falha ocorreu ${incidente.ocorrencias} vezes e precisa ser relacionada ao log e ao arquivo responsável antes de qualquer alteração.`,
+      precisaCorrecaoCodigo: true,
+      recomendacao: "Posso preparar a correção em uma área separada quando a causa estiver comprovada, sem publicar sem autorização.",
+      minutosSemRepetir,
+    }
+  }
+  return {
+    tipo: incidente.tipoFalha || "Em investigação",
+    conclusao: incidente.causaProvavel || incidente.diagnostico || "Ainda não há evidência suficiente para afirmar se o problema está no código ou em um serviço externo.",
+    precisaCorrecaoCodigo: null,
+    recomendacao: "Nenhuma correção foi preparada. É necessário correlacionar o horário da falha com o log antes de alterar o sistema.",
+    minutosSemRepetir,
+  }
+}
+
 async function responderModoDesenvolvedor({ mensagem, usuario }) {
   if (!pareceComandoDesenvolvedor(mensagem)) return null
   if (usuario?.perfil !== "Administrador") return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
@@ -113,16 +151,16 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
     const pedePlano = /\b(plano de correcao|prepare|preparar|corrija|corrigir|consertar|resolver)\b/.test(texto)
       && !/\b(?:nao|sem)\b[\s\S]{0,45}\b(?:prepare|preparar|corrija|corrigir|correcao|publique|publicar|altere|alterar)\b/.test(texto)
     if (!pedePlano) {
-      const classificacao = incidente.tipoFalha || incidente.categoria || "em análise"
-      const causa = incidente.causaProvavel || incidente.diagnostico || "a causa ainda não foi confirmada pelos registros disponíveis"
+      const saude = await diagnosticoSaude()
+      const natureza = avaliarNaturezaIncidente(incidente, saude)
       return {
-        resposta: `O incidente #${incidente.id} foi classificado como ${classificacao}. ${causa}. Não preparei nem publiquei nenhuma correção.`,
+        resposta: `O incidente #${incidente.id} foi classificado como ${natureza.tipo}. ${natureza.conclusao} ${natureza.recomendacao}`,
         modo: "nexa-dev-diagnostico",
         atividade: "plano-correcao",
         provedor: "sistema",
         modelo: "Nexa Developer 1.1",
         incidenteId: incidente.id,
-        incidente: { id: incidente.id, titulo: incidente.titulo, status: incidente.status, tipoFalha: incidente.tipoFalha, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, diagnostico: incidente.diagnostico },
+        incidente: { id: incidente.id, titulo: incidente.titulo, status: incidente.status, tipoFalha: natureza.tipo, categoria: incidente.categoria, causaProvavel: natureza.conclusao, diagnostico: incidente.diagnostico, precisaCorrecaoCodigo: natureza.precisaCorrecaoCodigo },
       }
     }
     const plano = await criarPlanoCorrecao({ incidente, usuario })
@@ -148,4 +186,4 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
   }
 }
 
-module.exports = { responderModoDesenvolvedor, pareceComandoDesenvolvedor, diagnosticoSaude, criarPlanoCorrecao }
+module.exports = { responderModoDesenvolvedor, pareceComandoDesenvolvedor, diagnosticoSaude, criarPlanoCorrecao, avaliarNaturezaIncidente }
