@@ -2734,16 +2734,22 @@ async function conversar(req, res) {
     // de publicação nunca sejam absorvidas pela IA conversacional.
     const modoDesenvolvedor = await responderModoDesenvolvedor({ mensagem, usuario: usuarioCompleto })
     if (modoDesenvolvedor) {
-      const respostaDesenvolvedor = await naturalizarResultadoSistema({
-        mensagem,
-        nomeUsuario,
-        historico,
-        resultado: modoDesenvolvedor,
-        origem,
-        paginaAtual,
-        clienteAtual: clienteAtualResumo,
-        atividade: modoDesenvolvedor.atividade || "modo-desenvolvedor",
-      })
+      // Conexão, testes e publicação são resultados de segurança. A resposta
+      // deve permanecer literal para a IA conversacional não acrescentar uma
+      // condição que contradiga o estado confirmado pelo GitHub.
+      const respostaLiteralDesenvolvedor = ["nexa-dev-github", "nexa-dev-codigo"].includes(modoDesenvolvedor.modo)
+      const respostaDesenvolvedor = respostaLiteralDesenvolvedor
+        ? { ...modoDesenvolvedor, conversacionalV2: true, respostaLiteral: true, ...(origem === "voz" ? { fala: modoDesenvolvedor.resposta } : {}) }
+        : await naturalizarResultadoSistema({
+          mensagem,
+          nomeUsuario,
+          historico,
+          resultado: modoDesenvolvedor,
+          origem,
+          paginaAtual,
+          clienteAtual: clienteAtualResumo,
+          atividade: modoDesenvolvedor.atividade || "modo-desenvolvedor",
+        })
       await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaDesenvolvedor.resposta, dados: respostaDesenvolvedor })
       return res.json(anexarMetadadosConversa({ ...respostaDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
     }
