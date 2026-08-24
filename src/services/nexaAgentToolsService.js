@@ -3,6 +3,7 @@ const sequelize = require("../config/database")
 const Cliente = require("../models/Cliente")
 const IncidenteSistema = require("../models/IncidenteSistema")
 const { prepararCorrecao } = require("./nexaCorrecaoAutonomaService")
+const { detectarInconsistenciasCliente } = require("./nexaInconsistenciasService")
 
 const CAMPOS_SENSIVEIS = /(senha|password|token|secret|chave|certificado|credencial|arquivo|anexo|conteudo|dadosCriptografados|cpf|cnpj|email|telefone|endereco)/i
 const MODELOS_BLOQUEADOS = new Set(["Usuario", "CredencialAcessoFiscal", "CertificadoDigital", "GoogleDriveConexao", "ExecucaoAgenteNexa"])
@@ -24,6 +25,7 @@ function definicoesFerramentas() {
     { nome: "consultar_modulo", descricao: "Consulta registros de qualquer módulo autorizado do ERP sem alterar dados.", parametros: { modulo: "nome exato vindo do mapa", clienteId: "opcional", status: "opcional", termo: "opcional", limite: "1 a 50" } },
     { nome: "buscar_clientes", descricao: "Localiza clientes por nome.", parametros: { termo: "texto opcional" } },
     { nome: "contexto_completo_cliente", descricao: "Cruza cadastro e todos os módulos autorizados vinculados ao cliente. Use antes de concluir uma análise geral da situação de um cliente.", parametros: { clienteId: "opcional se houver cliente atual", nome: "opcional para localizar pelo nome" } },
+    { nome: "detectar_inconsistencias_cliente", descricao: "Cruza Financeiro, serviços, DAS, Fiscal, movimentos e lançamentos do cliente e aponta divergências comprováveis. Não altera dados.", parametros: { clienteId: "opcional se houver cliente atual", nome: "opcional para localizar pelo nome" } },
     { nome: "listar_incidentes", descricao: "Lista incidentes abertos, todos ou um incidente específico.", parametros: { status: "abertos|todos", incidenteId: "opcional" } },
     { nome: "verificar_saude_sistema", descricao: "Verifica API, banco e incidentes recentes.", parametros: {} },
     { nome: "preparar_correcao_registro", descricao: "Prepara, mas não executa, uma correção operacional após investigar e comprovar a divergência. Restrita ao administrador e a campos seguros; valores e exclusões são proibidos.", parametros: { modelo: "módulo exato", registroId: "ID comprovado", alteracoes: "objeto com campos seguros", justificativa: "causa comprovada" } },
@@ -154,6 +156,20 @@ async function listarIncidentes(argumentos, contexto) {
   return { total: itens.length, incidentes: itens.map((item) => ({ id: item.id, titulo: item.titulo, status: item.status, nivel: item.nivel, ocorrencias: item.ocorrencias, causa: item.causaProvavel || item.diagnostico, correcaoSugerida: item.correcaoSugerida, ultimaOcorrenciaEm: item.ultimaOcorrenciaEm })) }
 }
 
+async function detectarInconsistencias(argumentos, contexto) {
+  if (contexto?.usuario?.perfil !== "Administrador") throw new Error("Acesso restrito ao administrador")
+  let clienteId = Number(argumentos?.clienteId || contexto?.clienteId)
+  let cliente = Number.isInteger(clienteId) && clienteId > 0 ? await Cliente.findByPk(clienteId) : null
+  const nomeBuscado = normalizar(argumentos?.nome)
+  if (!cliente && nomeBuscado) {
+    const candidatos = await Cliente.findAll({ order: [["nome", "ASC"]], limit: 100 })
+    cliente = candidatos.find((item) => normalizar(nomeCliente(item)).includes(nomeBuscado)) || null
+    clienteId = Number(cliente?.id)
+  }
+  if (!cliente) throw new Error("Cliente não localizado para análise")
+  return detectarInconsistenciasCliente({ clienteId, clienteNome: nomeCliente(cliente) })
+}
+
 async function verificarSaude(_argumentos, contexto) {
   if (contexto?.usuario?.perfil !== "Administrador") throw new Error("Acesso restrito ao administrador")
   const inicio = Date.now()
@@ -179,7 +195,7 @@ async function prepararCorrecaoRegistro(argumentos, contexto) {
   return { proposta, executada: false, exigeConfirmacao: true }
 }
 
-const EXECUTORES = { mapear_sistema: mapearSistema, consultar_modulo: consultarModulo, buscar_clientes: buscarClientes, contexto_completo_cliente: contextoCompletoCliente, listar_incidentes: listarIncidentes, verificar_saude_sistema: verificarSaude, preparar_correcao_registro: prepararCorrecaoRegistro }
+const EXECUTORES = { mapear_sistema: mapearSistema, consultar_modulo: consultarModulo, buscar_clientes: buscarClientes, contexto_completo_cliente: contextoCompletoCliente, detectar_inconsistencias_cliente: detectarInconsistencias, listar_incidentes: listarIncidentes, verificar_saude_sistema: verificarSaude, preparar_correcao_registro: prepararCorrecaoRegistro }
 
 async function executarFerramenta(nome, argumentos, contexto) {
   const executor = EXECUTORES[nome]
