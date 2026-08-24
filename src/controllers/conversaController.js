@@ -2699,6 +2699,30 @@ async function conversar(req, res) {
       return res.json(anexarMetadadosConversa({ ...respostaDocumento, respondidoEm: new Date().toISOString() }, conversa))
     }
 
+    // Dados cadastrais autorizados devem ser consultados diretamente no ERP
+    // antes do núcleo generativo. Isso evita que um provedor de IA recuse CPF,
+    // CNPJ ou contato mesmo quando o Administrador possui acesso ao cadastro.
+    const pedidoCadastroProtegido = /\b(cpf|cnpj|telefone|celular|whatsapp|e-mail|email|enderec\w*|cep|data de nascimento|hist[oó]rico|anota[cç][oõ]es?)\b/i.test(mensagem)
+    if (pedidoCadastroProtegido) {
+      const consultaCadastro = await detectarConsultaInteligente({
+        mensagem,
+        clienteId: clienteId || conversa.clienteId || null,
+        usuario: usuarioCompleto,
+      })
+      if (consultaCadastro) {
+        const respostaCadastro = {
+          ...consultaCadastro,
+          conversacionalV2: true,
+          atividade: "consulta-cadastral-protegida",
+          provedor: "sistema",
+          modelo: "Nexa Consulta Autorizada 1.1",
+          respondidoEm: new Date().toISOString(),
+        }
+        await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaCadastro.resposta, dados: respostaCadastro })
+        return res.json(anexarMetadadosConversa(respostaCadastro, conversa))
+      }
+    }
+
     // Perguntas abertas passam pelo núcleo agente. Quando a intenção exige uma
     // ação, ele devolve o controle aos fluxos operacionais seguros existentes.
     const respostaAgente = await executarNexaAgent({
