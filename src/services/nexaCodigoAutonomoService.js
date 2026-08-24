@@ -177,7 +177,7 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
 
   if (/\b(status|conexao|conectad|teste)\w*\b/.test(texto) && /\b(github|repositorio|modo desenvolvedor)\b/.test(texto)) {
     const conexao = await github.verificarConexao()
-    return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado à API e à Web. Posso preparar correções em uma área separada, testar e pedir sua autorização antes de publicar." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
+    return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado.\n\n- **API:** repositório disponível.\n- **Web:** repositório disponível.\n- **Publicação:** somente depois dos testes e da sua autorização." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
   }
 
   const incidenteId = idNaMensagem(mensagem, "incidente")

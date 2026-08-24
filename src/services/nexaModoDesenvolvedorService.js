@@ -157,7 +157,7 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
       const saude = await diagnosticoSaude()
       const natureza = avaliarNaturezaIncidente(incidente, saude)
       return {
-        resposta: `O incidente #${incidente.id} foi classificado como ${natureza.tipo}. ${natureza.conclusao} ${natureza.recomendacao}`,
+        resposta: `Analisei o incidente #${incidente.id}.\n\n- **Tipo:** ${natureza.tipo}.\n- **Situação atual:** ${natureza.conclusao}\n- **Correção:** ${natureza.recomendacao}`,
         modo: "nexa-dev-diagnostico",
         atividade: "plano-correcao",
         provedor: "sistema",
