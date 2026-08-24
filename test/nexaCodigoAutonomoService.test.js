@@ -6,11 +6,18 @@ const {
   selecionarCandidatos,
   validarAlteracoes,
   tipoRepositorio,
+  pedidoPrepararCodigo,
 } = require("../src/services/nexaCodigoAutonomoService")
 
 test("separa incidentes da Web e da API", () => {
   assert.equal(tipoRepositorio({ origem: "web", categoria: "Interface", componente: "Clientes.jsx" }), "web")
   assert.equal(tipoRepositorio({ origem: "api", categoria: "Runtime", componente: "conversaController.js" }), "api")
+})
+
+test("negação impede preparar ou publicar correção", () => {
+  assert.equal(pedidoPrepararCodigo("Prepare a correção do incidente #3"), true)
+  assert.equal(pedidoPrepararCodigo("Diagnostique o incidente #3. Não prepare nem publique correção"), false)
+  assert.equal(pedidoPrepararCodigo("Analise o erro sem alterar nem preparar correção"), false)
 })
 
 test("permite código comum e bloqueia áreas sensíveis", () => {

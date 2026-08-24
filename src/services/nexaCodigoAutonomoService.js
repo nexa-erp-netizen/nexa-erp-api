@@ -19,6 +19,13 @@ function idNaMensagem(mensagem, tipo = "incidente") {
   return Number(String(mensagem || "").match(padrao)?.[1]) || null
 }
 
+function pedidoPrepararCodigo(mensagem) {
+  const texto = normalizar(mensagem)
+  const pede = /\b(corrij|correcao|prepare|resolver|consert)\w*\b/.test(texto)
+  const proibe = /\b(?:nao|sem)\b[\s\S]{0,45}\b(?:prepare|preparar|corrij|correcao|publique|publicar|altere|alterar)\w*\b/.test(texto)
+  return pede && !proibe
+}
+
 function tipoRepositorio(incidente) {
   const texto = normalizar(`${incidente.origem} ${incidente.categoria} ${incidente.componente} ${incidente.mensagem}`)
   return /\b(web|interface|layout|react|vite|jsx|css|tela|componente)\b/.test(texto) ? "web" : "api"
@@ -158,7 +165,7 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   }
 
   const incidenteId = idNaMensagem(mensagem, "incidente")
-  if (incidenteId && /\b(corrij|correcao|prepare|resolver|consert)\w*\b/.test(texto)) {
+  if (incidenteId && pedidoPrepararCodigo(mensagem)) {
     const { plano, pr } = await prepararCorrecaoCodigo({ incidenteId, usuario })
     return { resposta: `Preparei a correção do incidente #${incidenteId} em uma área separada e iniciei os testes. Ainda não publiquei nada. Plano #${plano.id}.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, pullRequest: pr.number }
   }
@@ -183,4 +190,4 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   return null
 }
 
-module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson }
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo }

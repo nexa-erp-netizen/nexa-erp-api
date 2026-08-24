@@ -2737,7 +2737,7 @@ async function conversar(req, res) {
       // Conexão, testes e publicação são resultados de segurança. A resposta
       // deve permanecer literal para a IA conversacional não acrescentar uma
       // condição que contradiga o estado confirmado pelo GitHub.
-      const respostaLiteralDesenvolvedor = ["nexa-dev-github", "nexa-dev-codigo"].includes(modoDesenvolvedor.modo)
+      const respostaLiteralDesenvolvedor = ["nexa-dev-github", "nexa-dev-codigo", "nexa-dev-diagnostico"].includes(modoDesenvolvedor.modo)
       const respostaDesenvolvedor = respostaLiteralDesenvolvedor
         ? { ...modoDesenvolvedor, conversacionalV2: true, respostaLiteral: true, ...(origem === "voz" ? { fala: modoDesenvolvedor.resposta } : {}) }
         : await naturalizarResultadoSistema({

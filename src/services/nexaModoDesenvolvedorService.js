@@ -109,8 +109,23 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
     const IncidenteSistema = require("../models/IncidenteSistema")
     const incidente = await IncidenteSistema.findByPk(solicitado)
     if (!incidente) return { resposta: `Não encontrei o incidente #${solicitado}.`, modo: "nexa-dev" }
-    const plano = await criarPlanoCorrecao({ incidente, usuario })
     await incidente.update({ status: incidente.status === "Aberto" ? "Em diagnóstico" : incidente.status })
+    const pedePlano = /\b(plano de correcao|prepare|preparar|corrija|corrigir|consertar|resolver)\b/.test(texto)
+      && !/\b(?:nao|sem)\b[\s\S]{0,45}\b(?:prepare|preparar|corrija|corrigir|correcao|publique|publicar|altere|alterar)\b/.test(texto)
+    if (!pedePlano) {
+      const classificacao = incidente.tipoFalha || incidente.categoria || "em análise"
+      const causa = incidente.causaProvavel || incidente.diagnostico || "a causa ainda não foi confirmada pelos registros disponíveis"
+      return {
+        resposta: `O incidente #${incidente.id} foi classificado como ${classificacao}. ${causa}. Não preparei nem publiquei nenhuma correção.`,
+        modo: "nexa-dev-diagnostico",
+        atividade: "plano-correcao",
+        provedor: "sistema",
+        modelo: "Nexa Developer 1.1",
+        incidenteId: incidente.id,
+        incidente: { id: incidente.id, titulo: incidente.titulo, status: incidente.status, tipoFalha: incidente.tipoFalha, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, diagnostico: incidente.diagnostico },
+      }
+    }
+    const plano = await criarPlanoCorrecao({ incidente, usuario })
     return {
       resposta: `Diagnostiquei o incidente #${incidente.id}: ${incidente.titulo}. Causa provável: ${incidente.causaProvavel || incidente.diagnostico || "a reprodução controlada ainda é necessária"}. Preparei o plano #${plano.id} com ${plano.etapas.length} etapas e ${plano.testesPrevistos.length} testes. Nenhuma alteração foi executada ainda.`,
       modo: "nexa-modo-desenvolvedor",
