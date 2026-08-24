@@ -6,6 +6,8 @@ const Financeiro = require("../models/Financeiro")
 const DocumentoDigital = require("../models/DocumentoDigital")
 const IncidenteSistema = require("../models/IncidenteSistema")
 const MelhoriaNexa = require("../models/MelhoriaNexa")
+const { version: NEXA_API_VERSION } = require("../../package.json")
+const aiProvider = require("./nexaAiProviderService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const MODELO = process.env.GROQ_PRODUCT_MODEL || "qwen/qwen3.6-27b"
@@ -44,7 +46,7 @@ async function snapshotSistema() {
     IncidenteSistema.findAll({ where: { status: "Aberto" }, attributes: ["titulo", "categoria", "nivel", "ocorrencias", "componente"], order: [["ultimaOcorrenciaEm", "DESC"]], limit: 12 }),
   ])
   return {
-    versao: "3.39.0",
+    versao: NEXA_API_VERSION,
     modulos: MODULOS,
     volumes: { clientes, usuarios, obrigacoesFiscais: fiscais, registrosFinanceiros: financeiros, documentos },
     incidentesAbertos: incidentesAbertos.map((item) => item.toJSON()),
@@ -74,6 +76,29 @@ async function salvarSugestoes(itens, contexto) {
   }
 }
 
+function normalizarAnaliseProduto(conteudo) {
+  const itens = (Array.isArray(conteudo?.itens) ? conteudo.itens : []).slice(0, 8).map((item) => ({
+    categoria: normalizarNivel(item.categoria, ["Manter", "Melhorar", "Acrescentar", "Remover/Unificar"], "Melhorar"),
+    titulo: String(item.titulo || "Melhoria sugerida").trim().slice(0, 180),
+    descricao: String(item.descricao || "").trim().slice(0, 1200),
+    justificativa: String(item.justificativa || "").trim().slice(0, 1200),
+    prioridade: normalizarNivel(item.prioridade, ["Crítica", "Alta", "Média", "Baixa"], "Média"),
+    impacto: normalizarNivel(item.impacto, ["Alto", "Médio", "Baixo"], "Médio"),
+    esforco: normalizarNivel(item.esforco, ["Alto", "Médio", "Baixo"], "Médio"),
+  })).filter((item) => item.descricao)
+  const resumo = String(conteudo?.resumo || "Analisei o sistema e organizei as principais oportunidades.").trim().slice(0, 1200)
+  return { itens, resumo }
+}
+
+async function analisarComProvedorPrincipal({ mensagem, usuario, paginaAtual, clienteId, snapshot }) {
+  const formato = `{"resumo":"opinião geral em até 3 frases","itens":[{"categoria":"Manter|Melhorar|Acrescentar|Remover/Unificar","titulo":"curto","descricao":"ação concreta","justificativa":"evidência","prioridade":"Crítica|Alta|Média|Baixa","impacto":"Alto|Médio|Baixo","esforco":"Alto|Médio|Baixo"}]}`
+  const prompt = `Você é a Nexa Analista de Produto do ERP contábil Nexa. Dê uma opinião própria, crítica e útil baseada somente nos dados fornecidos. Gere de 4 a 8 recomendações sem repetir ideias e priorize redução de erros e trabalho manual. Retorne apenas JSON no formato ${formato}.\nPedido: ${String(mensagem).slice(0, 1200)}\nPágina atual: ${String(paginaAtual || "não informada").slice(0, 120)}\nDados do sistema: ${JSON.stringify(snapshot)}`
+  const gerada = await aiProvider.generate([{ role: "user", content: prompt }], { temperature: 0.35, maxTokens: 1700, timeout: 90000, json: true })
+  const { itens, resumo } = normalizarAnaliseProduto(JSON.parse(String(gerada.text || "{}")))
+  await salvarSugestoes(itens, { origem: "conversa", pagina: paginaAtual || null, clienteId: clienteId || null, usuarioId: usuario.id })
+  return { resposta: respostaFormatada(resumo, itens), fala: resumo, melhorias: itens, atividade: "analise-produto", provedor: gerada.provider, modelo: gerada.model }
+}
+
 async function analisarProdutoPelaNexa({ mensagem, usuario, paginaAtual, clienteId }) {
   if (!parecePedidoAnaliseProduto(mensagem)) return null
   if (/\b(registrad|salv|central de melhorias|sugestoes existentes|melhorias existentes)\w*/i.test(String(mensagem))) {
@@ -88,9 +113,11 @@ async function analisarProdutoPelaNexa({ mensagem, usuario, paginaAtual, cliente
       modelo: "Central de Melhorias Nexa 1.0",
     }
   }
-  if (!process.env.GROQ_API_KEY) return { resposta: "A análise de produto está temporariamente indisponível.", providerFailure: true }
-
   const snapshot = await snapshotSistema()
+  if (aiProvider.providerOrder().length) {
+    return analisarComProvedorPrincipal({ mensagem, usuario, paginaAtual, clienteId, snapshot })
+  }
+  if (!process.env.GROQ_API_KEY) return { resposta: "A análise de produto está temporariamente indisponível.", providerFailure: true }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 90000)
   let resposta

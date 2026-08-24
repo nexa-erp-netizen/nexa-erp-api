@@ -4,6 +4,7 @@ const { autenticar, autorizarPerfis } = require("../middlewares/authMiddleware")
 const IncidenteSistema = require("../models/IncidenteSistema")
 const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 const ExecucaoAgenteNexa = require("../models/ExecucaoAgenteNexa")
+const { version: NEXA_API_VERSION } = require("../../package.json")
 
 const router = express.Router()
 router.use(autenticar, autorizarPerfis("Administrador"))
@@ -43,7 +44,7 @@ router.post("/pacote", async (req, res) => {
       formato: "nexa-diagnostico-chatgpt",
       versaoFormato: 1,
       geradoEm: new Date().toISOString(),
-      sistema: { produto: "Nexa ERP", versaoApi: "3.39.1", ambiente: process.env.NODE_ENV || "production" },
+      sistema: { produto: "Nexa ERP", versaoApi: NEXA_API_VERSION, ambiente: process.env.NODE_ENV || "production" },
       solicitacao: descricao || "Analisar os incidentes e propor uma correção segura.",
       regras: [
         "Diagnosticar a causa antes de alterar dados.",

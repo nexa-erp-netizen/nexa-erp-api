@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const { diagnosticarIncidente } = require("./motorDiagnosticoIncidenteService")
+const { version: NEXA_API_VERSION } = require("../../package.json")
 
 const CHAVES_SENSIVEIS = /senha|password|token|authorization|cookie|secret|chave|credential|certificado|cpf|cnpj/i
 
@@ -53,7 +54,7 @@ async function registrarIncidente(dados) {
     metodo: textoSeguro(dados.metodo, 10), statusHttp: Number(dados.statusHttp) || null,
     componente: textoSeguro(dados.componente, 200), contexto: sanear(dados.contexto),
     usuarioId: Number(dados.usuarioId) || null, clienteId: Number(dados.clienteId) || null,
-    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || "3.37.2",
+    versaoWeb: textoSeguro(dados.versaoWeb, 30), versaoApi: textoSeguro(dados.versaoApi, 30) || NEXA_API_VERSION,
     primeiraOcorrenciaEm: agora, ultimaOcorrenciaEm: agora,
     diagnostico: diagnostico.causaProvavel, categoria: diagnostico.categoria,
     causaProvavel: diagnostico.causaProvavel, correcaoSugerida: diagnostico.correcaoSugerida,

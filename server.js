@@ -3,6 +3,7 @@ require("dotenv").config()
 const express = require("express")
 const cors = require("cors")
 const path = require("path")
+const { version: NEXA_API_VERSION } = require("./package.json")
 
 const sequelize = require("./src/config/database")
 const Cliente = require("./src/models/Cliente")
@@ -126,7 +127,7 @@ app.get("/health", (_req, res) => {
     servidor: "online",
     banco: bancoPronto ? "conectado" : "inicializando",
     instancia: process.env.NEXA_INSTANCE_NAME || "principal",
-    versao: "3.45.2",
+    versao: NEXA_API_VERSION,
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
   })

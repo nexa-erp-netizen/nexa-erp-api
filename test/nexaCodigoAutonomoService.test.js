@@ -23,6 +23,8 @@ test("negação impede preparar ou publicar correção", () => {
   assert.equal(pedidoPublicarCodigo("Não prepare nem publique correção"), false)
   assert.equal(pedidoStatusCodigo("Diagnostique o incidente #3. Não prepare nem publique correção"), false)
   assert.equal(pedidoPublicarCodigo("Confirmo, publique o plano #4"), true)
+  assert.equal(pedidoPublicarCodigo("Confirmo que os testes falharam"), false)
+  assert.equal(pedidoPublicarCodigo("Autorizo a publicação do plano #4"), true)
 })
 
 test("permite código comum e bloqueia áreas sensíveis", () => {

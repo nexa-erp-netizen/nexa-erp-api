@@ -94,22 +94,22 @@ async function criarPlanoCorrecao({ incidente, usuario }) {
 }
 
 function avaliarNaturezaIncidente(incidente, saude, agora = new Date()) {
-  const texto = normalizar(`${incidente.titulo} ${incidente.mensagem} ${incidente.categoria} ${incidente.causaProvavel}`)
+  const texto = normalizar(`${incidente.titulo} ${incidente.mensagem} ${incidente.categoria} ${incidente.causaProvavel} ${incidente.tipoFalha}`)
   const statusHttp = Number(incidente.statusHttp || 0)
   const ultima = incidente.ultimaOcorrenciaEm ? new Date(incidente.ultimaOcorrenciaEm) : null
   const minutosSemRepetir = ultima && !Number.isNaN(ultima.getTime())
     ? Math.max(0, Math.floor((agora.getTime() - ultima.getTime()) / 60000))
     : null
   const sinalTemporario = [502, 503, 504].includes(statusHttp)
-    || /timeout|timed out|tempo de resposta|servico dependente|indisponivel|falha ao acessar/.test(texto)
-  const sistemaSaudavel = saude?.api === "online" && saude?.banco === "conectado" && Number(saude?.incidentesCriticos || 0) === 0
+    || /temporar|timeout|timed out|tempo de resposta|servico dependente|indisponivel|falha ao acessar|conexao/.test(texto)
+  const sistemaSaudavel = saude?.api === "online" && saude?.banco === "conectado"
   const semRepeticaoRecente = minutosSemRepetir !== null && minutosSemRepetir >= 15
   if (sinalTemporario && sistemaSaudavel && semRepeticaoRecente) {
     return {
       tipo: "Falha temporária",
-      conclusao: `A comunicação falhou naquele momento, mas o serviço está funcionando agora e o erro não se repetiu nos últimos ${minutosSemRepetir} minutos.`,
+      conclusao: `Foi uma falha momentânea de comunicação. A API e o banco estão funcionando normalmente e o erro não voltou a ocorrer.`,
       precisaCorrecaoCodigo: false,
-      recomendacao: "Não há correção de código para publicar. Vou manter o incidente registrado e reabri-lo automaticamente se a falha voltar.",
+      recomendacao: "Não há correção de código para publicar. O incidente continuará registrado e será reaberto automaticamente se a falha voltar.",
       minutosSemRepetir,
     }
   }
@@ -122,9 +122,12 @@ function avaliarNaturezaIncidente(incidente, saude, agora = new Date()) {
       minutosSemRepetir,
     }
   }
+  const possivelCodigo = /persistente|falha interna|banco de dados|interface web/.test(texto)
   return {
-    tipo: incidente.tipoFalha || "Em investigação",
-    conclusao: incidente.causaProvavel || incidente.diagnostico || "Ainda não há evidência suficiente para afirmar se o problema está no código ou em um serviço externo.",
+    tipo: possivelCodigo ? "Possível erro de código" : "Em investigação",
+    conclusao: possivelCodigo
+      ? "O registro indica uma falha interna, mas ainda não há evidência suficiente para apontar qual arquivo precisa ser alterado."
+      : "Ainda não há evidência suficiente para afirmar se o problema está no código ou em um serviço externo.",
     precisaCorrecaoCodigo: null,
     recomendacao: "Nenhuma correção foi preparada. É necessário correlacionar o horário da falha com o log antes de alterar o sistema.",
     minutosSemRepetir,

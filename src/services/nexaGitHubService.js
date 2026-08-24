@@ -20,16 +20,27 @@ function configurado() {
 async function github(caminho, opcoes = {}) {
   const cfg = configuracaoGitHub()
   if (!configurado()) throw new Error("A conexão com o GitHub ainda não está configurada")
-  const resposta = await fetch(`${API}${caminho}`, {
-    ...opcoes,
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${cfg.token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "Nexa-Developer",
-      ...(opcoes.headers || {}),
-    },
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
+  let resposta
+  try {
+    resposta = await fetch(`${API}${caminho}`, {
+      ...opcoes,
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${cfg.token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Nexa-Developer",
+        ...(opcoes.headers || {}),
+      },
+    })
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("O GitHub não respondeu em 30 segundos")
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
   const texto = await resposta.text()
   let dados = null
   try { dados = texto ? JSON.parse(texto) : null } catch (_error) { dados = texto }

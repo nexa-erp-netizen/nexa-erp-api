@@ -28,7 +28,9 @@ function pedidoPrepararCodigo(mensagem) {
 
 function pedidoPublicarCodigo(mensagem) {
   const texto = normalizar(mensagem)
-  const pede = /\b(publicar|publique|publicacao|autorizo|confirmo)\w*\b/.test(texto)
+  const pedePublicacao = /\b(publicar|publique|publicacao)\w*\b/.test(texto)
+  const confirmaPublicacao = /\b(confirmo|autorizo)\w*\b[\s\S]{0,40}\b(publicacao|publicar|plano\s*#?\s*\d+)\b/.test(texto)
+  const pede = pedePublicacao || confirmaPublicacao
   const proibe = /\b(?:nao|sem)\b[\s\S]{0,45}\b(?:publique|publicar|publicacao|altere|alterar)\w*\b/.test(texto)
   return pede && !proibe
 }
@@ -147,15 +149,17 @@ async function atualizarStatusPlano(plano) {
   const escopo = plano.escopo || {}
   const pr = await github.obterPullRequest(escopo.tipo, escopo.pullRequest)
   const runs = await github.execucoesDaBranch(escopo.tipo, escopo.branch)
-  const relevantes = runs.filter((run) => run.head_sha === escopo.commit || run.head_branch === escopo.branch)
+  const cabecaInalterada = pr?.head?.sha === escopo.commit
+  const relevantes = runs.filter((run) => run.head_sha === escopo.commit)
   const emAndamento = relevantes.some((run) => ["queued", "in_progress", "waiting", "pending"].includes(run.status))
   const falhou = relevantes.some((run) => run.status === "completed" && run.conclusion !== "success")
-  const passou = relevantes.length > 0 && relevantes.every((run) => run.status === "completed" && run.conclusion === "success")
+  const passou = cabecaInalterada && relevantes.length > 0 && relevantes.every((run) => run.status === "completed" && run.conclusion === "success")
   let status = plano.status
-  if (falhou) status = "Testes falharam"
+  if (!cabecaInalterada || pr.state !== "open") status = "Testes falharam"
+  else if (falhou) status = "Testes falharam"
   else if (passou) status = "Aguardando publicação"
   else if (emAndamento || !relevantes.length) status = "Em testes"
-  const resultadoTestes = { quantidade: relevantes.length, emAndamento, falhou, passou, pullRequestEstado: pr.state, verificadoEm: new Date().toISOString() }
+  const resultadoTestes = { quantidade: relevantes.length, emAndamento, falhou: falhou || !cabecaInalterada || pr.state !== "open", passou, cabecaInalterada, pullRequestEstado: pr.state, verificadoEm: new Date().toISOString() }
   if (status !== plano.status || JSON.stringify(plano.resultadoTestes) !== JSON.stringify(resultadoTestes)) await plano.update({ status, resultadoTestes })
   return { plano, pr, resultadoTestes }
 }
@@ -196,7 +200,7 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
       await IncidenteSistema.update({ status: "Em diagnóstico", correcao: `Plano #${plano.id} publicado; aguardando validação da nova versão.` }, { where: { id: plano.incidenteId } })
       return { resposta: `Publicação autorizada. A correção do plano #${plano.id} foi enviada e agora estou aguardando a nova versão entrar no ar.`, modo: "nexa-dev-codigo", atividade: "publicacao-codigo", planoCodigoId: plano.id }
     }
-    if (estado.plano.status === "Aguardando publicação") return { resposta: `Os testes do plano #${plano.id} passaram. A correção está pronta. Deseja publicar?`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, aguardaConfirmacaoPublicacao: true }
+    if (estado.plano.status === "Aguardando publicação") return { resposta: `Os testes do plano #${plano.id} passaram e o código não mudou depois da validação. Para autorizar, diga: publique o plano #${plano.id}.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, aguardaConfirmacaoPublicacao: true }
     if (estado.plano.status === "Testes falharam") return { resposta: `Os testes do plano #${plano.id} falharam. Não publicarei essa correção.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
     return { resposta: `Os testes do plano #${plano.id} ainda estão em andamento. Nada foi publicado.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
   }

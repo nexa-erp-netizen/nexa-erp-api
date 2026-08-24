@@ -23,3 +23,17 @@ test("não chama falha repetida de temporária", () => {
   assert.equal(resultado.tipo, "Falha recorrente")
   assert.equal(resultado.precisaCorrecaoCodigo, true)
 })
+
+test("respeita a classificação temporária já registrada", () => {
+  const resultado = avaliarNaturezaIncidente({
+    titulo: "Falha em POST /conversa",
+    statusHttp: 500,
+    tipoFalha: "Temporária",
+    causaProvavel: "A API interrompeu a operação por uma exceção interna.",
+    ocorrencias: 1,
+    ultimaOcorrenciaEm: "2026-08-24T13:00:01.000Z",
+  }, { api: "online", banco: "conectado", incidentesCriticos: 2 }, new Date("2026-08-24T18:35:00.000Z"))
+  assert.equal(resultado.tipo, "Falha temporária")
+  assert.equal(resultado.precisaCorrecaoCodigo, false)
+  assert.doesNotMatch(resultado.conclusao, /exceção interna/i)
+})
