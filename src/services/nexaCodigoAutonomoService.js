@@ -24,7 +24,9 @@ function idNaMensagem(mensagem, tipo = "incidente") {
 function pedidoPrepararCodigo(mensagem) {
   const texto = normalizar(mensagem)
   const pede = /\b(corrij|correcao|prepare|resolver|consert)\w*\b/.test(texto)
-  const proibe = /\b(?:nao|sem)\b[\s\S]{0,45}\b(?:prepare|preparar|corrij|correcao|publique|publicar|altere|alterar)\w*\b/.test(texto)
+  // "Prepare, mas não publique" deve preparar a correção. A negativa de
+  // publicação é tratada separadamente por pedidoPublicarCodigo.
+  const proibe = /\b(?:nao|sem)\b[\s\S]{0,45}\b(?:prepare|preparar|corrij|correcao|altere|alterar)\w*\b/.test(texto)
   return pede && !proibe
 }
 
@@ -352,6 +354,12 @@ async function planoPendente(usuario, planoId = null) {
   return PlanoCorrecaoNexa.findOne({ where, order: [["createdAt", "DESC"]] })
 }
 
+async function planoDoUsuario(usuario, planoId = null) {
+  const where = { usuarioId: usuario.id }
+  if (planoId) where.id = planoId
+  return PlanoCorrecaoNexa.findOne({ where, order: [["createdAt", "DESC"]] })
+}
+
 async function planoAnalisado(usuario, planoId = null) {
   const where = { usuarioId: usuario.id, status: "Analisado" }
   if (planoId) where.id = planoId
@@ -418,8 +426,6 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
     return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado.\n\n- **API:** repositório disponível.\n- **Web:** repositório disponível.\n- **Publicação:** somente depois dos testes e da sua autorização." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
   }
 
-  if (pedidoConversaTecnica(mensagem)) return responderConversaTecnica(mensagem)
-
   const incidenteId = idNaMensagem(mensagem, "incidente")
   if (incidenteId && pedidoPrepararCodigo(mensagem)) {
     const { plano, pr } = await prepararCorrecaoCodigo({ incidenteId, usuario })
@@ -443,8 +449,14 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   }
   if (pedidoStatusCodigo(mensagem)) {
     const querPublicar = pedidoPublicarCodigo(mensagem)
-    const plano = await planoPendente(usuario, planoId)
+    const plano = planoId ? await planoDoUsuario(usuario, planoId) : await planoPendente(usuario, planoId)
     if (!plano) return querPublicar ? { resposta: "Não há correção de código pronta para publicar.", modo: "nexa-dev-codigo" } : null
+    if (plano.status === "Analisado") {
+      return { resposta: `O plano #${plano.id} foi analisado, mas a correção ainda não foi criada. Nenhum arquivo foi alterado e nenhum teste foi iniciado. Para criar a correção sem publicar, diga: prepare a correção do plano #${plano.id}.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
+    }
+    if (!["Em testes", "Aguardando publicação", "Testes falharam"].includes(plano.status)) {
+      return { resposta: `O plano #${plano.id} está com status ${plano.status}. Nenhuma nova ação foi executada.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
+    }
     const estado = await atualizarStatusPlano(plano)
     if (querPublicar) {
       if (estado.plano.status !== "Aguardando publicação") return { resposta: estado.plano.status === "Testes falharam" ? "Não vou publicar: os testes falharam. A correção precisa ser refeita." : "Os testes ainda não terminaram. Não publiquei nada.", modo: "nexa-dev-codigo", planoCodigoId: plano.id }
@@ -458,6 +470,7 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
     if (estado.plano.status === "Testes falharam") return { resposta: `Os testes do plano #${plano.id} falharam. Não publicarei essa correção.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
     return { resposta: `Os testes do plano #${plano.id} ainda estão em andamento. Nada foi publicado.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id }
   }
+  if (pedidoConversaTecnica(mensagem)) return responderConversaTecnica(mensagem)
   return null
 }
 

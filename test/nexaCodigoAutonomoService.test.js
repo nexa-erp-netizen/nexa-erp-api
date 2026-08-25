@@ -24,6 +24,7 @@ test("separa incidentes da Web e da API", () => {
 
 test("negação impede preparar ou publicar correção", () => {
   assert.equal(pedidoPrepararCodigo("Prepare a correção do incidente #3"), true)
+  assert.equal(pedidoPrepararCodigo("Prepare a correção do plano #2. Não publique ainda."), true)
   assert.equal(pedidoPrepararCodigo("Diagnostique o incidente #3. Não prepare nem publique correção"), false)
   assert.equal(pedidoPrepararCodigo("Analise o erro sem alterar nem preparar correção"), false)
   assert.equal(pedidoPublicarCodigo("Não prepare nem publique correção"), false)
