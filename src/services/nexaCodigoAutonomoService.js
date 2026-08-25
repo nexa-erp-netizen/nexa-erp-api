@@ -251,11 +251,19 @@ function validarAlteracoes(proposta, originais, tipo) {
   return arquivos
 }
 
+function pedidoSemRestricaoDaAnalise(pedido) {
+  return String(pedido || "")
+    .replace(/\b(?:nao|não)\s+(?:altere|alterar|corrija|corrigir|publique|publicar)(?:\s+nada)?\b[.!;]?/gi, " ")
+    .replace(/\bsem\s+(?:alterar|corrigir|publicar)(?:\s+nada)?\b[.!;]?/gi, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+}
+
 async function gerarCorrecao({ incidente, tipo, arquivos }) {
   const contexto = arquivos.map((item) => `\n--- ${item.caminho} ---\n${item.conteudo}`).join("\n").slice(0, MAX_CONTEUDO_TOTAL)
   const resultado = await aiProvider.generate([{
     role: "system",
-    content: `Você corrige pequenos defeitos comprovados no código da Nexa ERP. Trabalhe apenas nos arquivos fornecidos. Preserve comportamento não relacionado. Não altere autenticação, autorização, credenciais, banco, modelos, migrations, dependências, configuração, workflows ou segurança. Não crie arquivos. Limite a dois arquivos e à menor correção possível. Em vez de devolver arquivos inteiros, forneça substituições exatas: cada trecho "buscar" deve existir uma única vez no arquivo e "substituir" deve conter o novo trecho integral. No máximo 8 operações por arquivo. Se não houver correção segura, deixe arquivos vazio e explique em motivo. Não inclua markdown. JSON obrigatório: {"resumo":"curto","causa":"curta","motivo":"preencher se arquivos estiver vazio","arquivos":[{"caminho":"existente","operacoes":[{"buscar":"trecho exato atual","substituir":"novo trecho"}]}],"testes":["teste objetivo"]}`,
+    content: `Você corrige pequenos defeitos comprovados no código da Nexa ERP. Esta é a fase PREPARAR: o Administrador autorizou criar uma proposta em branch separada, mas NÃO autorizou publicar. Uma restrição como "não altere nada" no pedido original valia somente para a fase anterior de análise e não proíbe preparar esta proposta. Trabalhe apenas nos arquivos fornecidos. Preserve comportamento não relacionado. Não altere autenticação, autorização, credenciais, banco, modelos, migrations, dependências, configuração, workflows ou segurança. Não crie arquivos. Limite a dois arquivos e à menor correção possível. Em vez de devolver arquivos inteiros, forneça substituições exatas: cada trecho "buscar" deve existir uma única vez no arquivo e "substituir" deve conter o novo trecho integral. No máximo 8 operações por arquivo. Se não houver correção segura, deixe arquivos vazio e explique em motivo técnico relacionado ao código, nunca apenas por causa da restrição da análise anterior. Não inclua markdown. JSON obrigatório: {"resumo":"curto","causa":"curta","motivo":"preencher se arquivos estiver vazio","arquivos":[{"caminho":"existente","operacoes":[{"buscar":"trecho exato atual","substituir":"novo trecho"}]}],"testes":["teste objetivo"]}`,
   }, {
     role: "user",
     content: `Incidente confirmado: ${JSON.stringify({ id: incidente.id, titulo: incidente.titulo, mensagem: incidente.mensagem, rota: incidente.rota, metodo: incidente.metodo, statusHttp: incidente.statusHttp, componente: incidente.componente, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, contexto: incidente.contexto }).slice(0, 10000)}\nRepositório: ${tipo}. Corrija somente se a causa estiver comprovada pelos arquivos. Se não estiver, retorne arquivos vazio.${contexto}`,
@@ -318,7 +326,7 @@ async function prepararCorrecaoDaAnalise({ plano, usuario }) {
   const referencia = {
     id: `plano-${plano.id}`,
     titulo: plano.titulo,
-    mensagem: escopoAnterior.pedido,
+    mensagem: pedidoSemRestricaoDaAnalise(escopoAnterior.pedido),
     componente: candidatos.join(", "),
     categoria: tipo === "web" ? "Interface Web" : "API",
     causaProvavel: plano.diagnostico,
@@ -491,4 +499,4 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   return null
 }
 
-module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, prepararCorrecaoDaAnalise, atualizarStatusPlano, validarPublicacaoPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo, pedidoValidarPublicacao, pedidoConversaTecnica, pedidoAcessoArquivos, pedidoAnalisarCodigo, repositoriosNaMensagem, selecionarArquivosParaAnalise, analisarCodigoSomenteLeitura, planoAnalisado, responderConversaTecnica }
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, prepararCorrecaoDaAnalise, atualizarStatusPlano, validarPublicacaoPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo, pedidoValidarPublicacao, pedidoConversaTecnica, pedidoAcessoArquivos, pedidoAnalisarCodigo, repositoriosNaMensagem, selecionarArquivosParaAnalise, analisarCodigoSomenteLeitura, planoAnalisado, responderConversaTecnica, pedidoSemRestricaoDaAnalise }
