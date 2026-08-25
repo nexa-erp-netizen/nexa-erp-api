@@ -74,9 +74,12 @@ async function callGroq(messages, options, signal) {
 }
 
 async function generate(messages, options = {}) {
-  const order = providerOrder()
+  const onlyProvider = options.onlyProvider ? String(options.onlyProvider).toLowerCase() : null
+  const order = onlyProvider ? [onlyProvider].filter(configured) : providerOrder()
   if (!order.length) {
-    const error = new Error("Nenhum provedor de IA foi configurado. Configure OPENAI_API_KEY ou GROQ_API_KEY.")
+    const error = new Error(onlyProvider === "openai"
+      ? "A OpenAI é obrigatória para preparar correções de código e não está configurada."
+      : "Nenhum provedor de IA foi configurado. Configure OPENAI_API_KEY ou GROQ_API_KEY.")
     error.statusCode = 503
     error.providerFailure = true
     throw error
