@@ -222,8 +222,25 @@ function extrairJson(texto) {
 
 function validarAlteracoes(proposta, originais, tipo) {
   const mapa = new Map(originais.map((item) => [item.caminho, item.conteudo]))
-  const arquivos = (Array.isArray(proposta?.arquivos) ? proposta.arquivos : []).filter((item) => mapa.has(item?.caminho) && caminhoPermitido(item.caminho, tipo) && typeof item.conteudo === "string" && item.conteudo !== mapa.get(item.caminho))
-  if (!arquivos.length) throw new Error("Nenhuma mudança segura foi produzida")
+  const arquivos = []
+  for (const item of Array.isArray(proposta?.arquivos) ? proposta.arquivos : []) {
+    if (!mapa.has(item?.caminho) || !caminhoPermitido(item.caminho, tipo)) continue
+    const anterior = mapa.get(item.caminho)
+    let conteudo = typeof item.conteudo === "string" ? item.conteudo : anterior
+    if (Array.isArray(item.operacoes)) {
+      if (!item.operacoes.length || item.operacoes.length > 8) throw new Error(`A correção em ${item.caminho} possui operações demais`)
+      for (const operacao of item.operacoes) {
+        const buscar = String(operacao?.buscar || "")
+        const substituir = String(operacao?.substituir ?? "")
+        if (!buscar || buscar.length > 8000 || substituir.length > 12000) throw new Error(`A correção em ${item.caminho} contém uma substituição inválida`)
+        const ocorrencias = conteudo.split(buscar).length - 1
+        if (ocorrencias !== 1) throw new Error(`Não consegui localizar de forma única o trecho proposto em ${item.caminho}`)
+        conteudo = conteudo.replace(buscar, substituir)
+      }
+    }
+    if (conteudo !== anterior) arquivos.push({ caminho: item.caminho, conteudo })
+  }
+  if (!arquivos.length) throw new Error(`Nenhuma mudança segura foi produzida: ${String(proposta?.motivo || "a OpenAI não encontrou uma alteração pequena e comprovada para aplicar").slice(0, 180)}`)
   if (arquivos.length > MAX_ARQUIVOS_ALTERADOS) throw new Error("A correção ultrapassou o limite de dois arquivos")
   for (const arquivo of arquivos) {
     const anterior = mapa.get(arquivo.caminho)
@@ -238,11 +255,11 @@ async function gerarCorrecao({ incidente, tipo, arquivos }) {
   const contexto = arquivos.map((item) => `\n--- ${item.caminho} ---\n${item.conteudo}`).join("\n").slice(0, MAX_CONTEUDO_TOTAL)
   const resultado = await aiProvider.generate([{
     role: "system",
-    content: `Você corrige pequenos defeitos comprovados no código da Nexa ERP. Trabalhe apenas nos arquivos fornecidos e devolva o conteúdo integral dos arquivos alterados. Preserve comportamento não relacionado. Não altere autenticação, autorização, credenciais, banco, modelos, migrations, dependências, configuração, workflows ou segurança. Não crie arquivos. Limite a dois arquivos e à menor correção possível. Não inclua markdown. JSON obrigatório: {"resumo":"curto","causa":"curta","arquivos":[{"caminho":"existente","conteudo":"arquivo integral"}],"testes":["teste objetivo"]}`,
+    content: `Você corrige pequenos defeitos comprovados no código da Nexa ERP. Trabalhe apenas nos arquivos fornecidos. Preserve comportamento não relacionado. Não altere autenticação, autorização, credenciais, banco, modelos, migrations, dependências, configuração, workflows ou segurança. Não crie arquivos. Limite a dois arquivos e à menor correção possível. Em vez de devolver arquivos inteiros, forneça substituições exatas: cada trecho "buscar" deve existir uma única vez no arquivo e "substituir" deve conter o novo trecho integral. No máximo 8 operações por arquivo. Se não houver correção segura, deixe arquivos vazio e explique em motivo. Não inclua markdown. JSON obrigatório: {"resumo":"curto","causa":"curta","motivo":"preencher se arquivos estiver vazio","arquivos":[{"caminho":"existente","operacoes":[{"buscar":"trecho exato atual","substituir":"novo trecho"}]}],"testes":["teste objetivo"]}`,
   }, {
     role: "user",
     content: `Incidente confirmado: ${JSON.stringify({ id: incidente.id, titulo: incidente.titulo, mensagem: incidente.mensagem, rota: incidente.rota, metodo: incidente.metodo, statusHttp: incidente.statusHttp, componente: incidente.componente, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, contexto: incidente.contexto }).slice(0, 10000)}\nRepositório: ${tipo}. Corrija somente se a causa estiver comprovada pelos arquivos. Se não estiver, retorne arquivos vazio.${contexto}`,
-  }], { temperature: 0.1, maxTokens: 12000, timeout: 120000, json: true })
+  }], { temperature: 0.1, maxTokens: 12000, timeout: 120000, json: true, onlyProvider: "openai" })
   return { proposta: extrairJson(resultado.text), provedor: resultado.provider, modelo: resultado.model }
 }
 

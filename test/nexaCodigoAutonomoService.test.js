@@ -55,6 +55,17 @@ test("aceita correção pequena em arquivo existente", () => {
   assert.equal(arquivos.length, 1)
 })
 
+test("aplica substituição pequena e única sem exigir o arquivo inteiro da IA", () => {
+  const originais = [{ caminho: "src/pages/Clientes.jsx", conteudo: "const titulo = 'Clientes'\nconst ativo = false\n" }]
+  const arquivos = validarAlteracoes({ arquivos: [{ caminho: "src/pages/Clientes.jsx", operacoes: [{ buscar: "const ativo = false", substituir: "const ativo = true" }] }] }, originais, "web")
+  assert.equal(arquivos[0].conteudo.includes("const ativo = true"), true)
+})
+
+test("recusa substituição ambígua ou inexistente", () => {
+  const originais = [{ caminho: "src/pages/Clientes.jsx", conteudo: "Cliente\nCliente\n" }]
+  assert.throws(() => validarAlteracoes({ arquivos: [{ caminho: "src/pages/Clientes.jsx", operacoes: [{ buscar: "Cliente", substituir: "Empresa" }] }] }, originais, "web"), /forma única/)
+})
+
 test("recusa arquivo novo, credencial e alteração extensa", () => {
   const originais = [{ caminho: "src/services/testeService.js", conteudo: "module.exports = false\n" }]
   assert.throws(() => validarAlteracoes({ arquivos: [{ caminho: "src/services/novo.js", conteudo: "novo" }] }, originais, "api"), /Nenhuma mudança segura/)

@@ -146,7 +146,7 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
     if (codigo) return codigo
   } catch (error) {
     console.error("NEXA DEVELOPER CODE:", error?.message || error)
-    return { resposta: `Não consegui preparar essa correção com segurança: ${String(error?.message || "falha na integração").slice(0, 250)}. Nenhuma alteração foi publicada.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo" }
+    return { resposta: `Não consegui preparar essa correção com segurança: ${String(error?.message || "falha na integração").slice(0, 250)}. Nenhuma alteração foi publicada.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", provedor: "sistema", modelo: "Nexa Developer 1.2" }
   }
   const texto = normalizar(mensagem)
   const solicitado = idIncidente(mensagem)
