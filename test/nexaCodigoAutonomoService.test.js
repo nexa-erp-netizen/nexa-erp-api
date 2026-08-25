@@ -15,6 +15,7 @@ const {
   pedidoAnalisarCodigo,
   repositoriosNaMensagem,
   selecionarArquivosParaAnalise,
+  pedidoSemRestricaoDaAnalise,
 } = require("../src/services/nexaCodigoAutonomoService")
 
 test("separa incidentes da Web e da API", () => {
@@ -32,6 +33,12 @@ test("negação impede preparar ou publicar correção", () => {
   assert.equal(pedidoPublicarCodigo("Confirmo, publique o plano #4"), true)
   assert.equal(pedidoPublicarCodigo("Confirmo que os testes falharam"), false)
   assert.equal(pedidoPublicarCodigo("Autorizo a publicação do plano #4"), true)
+})
+
+test("restrição da análise não bloqueia a preparação posterior", () => {
+  const pedido = pedidoSemRestricaoDaAnalise("Analise o layout. Não altere nada. Não publique.")
+  assert.equal(/não altere|nao altere|não publique|nao publique/i.test(pedido), false)
+  assert.match(pedido, /Analise o layout/i)
 })
 
 test("permite código comum e bloqueia áreas sensíveis", () => {
