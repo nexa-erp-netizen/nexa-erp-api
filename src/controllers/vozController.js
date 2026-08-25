@@ -7,6 +7,7 @@ const { EdgeTTS } = require("node-edge-tts")
 
 const VOZ_PADRAO = "pt-BR-FranciscaNeural"
 const MODELO_WHISPER_PADRAO = "whisper-large-v3-turbo"
+const MODELO_OPENAI_TRANSCRICAO_PADRAO = "gpt-transcribe"
 const LIMITE_TEXTO = 900
 const LIMITE_PROMPT_WHISPER = 700
 const TEMPO_LIMITE_WHISPER_MS = 30000
@@ -23,6 +24,13 @@ function configuracaoGroqWhisper() {
   return {
     chave: String(process.env.GROQ_API_KEY || "").trim(),
     modelo: String(process.env.GROQ_WHISPER_MODEL || MODELO_WHISPER_PADRAO).trim(),
+  }
+}
+
+function configuracaoOpenAITranscricao() {
+  return {
+    chave: String(process.env.OPENAI_API_KEY || "").trim(),
+    modelo: String(process.env.OPENAI_TRANSCRIPTION_MODEL || MODELO_OPENAI_TRANSCRICAO_PADRAO).trim(),
   }
 }
 
@@ -178,18 +186,89 @@ async function transcreverComGroq({ arquivo, prompt }) {
   }
 }
 
+async function transcreverComOpenAI({ arquivo, prompt }) {
+  const { chave, modelo } = configuracaoOpenAITranscricao()
+  if (!chave) {
+    const erro = new Error("A chave da OpenAI não está configurada para a transcrição de reserva.")
+    erro.statusCode = 503
+    throw erro
+  }
+
+  const mime = String(arquivo.mimetype || "audio/webm").split(";")[0]
+  const extensao = extensaoPorMime(mime)
+  const formulario = new FormData()
+  formulario.append("file", new Blob([arquivo.buffer], { type: mime }), `nexa-voz.${extensao}`)
+  formulario.append("model", modelo)
+  if (prompt) formulario.append("prompt", limparPromptWhisper(prompt))
+
+  const controlador = new AbortController()
+  const timeout = setTimeout(() => controlador.abort(), TEMPO_LIMITE_WHISPER_MS)
+
+  try {
+    const resposta = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${chave}` },
+      body: formulario,
+      signal: controlador.signal,
+    })
+    const dados = await resposta.json().catch(() => ({}))
+    if (!resposta.ok) {
+      const detalhe = dados?.error?.message || dados?.message || `status ${resposta.status}`
+      const erro = new Error(`OpenAI Transcription: ${detalhe}`)
+      erro.statusCode = resposta.status
+      throw erro
+    }
+    return { texto: String(dados?.text || "").trim(), modelo, requisicaoId: resposta.headers?.get?.("x-request-id") || null }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const erro = new Error("A transcrição de reserva demorou para responder.")
+      erro.statusCode = 504
+      throw erro
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function podeUsarReservaOpenAI(error) {
+  const status = Number(error?.statusCode || 0)
+  return !status || status === 408 || status === 429 || status >= 500
+}
+
+async function transcreverComContingencia({ arquivo, prompt }) {
+  const groq = configuracaoGroqWhisper()
+  const openai = configuracaoOpenAITranscricao()
+  if (groq.chave) {
+    try {
+      return { ...(await transcreverComGroq({ arquivo, prompt })), provedor: "groq-whisper" }
+    } catch (error) {
+      if (!openai.chave || !podeUsarReservaOpenAI(error)) throw error
+      console.warn("TRANSCRIÇÃO GROQ INDISPONÍVEL; USANDO OPENAI:", error?.message || error)
+    }
+  }
+  if (openai.chave) return { ...(await transcreverComOpenAI({ arquivo, prompt })), provedor: "openai" }
+
+  const erro = new Error("Nenhum provedor de transcrição está configurado.")
+  erro.statusCode = 503
+  throw erro
+}
+
 async function statusVoz(req, res) {
   const { chave, regiao, voz } = configuracaoAzure()
   const whisper = configuracaoGroqWhisper()
+  const openai = configuracaoOpenAITranscricao()
+  const provedores = [whisper.chave && "groq-whisper", openai.chave && "openai"].filter(Boolean)
   return res.json({
     neuralDisponivel: true,
     provedor: "microsoft-edge",
     vozNeural: VOZ_PADRAO,
     fallback: chave && regiao ? `Azure Speech — ${voz}` : "Microsoft Maria (pt-BR)",
     azureConfigurado: Boolean(chave && regiao),
-    transcricaoDisponivel: Boolean(whisper.chave),
-    transcricaoProvedor: "groq-whisper",
-    transcricaoModelo: whisper.modelo,
+    transcricaoDisponivel: provedores.length > 0,
+    transcricaoProvedor: provedores.join(" + ") || "indisponível",
+    transcricaoModelo: whisper.chave ? whisper.modelo : openai.modelo,
+    transcricaoReserva: whisper.chave && openai.chave ? openai.modelo : null,
   })
 }
 
@@ -200,14 +279,14 @@ async function transcreverVoz(req, res) {
   }
 
   try {
-    const resultado = await transcreverComGroq({
+    const resultado = await transcreverComContingencia({
       arquivo,
       prompt: req.body?.prompt,
     })
 
     return res.json({
       texto: resultado.texto,
-      provedor: "groq-whisper",
+      provedor: resultado.provedor,
       modelo: resultado.modelo,
       requisicaoId: resultado.requisicaoId,
     })
@@ -262,4 +341,9 @@ async function sintetizarVoz(req, res) {
   }
 }
 
-module.exports = { statusVoz, transcreverVoz, sintetizarVoz }
+module.exports = {
+  statusVoz,
+  transcreverVoz,
+  sintetizarVoz,
+  _internals: { podeUsarReservaOpenAI, transcreverComContingencia },
+}
