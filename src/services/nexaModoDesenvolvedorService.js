@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const { responderCodigoAutonomo } = require("./nexaCodigoAutonomoService")
+const { garantirMemoriaTecnica } = require("./nexaMemoriaTecnicaService")
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
@@ -7,9 +8,10 @@ function normalizar(valor) {
 
 function pareceComandoDesenvolvedor(mensagem) {
   const texto = normalizar(mensagem)
-  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao|github|repositorio|arquivos? da api|arquivos? (?:da )?web|codigo da api|codigo (?:da )?web|analisar (?:o )?codigo|analisar (?:os )?arquivos|revisar (?:o )?codigo|auditar (?:o )?codigo|publicar correcao|publique|status da correcao|status do plano)\b/.test(texto)
+  return /\b(modo desenvolvedor|modo developer|diagnostico tecnico|diagnostico do sistema|saude do sistema|saude da api|saude do banco|estado da api|estado do banco|plano de correcao|github|repositorio|arquivos? da api|arquivos? (?:da )?web|codigo da api|codigo (?:da )?web|analisar (?:o )?codigo|analisar (?:os )?arquivos|revisar (?:o )?codigo|auditar (?:o )?codigo|publicar correcao|valid\w* (?:a )?publicacao|valid\w* (?:a )?versao|valid\w* (?:o )?deploy|publique|status da correcao|status do plano)\b/.test(texto)
     || (/\b(diagnosti\w*|analis\w*|verifi\w*|prepar\w*)\b/.test(texto) && /\b(incidente|erro|falha)\s*#?\s*\d+\b/.test(texto))
     || (/\b(analis\w*|revis\w*|verifi\w*|investig\w*|audit\w*)\b/.test(texto) && /\b(api|web|codigo|arquivos?|repositorio|layout|interface|tela|modulo)\b/.test(texto))
+    || (/\b(prepar\w*|corrij\w*|consert\w*|resolver)\b/.test(texto) && /\bplano\s*#?\s*\d+\b/.test(texto))
 }
 
 function idIncidente(mensagem) {
@@ -139,6 +141,7 @@ async function responderModoDesenvolvedor({ mensagem, usuario }) {
   if (!pareceComandoDesenvolvedor(mensagem)) return null
   if (usuario?.perfil !== "Administrador") return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
   try {
+    await garantirMemoriaTecnica(usuario)
     const codigo = await responderCodigoAutonomo({ mensagem, usuario })
     if (codigo) return codigo
   } catch (error) {

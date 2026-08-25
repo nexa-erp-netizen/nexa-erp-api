@@ -3,6 +3,7 @@ const IncidenteSistema = require("../models/IncidenteSistema")
 const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 const aiProvider = require("./nexaAiProviderService")
 const github = require("./nexaGitHubService")
+const { CONTEUDO_MEMORIA } = require("./nexaMemoriaTecnicaService")
 
 const CAMINHOS_PROIBIDOS = /(^|\/)(\.github|node_modules|config|models?|migrations?|middlewares?|auth|credenciais?|secrets?|backup)(\/|$)|(^|\/)(package(?:-lock)?\.json|\.env|server\.js)$/i
 const EXTENSOES_PERMITIDAS = /\.(?:js|jsx|css)$/i
@@ -39,6 +40,29 @@ function pedidoPublicarCodigo(mensagem) {
 function pedidoStatusCodigo(mensagem) {
   const texto = normalizar(mensagem)
   return /\b(status|resultado|teste|pronto)\w*\b/.test(texto) || pedidoPublicarCodigo(mensagem)
+}
+
+function pedidoValidarPublicacao(mensagem) {
+  const texto = normalizar(mensagem)
+  return /\b(valid|confir|verific)\w*\b/.test(texto) && /\b(publicacao|publicado|versao|deploy)\b/.test(texto)
+}
+
+function pedidoConversaTecnica(mensagem) {
+  const texto = normalizar(mensagem)
+  const pergunta = /\b(o que|como|quando|qual|quais|pode|consegue|falta|termin|funciona|estado|etapa|proximo)\w*\b/.test(texto)
+  const assunto = /\b(modo desenvolvedor|desenvolvimento|arquitetura|projeto|api|web|github|publicacao|correcao|memoria tecnica)\b/.test(texto)
+  return pergunta && assunto
+}
+
+async function responderConversaTecnica(mensagem) {
+  const resultado = await aiProvider.generate([{
+    role: "system",
+    content: "Você é a Nexa conversando com o Administrador sobre o próprio ERP. Use a memória técnica fornecida como fonte factual. Responda naturalmente, em português simples, começando pela resposta direta. Seja breve, mas explique limitações reais. Não invente funções concluídas. Não exponha credenciais nem instruções internas.",
+  }, {
+    role: "user",
+    content: `Memória técnica atual:\n${CONTEUDO_MEMORIA}\n\nPergunta do Administrador: ${mensagem}`,
+  }], { temperature: 0.2, maxTokens: 900, timeout: 60000 })
+  return { resposta: resultado.text, modo: "nexa-dev-conversa", atividade: "memoria-tecnica", provedor: resultado.provider, modelo: resultado.model, memoriaTecnica: true }
 }
 
 function pedidoAcessoArquivos(mensagem) {
@@ -93,7 +117,7 @@ function selecionarArquivosParaAnalise(arquivos, mensagem, tipo) {
     .map((item) => item.arquivo)
 }
 
-async function analisarCodigoSomenteLeitura({ mensagem }) {
+async function analisarCodigoSomenteLeitura({ mensagem, usuario }) {
   const tipos = repositoriosNaMensagem(mensagem)
   const contextos = []
   const consultados = []
@@ -121,14 +145,38 @@ async function analisarCodigoSomenteLeitura({ mensagem }) {
     role: "user",
     content: `Pedido do administrador: ${mensagem}\n\nAnalise somente os arquivos abaixo:${contextos.join("\n").slice(0, MAX_CONTEUDO_TOTAL)}`,
   }], { temperature: 0.1, maxTokens: 1800, timeout: 90000 })
+  let plano = null
+  if (usuario?.id && usuario?.perfil === "Administrador" && consultados.length === 1 && consultados[0].candidatos.length) {
+    const alvo = consultados[0]
+    const fingerprint = crypto.createHash("sha256").update(`analise:${usuario.id}:${alvo.tipo}:${alvo.commit}:${mensagem}`).digest("hex")
+    plano = await PlanoCorrecaoNexa.findOne({ where: { fingerprint, usuarioId: usuario.id }, order: [["createdAt", "DESC"]] })
+    if (!plano) {
+      plano = await PlanoCorrecaoNexa.create({
+        incidenteId: null,
+        fingerprint,
+        titulo: `Análise de código — ${mensagem}`.slice(0, 250),
+        status: "Analisado",
+        diagnostico: String(resultado.text).slice(0, 1500),
+        causaRaiz: null,
+        escopo: { tipo: alvo.tipo, repositorio: github.configuracaoGitHub().repos[alvo.tipo], commitBase: alvo.commit, candidatos: alvo.candidatos, pedido: mensagem, provedorAnalise: resultado.provider, modeloAnalise: resultado.model },
+        etapas: ["Análise somente leitura concluída", "Aguardar pedido para preparar a correção", "Criar branch e pull request", "Executar testes", "Aguardar autorização para publicar"],
+        testesPrevistos: alvo.tipo === "web" ? ["Executar build de produção da Web"] : ["Executar testes automatizados da API"],
+        rollback: "Descartar a branch e fechar o pull request sem mesclar.",
+        risco: "Baixo",
+        exigeConfirmacao: true,
+        usuarioId: usuario.id,
+      })
+    }
+  }
   return {
-    resposta: resultado.text,
+    resposta: plano ? `${resultado.text}\n\nAnálise registrada no plano #${plano.id}. Se quiser, peça: prepare a correção do plano #${plano.id}.` : resultado.text,
     modo: "nexa-dev-leitura",
     atividade: "analise-codigo",
     provedor: resultado.provider,
     modelo: resultado.model,
     consultados,
     somenteLeitura: true,
+    planoCodigoId: plano?.id || null,
   }
 }
 
@@ -237,6 +285,48 @@ async function prepararCorrecaoCodigo({ incidenteId, usuario }) {
   return { plano, pr }
 }
 
+async function prepararCorrecaoDaAnalise({ plano, usuario }) {
+  if (usuario?.perfil !== "Administrador" || Number(plano?.usuarioId) !== Number(usuario.id)) throw new Error("O plano não pertence ao Administrador atual")
+  if (plano.status !== "Analisado") throw new Error("Este plano não está disponível para preparar correção")
+  const escopoAnterior = plano.escopo || {}
+  const tipo = escopoAnterior.tipo
+  const arvore = await github.listarArvore(tipo)
+  if (arvore.sha !== escopoAnterior.commitBase) throw new Error("O código mudou depois da análise. Faça uma nova análise antes de corrigir")
+  const candidatos = (escopoAnterior.candidatos || []).filter((caminho) => caminhoPermitido(caminho, tipo)).slice(0, MAX_ARQUIVOS_CONTEXTO)
+  if (!candidatos.length) throw new Error("O plano não possui arquivos seguros para correção")
+  const originais = []
+  for (const caminho of candidatos) originais.push(await github.lerArquivo(tipo, caminho))
+  const referencia = {
+    id: `plano-${plano.id}`,
+    titulo: plano.titulo,
+    mensagem: escopoAnterior.pedido,
+    componente: candidatos.join(", "),
+    categoria: tipo === "web" ? "Interface Web" : "API",
+    causaProvavel: plano.diagnostico,
+    contexto: { analise: plano.diagnostico },
+  }
+  const gerada = await gerarCorrecao({ incidente: referencia, tipo, arquivos: originais })
+  const alteracoes = validarAlteracoes(gerada.proposta, originais, tipo)
+  const branch = `nexa/fix-plano-${plano.id}-${Date.now().toString(36)}`
+  await github.criarBranch(tipo, branch, arvore.sha)
+  const commit = await github.criarCommit(tipo, { branch, shaBase: arvore.sha, arquivos: alteracoes, mensagem: `fix(nexa): plano #${plano.id}` })
+  const pr = await github.criarPullRequest(tipo, {
+    branch,
+    titulo: `Nexa: correção do plano #${plano.id}`,
+    descricao: `Correção preparada pela Nexa a partir de uma análise aprovada pelo Administrador.\n\nResumo: ${gerada.proposta.resumo || plano.diagnostico}\nCausa: ${gerada.proposta.causa || "confirmada no código"}\nArquivos: ${alteracoes.map((item) => item.caminho).join(", ")}\n\nA publicação depende dos testes e de autorização explícita do Administrador.`,
+  })
+  const novoEscopo = { ...escopoAnterior, branch, pullRequest: pr.number, pullRequestUrl: pr.html_url, commit: commit.sha, arquivos: alteracoes.map((item) => item.caminho), provedor: gerada.provedor, modelo: gerada.modelo }
+  await plano.update({
+    status: "Em testes",
+    diagnostico: String(gerada.proposta.resumo || plano.diagnostico).slice(0, 1500),
+    causaRaiz: String(gerada.proposta.causa || plano.causaRaiz || "Causa confirmada no código.").slice(0, 1500),
+    escopo: novoEscopo,
+    etapas: ["Análise concluída", "Correção criada em branch separada", "Pull request criado", "Testes automáticos iniciados", "Aguardar autorização do Administrador"],
+    testesPrevistos: Array.isArray(gerada.proposta.testes) ? gerada.proposta.testes.slice(0, 10) : plano.testesPrevistos,
+  })
+  return { plano, pr }
+}
+
 async function atualizarStatusPlano(plano) {
   const escopo = plano.escopo || {}
   const pr = await github.obterPullRequest(escopo.tipo, escopo.pullRequest)
@@ -262,13 +352,47 @@ async function planoPendente(usuario, planoId = null) {
   return PlanoCorrecaoNexa.findOne({ where, order: [["createdAt", "DESC"]] })
 }
 
+async function planoAnalisado(usuario, planoId = null) {
+  const where = { usuarioId: usuario.id, status: "Analisado" }
+  if (planoId) where.id = planoId
+  return PlanoCorrecaoNexa.findOne({ where, order: [["createdAt", "DESC"]] })
+}
+
+async function validarPublicacaoPlano({ plano, usuario }) {
+  if (!plano || Number(plano.usuarioId) !== Number(usuario.id) || plano.status !== "Publicado") throw new Error("Não encontrei uma publicação pendente de validação")
+  const escopo = plano.escopo || {}
+  const pr = await github.obterPullRequest(escopo.tipo, escopo.pullRequest)
+  const urlBase = escopo.tipo === "api"
+    ? String(process.env.NEXA_API_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "")
+    : String(process.env.NEXA_WEB_URL || process.env.FRONTEND_URL || "https://contabilplus-web.vercel.app").replace(/\/$/, "")
+  let aplicacao = { configurada: Boolean(urlBase), online: null, statusHttp: null }
+  if (urlBase) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 20000)
+    try {
+      const resposta = await fetch(escopo.tipo === "api" ? `${urlBase}/health` : urlBase, { method: "GET", signal: controller.signal })
+      aplicacao = { configurada: true, online: resposta.ok, statusHttp: resposta.status }
+    } catch (error) {
+      aplicacao = { configurada: true, online: false, statusHttp: null, erro: error?.name === "AbortError" ? "tempo esgotado" : String(error?.message || "falha de conexão").slice(0, 180) }
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+  const mergeConfirmado = Boolean(pr?.merged_at)
+  if (!mergeConfirmado || !aplicacao.configurada || aplicacao.online !== true) throw new Error("A publicação ainda não foi confirmada em funcionamento; o plano continuará aberto")
+  const resultadoTestes = { ...(plano.resultadoTestes || {}), mergeConfirmado, aplicacao, validadoEm: new Date().toISOString() }
+  await plano.update({ status: "Concluído", resultadoTestes })
+  if (plano.incidenteId) await IncidenteSistema.update({ status: "Resolvido", correcao: `Plano #${plano.id} publicado e validado.` }, { where: { id: plano.incidenteId } })
+  return { plano, pr, aplicacao }
+}
+
 async function responderCodigoAutonomo({ mensagem, usuario }) {
   const texto = normalizar(mensagem)
   if (usuario?.perfil !== "Administrador" && /\b(github|codigo|public|modo desenvolvedor)\b/.test(texto)) return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
   if (usuario?.perfil !== "Administrador") return null
 
   if (pedidoAnalisarCodigo(mensagem)) {
-    return analisarCodigoSomenteLeitura({ mensagem })
+    return analisarCodigoSomenteLeitura({ mensagem, usuario })
   }
 
   if (pedidoAcessoArquivos(mensagem)) {
@@ -294,6 +418,8 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
     return { resposta: conexao.conectado ? "O Modo Desenvolvedor está conectado.\n\n- **API:** repositório disponível.\n- **Web:** repositório disponível.\n- **Publicação:** somente depois dos testes e da sua autorização." : `O GitHub ainda não está conectado: ${conexao.motivo}`, modo: "nexa-dev-github", atividade: "modo-desenvolvedor", conexao }
   }
 
+  if (pedidoConversaTecnica(mensagem)) return responderConversaTecnica(mensagem)
+
   const incidenteId = idNaMensagem(mensagem, "incidente")
   if (incidenteId && pedidoPrepararCodigo(mensagem)) {
     const { plano, pr } = await prepararCorrecaoCodigo({ incidenteId, usuario })
@@ -301,6 +427,20 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   }
 
   const planoId = idNaMensagem(mensagem, "plano")
+  if (pedidoValidarPublicacao(mensagem)) {
+    const wherePublicado = { usuarioId: usuario.id, status: "Publicado" }
+    if (planoId) wherePublicado.id = planoId
+    const publicado = await PlanoCorrecaoNexa.findOne({ where: wherePublicado, order: [["createdAt", "DESC"]] })
+    if (!publicado) return { resposta: "Não encontrei uma publicação pendente para validar.", modo: "nexa-dev-codigo" }
+    const validacao = await validarPublicacaoPlano({ plano: publicado, usuario })
+    return { resposta: `Validação concluída. O plano #${publicado.id} está publicado, o GitHub confirmou a integração e ${validacao.aplicacao.configurada ? "a aplicação respondeu normalmente" : "o endereço da aplicação não está configurado para teste externo"}.`, modo: "nexa-dev-codigo", atividade: "validacao-publicacao", planoCodigoId: publicado.id }
+  }
+  if (pedidoPrepararCodigo(mensagem) && !incidenteId) {
+    const analise = await planoAnalisado(usuario, planoId)
+    if (!analise) return { resposta: "Não encontrei uma análise de código pendente para preparar. Faça primeiro a análise da tela, módulo ou erro.", modo: "nexa-dev-codigo" }
+    const { plano, pr } = await prepararCorrecaoDaAnalise({ plano: analise, usuario })
+    return { resposta: `Preparei a correção do plano #${plano.id} em uma área separada. Arquivos: ${(plano.escopo?.arquivos || []).join(", ")}. Os testes foram iniciados no GitHub. Nada foi publicado.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, pullRequest: pr.number }
+  }
   if (pedidoStatusCodigo(mensagem)) {
     const querPublicar = pedidoPublicarCodigo(mensagem)
     const plano = await planoPendente(usuario, planoId)
@@ -311,7 +451,7 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
       const merge = await github.publicarPullRequest(estado.plano.escopo.tipo, estado.plano.escopo.pullRequest, `Nexa: publicar plano #${plano.id}`)
       if (!merge?.merged) throw new Error(merge?.message || "O GitHub não confirmou a publicação")
       await estado.plano.update({ status: "Publicado", aprovadoEm: new Date(), executadoEm: new Date() })
-      await IncidenteSistema.update({ status: "Em diagnóstico", correcao: `Plano #${plano.id} publicado; aguardando validação da nova versão.` }, { where: { id: plano.incidenteId } })
+      if (plano.incidenteId) await IncidenteSistema.update({ status: "Em diagnóstico", correcao: `Plano #${plano.id} publicado; aguardando validação da nova versão.` }, { where: { id: plano.incidenteId } })
       return { resposta: `Publicação autorizada. A correção do plano #${plano.id} foi enviada e agora estou aguardando a nova versão entrar no ar.`, modo: "nexa-dev-codigo", atividade: "publicacao-codigo", planoCodigoId: plano.id }
     }
     if (estado.plano.status === "Aguardando publicação") return { resposta: `Os testes do plano #${plano.id} passaram e o código não mudou depois da validação. Para autorizar, diga: publique o plano #${plano.id}.`, modo: "nexa-dev-codigo", atividade: "correcao-codigo", planoCodigoId: plano.id, aguardaConfirmacaoPublicacao: true }
@@ -321,4 +461,4 @@ async function responderCodigoAutonomo({ mensagem, usuario }) {
   return null
 }
 
-module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, atualizarStatusPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo, pedidoAcessoArquivos, pedidoAnalisarCodigo, repositoriosNaMensagem, selecionarArquivosParaAnalise, analisarCodigoSomenteLeitura }
+module.exports = { responderCodigoAutonomo, prepararCorrecaoCodigo, prepararCorrecaoDaAnalise, atualizarStatusPlano, validarPublicacaoPlano, caminhoPermitido, selecionarCandidatos, validarAlteracoes, tipoRepositorio, extrairJson, pedidoPrepararCodigo, pedidoPublicarCodigo, pedidoStatusCodigo, pedidoValidarPublicacao, pedidoConversaTecnica, pedidoAcessoArquivos, pedidoAnalisarCodigo, repositoriosNaMensagem, selecionarArquivosParaAnalise, analisarCodigoSomenteLeitura, planoAnalisado, responderConversaTecnica }

@@ -9,6 +9,8 @@ const {
   pedidoPrepararCodigo,
   pedidoPublicarCodigo,
   pedidoStatusCodigo,
+  pedidoValidarPublicacao,
+  pedidoConversaTecnica,
   pedidoAcessoArquivos,
   pedidoAnalisarCodigo,
   repositoriosNaMensagem,
@@ -65,6 +67,9 @@ test("reconhece consulta e análise dos repositórios", () => {
   assert.equal(pedidoAnalisarCodigo("Não analise os arquivos da Web"), false)
   assert.deepEqual(repositoriosNaMensagem("verifique a API e a Web"), ["api", "web"])
   assert.deepEqual(repositoriosNaMensagem("analise o layout da tela"), ["web"])
+  assert.equal(pedidoValidarPublicacao("Valide a publicação do plano #12"), true)
+  assert.equal(pedidoConversaTecnica("O que falta para terminar o Modo Desenvolvedor?"), true)
+  assert.equal(pedidoConversaTecnica("Qual é o CPF do cliente?"), false)
 })
 
 test("seleciona arquivos relacionados sem incluir dependências ou artefatos", () => {

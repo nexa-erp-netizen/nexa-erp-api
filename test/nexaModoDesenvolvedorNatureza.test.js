@@ -1,6 +1,12 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
-const { avaliarNaturezaIncidente } = require("../src/services/nexaModoDesenvolvedorService")
+const { avaliarNaturezaIncidente, pareceComandoDesenvolvedor } = require("../src/services/nexaModoDesenvolvedorService")
+
+test("reconhece o fluxo completo de plano conversacional", () => {
+  assert.equal(pareceComandoDesenvolvedor("Prepare a correção do plano #18"), true)
+  assert.equal(pareceComandoDesenvolvedor("Valide a publicação do plano #18"), true)
+  assert.equal(pareceComandoDesenvolvedor("O que falta para concluir o modo desenvolvedor?"), true)
+})
 
 test("classifica falha de comunicação antiga como temporária quando o sistema voltou", () => {
   const resultado = avaliarNaturezaIncidente({
