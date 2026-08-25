@@ -72,6 +72,7 @@ test("seleciona arquivos relacionados sem incluir dependências ou artefatos", (
     "src/pages/Clientes.jsx",
     "src/components/ClienteCard.jsx",
     "src/pages/Financeiro.jsx",
+    "src/pages/ConversaNexa.jsx",
     "dist/assets/index.js",
     "node_modules/react/index.js",
     "src/assets/logo.png",
@@ -81,4 +82,5 @@ test("seleciona arquivos relacionados sem incluir dependências ou artefatos", (
   assert.equal(selecionados.includes("dist/assets/index.js"), false)
   assert.equal(selecionados.includes("node_modules/react/index.js"), false)
   assert.equal(selecionados.includes("src/assets/logo.png"), false)
+  assert.equal(selecionados.includes("src/pages/ConversaNexa.jsx"), false)
 })

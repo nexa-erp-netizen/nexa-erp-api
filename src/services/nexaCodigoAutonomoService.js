@@ -66,18 +66,28 @@ function repositoriosNaMensagem(mensagem) {
 
 function selecionarArquivosParaAnalise(arquivos, mensagem, tipo) {
   const ignorar = /(^|\/)(node_modules|dist|build|coverage|\.git|public\/assets)(\/|$)|\.(?:png|jpe?g|gif|svg|ico|pdf|zip|lock)$/i
-  const palavras = normalizar(mensagem).split(/[^a-z0-9]+/).filter((palavra) => palavra.length >= 4)
-  return arquivos
+  const palavrasIgnoradas = new Set(["nexa", "analise", "analisar", "avalie", "verifique", "revisar", "layout", "tela", "pagina", "modulo", "codigo", "arquivo", "arquivos", "informacao", "informacoes", "repetida", "repetidas", "altere", "alterar", "nada", "sistema"])
+  const palavras = normalizar(mensagem).split(/[^a-z0-9]+/).filter((palavra) => palavra.length >= 4 && !palavrasIgnoradas.has(palavra))
+  const pontuados = arquivos
     .filter((arquivo) => !ignorar.test(arquivo) && /\.(?:js|jsx|ts|tsx|css)$/i.test(arquivo) && arquivo.startsWith("src/"))
     .map((arquivo) => {
       const caminho = normalizar(arquivo)
       let pontos = 0
-      for (const palavra of palavras) if (caminho.includes(palavra)) pontos += 5
+      let correspondencias = 0
+      for (const palavra of palavras) {
+        if (!caminho.includes(palavra)) continue
+        pontos += 10
+        correspondencias += 1
+      }
       if (tipo === "web" && /pages?|components?|routes?|app\./.test(caminho)) pontos += 2
       if (tipo === "api" && /controllers?|services?|routes?/.test(caminho)) pontos += 2
-      return { arquivo, pontos }
+      const nomeBase = caminho.split("/").pop().replace(/\.[^.]+$/, "")
+      if (palavras.some((palavra) => nomeBase === palavra)) pontos += 25
+      return { arquivo, pontos, correspondencias }
     })
-    .filter((item) => item.pontos > 0)
+  const encontrouRelacionados = pontuados.some((item) => item.correspondencias > 0)
+  return pontuados
+    .filter((item) => encontrouRelacionados ? item.correspondencias > 0 : item.pontos > 0)
     .sort((a, b) => b.pontos - a.pontos || a.arquivo.localeCompare(b.arquivo))
     .slice(0, MAX_ARQUIVOS_ANALISE)
     .map((item) => item.arquivo)
