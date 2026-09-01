@@ -200,8 +200,47 @@ router.post("/fechamentos", async (req, res) => {
     const periodo = periodoCompetencia(competencia)
     const movimentos = await MovimentoBancario.findAll({ where: { contaBancariaId, data: { [Op.between]: [periodo.inicio, periodo.fim] } } })
     if (!movimentos.length) return res.status(400).json({ message: "Não existem movimentos nesta competência." })
-    const naoConcluidos = movimentos.filter(m => !["Conciliado", "Ignorado", "Lançado"].includes(m.statusConciliacao))
-    if (naoConcluidos.length) return res.status(409).json({ message: `Faltam ${naoConcluidos.length} movimento(s) para concluir este mês.`, pendentes: naoConcluidos.length })
+
+    const movimentosClienteBrutos = await MovimentoCliente.findAll({
+      where: {
+        data: { [Op.between]: [periodo.inicio, periodo.fim] },
+        status: { [Op.ne]: "Rejeitado" },
+      },
+      order: [["data", "ASC"], ["id", "ASC"]],
+    })
+
+    const movimentosCliente = movimentosClienteBrutos.filter(item =>
+      normalizar(item.cliente) === normalizar(conta.cliente) &&
+      movimentoClienteEhBancario(item)
+    )
+
+    const movimentosComparaveis = movimentos.filter(item =>
+      item.statusConciliacao !== "Ignorado" &&
+      !item.lancamentoContabilId
+    )
+
+    const diferencas = calcularDiferencasDiarias(movimentosComparaveis, movimentosCliente)
+    const diasDiferentes = [...new Set(diferencas.map(item => item.data))]
+
+    if (diasDiferentes.length) {
+      return res.status(409).json({
+        message: `Existem ${diasDiferentes.length} dia(s) com diferença entre o banco e os lançamentos do cliente.`,
+        diasComDiferenca: diasDiferentes.length,
+        diferencas,
+      })
+    }
+
+    const naoConcluidos = movimentos.filter(m =>
+      !["Conciliado", "Ignorado", "Lançado"].includes(m.statusConciliacao)
+    )
+    for (const movimento of naoConcluidos) {
+      await movimento.update({
+        statusConciliacao: "Conciliado",
+        conciliadoEm: new Date(),
+        conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
+        observacoes: movimento.observacoes || "Nexa Auto • fechamento confirmado pelos totais diários",
+      })
+    }
 
     const anteriores = await MovimentoBancario.findAll({ where: { contaBancariaId, data: { [Op.lt]: periodo.inicio } } })
     const calculoSaldo = calcularSaldoAnterior({
@@ -375,6 +414,28 @@ router.post("/movimentos/conciliar-automatico", async (req, res) => {
     let agrupados = 0
     let gruposAgrupados = 0
     let jaConciliados = 0
+    const usuarioConciliacao = req.usuario.nome || req.usuario.email || "Equipe Nexa"
+
+    async function conciliarBanco(banco, observacao, clientesReferencia = []) {
+      usadosBanco.add(Number(banco.id))
+      clientesReferencia.forEach(item => usadosCliente.add(Number(item.id)))
+
+      if (banco.statusConciliacao === "Conciliado") {
+        jaConciliados += 1
+        return false
+      }
+
+      const planoReferencia = clientesReferencia.find(item => item.planoContaId)
+      await banco.update({
+        planoContaId: planoReferencia?.planoContaId || banco.planoContaId || null,
+        categoriaSugerida: planoReferencia?.planoContaNome || banco.categoriaSugerida,
+        statusConciliacao: "Conciliado",
+        conciliadoEm: new Date(),
+        conciliadoPor: usuarioConciliacao,
+        observacoes: observacao,
+      }, { transaction })
+      return true
+    }
 
     const chaveBanco = item =>
       `${item.natureza === "Entrada" ? "Receita" : "Despesa"}|${item.data}|${Number(item.valor || 0).toFixed(2)}`
@@ -384,88 +445,141 @@ router.post("/movimentos/conciliar-automatico", async (req, res) => {
     const gruposBanco = agruparPor(movimentosBanco, chaveBanco)
     const gruposCliente = agruparPor(movimentosCliente, chaveCliente)
 
-    // Nível 1: mesma data, natureza e valor.
+    // Nível 1 — mesma data, natureza e valor.
     for (const [chave, bancoGrupo] of gruposBanco.entries()) {
       const clienteGrupo = gruposCliente.get(chave) || []
       if (!clienteGrupo.length) continue
-
-      // Se existem mais lançamentos manuais que linhas no banco, pode haver duplicidade manual.
       if (clienteGrupo.length > bancoGrupo.length) continue
 
       const limite = Math.min(bancoGrupo.length, clienteGrupo.length)
       for (let i = 0; i < limite; i += 1) {
         const banco = bancoGrupo[i]
         const cliente = clienteGrupo[i]
-        usadosBanco.add(Number(banco.id))
-        usadosCliente.add(Number(cliente.id))
-
-        if (banco.statusConciliacao === "Conciliado") {
-          jaConciliados += 1
-          continue
-        }
-
-        await banco.update({
-          planoContaId: cliente.planoContaId || banco.planoContaId || null,
-          categoriaSugerida: cliente.planoContaNome || banco.categoriaSugerida,
-          statusConciliacao: "Conciliado",
-          conciliadoEm: new Date(),
-          conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
-          observacoes: `Nexa Auto • correspondência exata • Movimento Cliente #${cliente.id} • ${cliente.data} • ${cliente.tipo} • ${Number(cliente.valor || 0).toFixed(2)}`,
-        }, { transaction })
-        exatos += 1
+        const alterou = await conciliarBanco(
+          banco,
+          `Nexa Auto • correspondência exata • Movimento Cliente #${cliente.id} • ${cliente.data} • ${cliente.tipo} • ${Number(cliente.valor || 0).toFixed(2)}`,
+          [cliente]
+        )
+        if (alterou) exatos += 1
       }
     }
 
-    // Nível 2: o restante pode ser um agrupamento de várias movimentações do mesmo dia.
+    // Restante por dia e natureza.
+    const chavesDia = new Set()
+    movimentosBanco.forEach(item => {
+      if (!usadosBanco.has(Number(item.id))) {
+        chavesDia.add(`${item.natureza === "Entrada" ? "Receita" : "Despesa"}|${item.data}`)
+      }
+    })
+    movimentosCliente.forEach(item => {
+      if (!usadosCliente.has(Number(item.id))) chavesDia.add(`${item.tipo}|${item.data}`)
+    })
+
+    for (const chave of [...chavesDia].sort()) {
+      const [tipo, data] = chave.split("|")
+
+      let bancoGrupo = movimentosBanco.filter(item =>
+        !usadosBanco.has(Number(item.id)) &&
+        (item.natureza === "Entrada" ? "Receita" : "Despesa") === tipo &&
+        String(item.data) === data
+      )
+      let clienteGrupo = movimentosCliente.filter(item =>
+        !usadosCliente.has(Number(item.id)) &&
+        item.tipo === tipo &&
+        String(item.data) === data
+      )
+
+      if (!bancoGrupo.length || !clienteGrupo.length) continue
+
+      // Nível 2A — total do dia.
+      let totalBanco = somarValores(bancoGrupo)
+      let totalCliente = somarValores(clienteGrupo)
+      if (valoresIguais(totalBanco, totalCliente)) {
+        const idsCliente = clienteGrupo.map(item => item.id)
+        for (const banco of bancoGrupo) {
+          const alterou = await conciliarBanco(
+            banco,
+            `Nexa Auto • total diário • Movimentos Cliente #${idsCliente.join(",#")} • ${data} • ${tipo} • total ${totalCliente.toFixed(2)}`,
+            clienteGrupo
+          )
+          if (alterou) agrupados += 1
+        }
+        gruposAgrupados += 1
+        continue
+      }
+
+      // Nível 2B — 1 banco ↔ vários lançamentos do cliente.
+      for (const banco of [...bancoGrupo].sort((x, y) => Number(y.valor) - Number(x.valor))) {
+        if (usadosBanco.has(Number(banco.id))) continue
+        const disponiveis = clienteGrupo.filter(item => !usadosCliente.has(Number(item.id)))
+        const combinacao = encontrarCombinacao(disponiveis, Number(banco.valor || 0), 8)
+        if (!combinacao?.length) continue
+
+        const idsCliente = combinacao.map(item => item.id)
+        const alterou = await conciliarBanco(
+          banco,
+          `Nexa Auto • 1 banco ↔ ${combinacao.length} lançamentos • Movimentos Cliente #${idsCliente.join(",#")} • ${data} • ${tipo}`,
+          combinacao
+        )
+        if (alterou) agrupados += 1
+        gruposAgrupados += 1
+      }
+
+      // Nível 2C — vários movimentos do banco ↔ 1 lançamento do cliente.
+      bancoGrupo = bancoGrupo.filter(item => !usadosBanco.has(Number(item.id)))
+      clienteGrupo = clienteGrupo.filter(item => !usadosCliente.has(Number(item.id)))
+
+      for (const cliente of [...clienteGrupo].sort((x, y) => Number(y.valor) - Number(x.valor))) {
+        if (usadosCliente.has(Number(cliente.id))) continue
+        const disponiveis = bancoGrupo.filter(item => !usadosBanco.has(Number(item.id)))
+        const combinacao = encontrarCombinacao(disponiveis, Number(cliente.valor || 0), 8)
+        if (!combinacao?.length) continue
+
+        usadosCliente.add(Number(cliente.id))
+        for (const banco of combinacao) {
+          const alterou = await conciliarBanco(
+            banco,
+            `Nexa Auto • ${combinacao.length} bancos ↔ 1 lançamento • Movimento Cliente #${cliente.id} • ${data} • ${tipo}`,
+            [cliente]
+          )
+          if (alterou) agrupados += 1
+        }
+        gruposAgrupados += 1
+      }
+
+      // Nível 3 — residual do dia.
+      bancoGrupo = movimentosBanco.filter(item =>
+        !usadosBanco.has(Number(item.id)) &&
+        (item.natureza === "Entrada" ? "Receita" : "Despesa") === tipo &&
+        String(item.data) === data
+      )
+      clienteGrupo = movimentosCliente.filter(item =>
+        !usadosCliente.has(Number(item.id)) &&
+        item.tipo === tipo &&
+        String(item.data) === data
+      )
+
+      if (bancoGrupo.length && clienteGrupo.length) {
+        totalBanco = somarValores(bancoGrupo)
+        totalCliente = somarValores(clienteGrupo)
+        if (valoresIguais(totalBanco, totalCliente)) {
+          const idsCliente = clienteGrupo.map(item => item.id)
+          for (const banco of bancoGrupo) {
+            const alterou = await conciliarBanco(
+              banco,
+              `Nexa Auto • residual diário • Movimentos Cliente #${idsCliente.join(",#")} • ${data} • ${tipo} • total ${totalCliente.toFixed(2)}`,
+              clienteGrupo
+            )
+            if (alterou) agrupados += 1
+          }
+          gruposAgrupados += 1
+        }
+      }
+    }
+
     const restantesBanco = movimentosBanco.filter(item => !usadosBanco.has(Number(item.id)))
     const restantesCliente = movimentosCliente.filter(item => !usadosCliente.has(Number(item.id)))
-
-    const gruposDiaBanco = agruparPor(
-      restantesBanco,
-      item => `${item.natureza === "Entrada" ? "Receita" : "Despesa"}|${item.data}`
-    )
-    const gruposDiaCliente = agruparPor(
-      restantesCliente,
-      item => `${item.tipo}|${item.data}`
-    )
-
-    for (const [chave, bancoGrupo] of gruposDiaBanco.entries()) {
-      const clienteGrupo = gruposDiaCliente.get(chave) || []
-      if (!clienteGrupo.length) continue
-
-      const totalBanco = bancoGrupo.reduce((s, item) => s + Number(item.valor || 0), 0)
-      const totalCliente = clienteGrupo.reduce((s, item) => s + Number(item.valor || 0), 0)
-      if (Math.abs(totalBanco - totalCliente) > 0.009) continue
-
-      const idsCliente = clienteGrupo.map(item => item.id)
-      let atualizadosGrupo = 0
-
-      for (const banco of bancoGrupo) {
-        usadosBanco.add(Number(banco.id))
-
-        if (banco.statusConciliacao === "Conciliado") {
-          jaConciliados += 1
-          continue
-        }
-
-        await banco.update({
-          statusConciliacao: "Conciliado",
-          conciliadoEm: new Date(),
-          conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
-          observacoes: `Nexa Auto • agrupamento diário • Movimentos Cliente #${idsCliente.join(",#")} • total do dia ${totalCliente.toFixed(2)}`,
-        }, { transaction })
-        agrupados += 1
-        atualizadosGrupo += 1
-      }
-
-      if (atualizadosGrupo) gruposAgrupados += 1
-      clienteGrupo.forEach(item => usadosCliente.add(Number(item.id)))
-    }
-
-    const pendentes = movimentosBanco.filter(item =>
-      item.statusConciliacao !== "Conciliado" &&
-      !usadosBanco.has(Number(item.id))
-    ).length
+    const diferencas = calcularDiferencasDiarias(restantesBanco, restantesCliente)
 
     await transaction.commit()
     res.json({
@@ -474,7 +588,9 @@ router.post("/movimentos/conciliar-automatico", async (req, res) => {
       gruposAgrupados,
       jaConciliados,
       conciliadosAgora: exatos + agrupados,
-      pendentes,
+      pendentes: restantesBanco.length,
+      diasComDiferenca: new Set(diferencas.map(item => item.data)).size,
+      diferencas,
     })
   } catch (error) {
     await transaction.rollback()
@@ -530,6 +646,79 @@ function agruparPor(lista, chaveFn) {
     mapa.set(chave, grupo)
   }
   return mapa
+}
+
+function somarValores(lista) {
+  return lista.reduce((total, item) => total + Number(item.valor || 0), 0)
+}
+
+function valoresIguais(a, b) {
+  return Math.abs(Number(a || 0) - Number(b || 0)) < 0.01
+}
+
+function encontrarCombinacao(itens, alvoValor, maxItens = 8) {
+  const alvo = Math.round(Number(alvoValor || 0) * 100)
+  if (!Number.isFinite(alvo) || alvo <= 0 || itens.length < 2) return null
+
+  const candidatos = itens
+    .map(item => ({ item, centavos: Math.round(Number(item.valor || 0) * 100) }))
+    .filter(x => x.centavos > 0 && x.centavos <= alvo)
+    .sort((a, b) => b.centavos - a.centavos)
+
+  if (candidatos.length < 2) return null
+
+  const dp = new Map([[0, []]])
+  const LIMITE_ESTADOS = 40000
+
+  for (let indice = 0; indice < candidatos.length; indice += 1) {
+    const candidato = candidatos[indice]
+    const estados = [...dp.entries()]
+
+    for (const [soma, indices] of estados) {
+      if (indices.length >= maxItens) continue
+      const novaSoma = soma + candidato.centavos
+      if (novaSoma > alvo || dp.has(novaSoma)) continue
+
+      const novaLista = [...indices, indice]
+      if (novaSoma === alvo && novaLista.length >= 2) {
+        return novaLista.map(i => candidatos[i].item)
+      }
+
+      dp.set(novaSoma, novaLista)
+      if (dp.size > LIMITE_ESTADOS) break
+    }
+
+    if (dp.size > LIMITE_ESTADOS) break
+  }
+
+  return null
+}
+
+function calcularDiferencasDiarias(movimentosBanco, movimentosCliente) {
+  const mapa = new Map()
+
+  function obter(data, tipo) {
+    const chave = `${data}|${tipo}`
+    if (!mapa.has(chave)) {
+      mapa.set(chave, { data: String(data), tipo, banco: 0, cliente: 0 })
+    }
+    return mapa.get(chave)
+  }
+
+  movimentosBanco.forEach(item => {
+    const tipo = item.natureza === "Entrada" ? "Receita" : "Despesa"
+    obter(item.data, tipo).banco += Number(item.valor || 0)
+  })
+
+  movimentosCliente.forEach(item => {
+    if (!["Receita", "Despesa"].includes(item.tipo)) return
+    obter(item.data, item.tipo).cliente += Number(item.valor || 0)
+  })
+
+  return [...mapa.values()]
+    .map(item => ({ ...item, diferenca: Number((item.banco - item.cliente).toFixed(2)) }))
+    .filter(item => Math.abs(item.diferenca) >= 0.01)
+    .sort((a, b) => String(a.data).localeCompare(String(b.data)) || String(a.tipo).localeCompare(String(b.tipo)))
 }
 
 function normalizar(valor) {
