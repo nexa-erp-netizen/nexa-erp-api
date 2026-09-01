@@ -5,6 +5,7 @@ const { Op } = require("sequelize")
 const ContaBancariaCliente = require("../models/ContaBancariaCliente")
 const ImportacaoExtratoBancario = require("../models/ImportacaoExtratoBancario")
 const MovimentoBancario = require("../models/MovimentoBancario")
+const MovimentoCliente = require("../models/MovimentoCliente")
 const PlanoConta = require("../models/PlanoConta")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const FechamentoConciliacaoBancaria = require("../models/FechamentoConciliacaoBancaria")
@@ -281,9 +282,9 @@ router.patch("/movimentos/:id", async (req, res) => {
     if (movimento.lancamentoContabilId) return res.status(409).json({ message: "Este movimento já gerou um lançamento contábil." })
     const status = statusValido(req.body.statusConciliacao || "Classificado")
     const plano = req.body.planoContaId ? await PlanoConta.findByPk(Number(req.body.planoContaId)) : null
-    if (["Classificado", "Conciliado"].includes(status) && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
+    if (status === "Classificado" && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
     await movimento.update({
-      planoContaId: plano?.id || null,
+      planoContaId: plano?.id || movimento.planoContaId || null,
       categoriaSugerida: plano?.conta || movimento.categoriaSugerida,
       statusConciliacao: status,
       conciliadoEm: status === "Conciliado" ? new Date() : null,
@@ -303,11 +304,11 @@ router.post("/movimentos/classificar-lote", async (req, res) => {
     if (!ids.length) return res.status(400).json({ message: "Selecione pelo menos um movimento." })
     const status = statusValido(req.body.statusConciliacao || "Classificado")
     const plano = req.body.planoContaId ? await PlanoConta.findByPk(Number(req.body.planoContaId)) : null
-    if (["Classificado", "Conciliado"].includes(status) && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
+    if (status === "Classificado" && !plano) return res.status(400).json({ message: "Selecione uma conta do Plano de Contas." })
     const movimentos = await MovimentoBancario.findAll({ where: { id: { [Op.in]: ids }, lancamentoContabilId: null } })
     for (const movimento of movimentos) {
       await movimento.update({
-        planoContaId: plano?.id || null,
+        planoContaId: plano?.id || movimento.planoContaId || null,
         categoriaSugerida: plano?.conta || movimento.categoriaSugerida,
         statusConciliacao: status,
         conciliadoEm: status === "Conciliado" ? new Date() : null,
@@ -318,6 +319,167 @@ router.post("/movimentos/classificar-lote", async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: "Erro ao classificar movimentos em lote" })
+  }
+})
+
+
+router.post("/movimentos/conciliar-automatico", async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    const contaBancariaId = Number(req.body.contaBancariaId)
+    const competencia = String(req.body.competencia || "").trim()
+
+    if (!contaBancariaId) throw new Error("Selecione uma conta bancária.")
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new Error("Competência inválida.")
+
+    const conta = await ContaBancariaCliente.findByPk(contaBancariaId, { transaction })
+    if (!conta || !conta.ativo) throw new Error("Conta bancária não encontrada ou inativa.")
+
+    const fechamento = await FechamentoConciliacaoBancaria.findOne({
+      where: { contaBancariaId, competencia, status: "Fechado" },
+      transaction,
+    })
+    if (fechamento) throw new Error("Esta competência está fechada. Reabra o mês antes de conciliar.")
+
+    const { inicio, fim } = periodoCompetencia(competencia)
+
+    const movimentosBanco = await MovimentoBancario.findAll({
+      where: {
+        contaBancariaId,
+        data: { [Op.between]: [inicio, fim] },
+        lancamentoContabilId: null,
+        statusConciliacao: { [Op.ne]: "Ignorado" },
+      },
+      order: [["data", "ASC"], ["id", "ASC"]],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+
+    const movimentosClienteBrutos = await MovimentoCliente.findAll({
+      where: {
+        data: { [Op.between]: [inicio, fim] },
+        status: { [Op.ne]: "Rejeitado" },
+      },
+      order: [["data", "ASC"], ["id", "ASC"]],
+      transaction,
+    })
+
+    const movimentosCliente = movimentosClienteBrutos.filter(item =>
+      normalizar(item.cliente) === normalizar(conta.cliente) &&
+      movimentoClienteEhBancario(item)
+    )
+
+    const usadosBanco = new Set()
+    const usadosCliente = new Set()
+    let exatos = 0
+    let agrupados = 0
+    let gruposAgrupados = 0
+    let jaConciliados = 0
+
+    const chaveBanco = item =>
+      `${item.natureza === "Entrada" ? "Receita" : "Despesa"}|${item.data}|${Number(item.valor || 0).toFixed(2)}`
+    const chaveCliente = item =>
+      `${item.tipo}|${item.data}|${Number(item.valor || 0).toFixed(2)}`
+
+    const gruposBanco = agruparPor(movimentosBanco, chaveBanco)
+    const gruposCliente = agruparPor(movimentosCliente, chaveCliente)
+
+    // Nível 1: mesma data, natureza e valor.
+    for (const [chave, bancoGrupo] of gruposBanco.entries()) {
+      const clienteGrupo = gruposCliente.get(chave) || []
+      if (!clienteGrupo.length) continue
+
+      // Se existem mais lançamentos manuais que linhas no banco, pode haver duplicidade manual.
+      if (clienteGrupo.length > bancoGrupo.length) continue
+
+      const limite = Math.min(bancoGrupo.length, clienteGrupo.length)
+      for (let i = 0; i < limite; i += 1) {
+        const banco = bancoGrupo[i]
+        const cliente = clienteGrupo[i]
+        usadosBanco.add(Number(banco.id))
+        usadosCliente.add(Number(cliente.id))
+
+        if (banco.statusConciliacao === "Conciliado") {
+          jaConciliados += 1
+          continue
+        }
+
+        await banco.update({
+          planoContaId: cliente.planoContaId || banco.planoContaId || null,
+          categoriaSugerida: cliente.planoContaNome || banco.categoriaSugerida,
+          statusConciliacao: "Conciliado",
+          conciliadoEm: new Date(),
+          conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
+          observacoes: `Nexa Auto • correspondência exata • Movimento Cliente #${cliente.id} • ${cliente.data} • ${cliente.tipo} • ${Number(cliente.valor || 0).toFixed(2)}`,
+        }, { transaction })
+        exatos += 1
+      }
+    }
+
+    // Nível 2: o restante pode ser um agrupamento de várias movimentações do mesmo dia.
+    const restantesBanco = movimentosBanco.filter(item => !usadosBanco.has(Number(item.id)))
+    const restantesCliente = movimentosCliente.filter(item => !usadosCliente.has(Number(item.id)))
+
+    const gruposDiaBanco = agruparPor(
+      restantesBanco,
+      item => `${item.natureza === "Entrada" ? "Receita" : "Despesa"}|${item.data}`
+    )
+    const gruposDiaCliente = agruparPor(
+      restantesCliente,
+      item => `${item.tipo}|${item.data}`
+    )
+
+    for (const [chave, bancoGrupo] of gruposDiaBanco.entries()) {
+      const clienteGrupo = gruposDiaCliente.get(chave) || []
+      if (!clienteGrupo.length) continue
+
+      const totalBanco = bancoGrupo.reduce((s, item) => s + Number(item.valor || 0), 0)
+      const totalCliente = clienteGrupo.reduce((s, item) => s + Number(item.valor || 0), 0)
+      if (Math.abs(totalBanco - totalCliente) > 0.009) continue
+
+      const idsCliente = clienteGrupo.map(item => item.id)
+      let atualizadosGrupo = 0
+
+      for (const banco of bancoGrupo) {
+        usadosBanco.add(Number(banco.id))
+
+        if (banco.statusConciliacao === "Conciliado") {
+          jaConciliados += 1
+          continue
+        }
+
+        await banco.update({
+          statusConciliacao: "Conciliado",
+          conciliadoEm: new Date(),
+          conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
+          observacoes: `Nexa Auto • agrupamento diário • Movimentos Cliente #${idsCliente.join(",#")} • total do dia ${totalCliente.toFixed(2)}`,
+        }, { transaction })
+        agrupados += 1
+        atualizadosGrupo += 1
+      }
+
+      if (atualizadosGrupo) gruposAgrupados += 1
+      clienteGrupo.forEach(item => usadosCliente.add(Number(item.id)))
+    }
+
+    const pendentes = movimentosBanco.filter(item =>
+      item.statusConciliacao !== "Conciliado" &&
+      !usadosBanco.has(Number(item.id))
+    ).length
+
+    await transaction.commit()
+    res.json({
+      exatos,
+      agrupados,
+      gruposAgrupados,
+      jaConciliados,
+      conciliadosAgora: exatos + agrupados,
+      pendentes,
+    })
+  } catch (error) {
+    await transaction.rollback()
+    console.error(error)
+    res.status(400).json({ message: error.message || "Erro na conciliação automática" })
   }
 })
 
@@ -344,50 +506,31 @@ router.post("/movimentos/sugerir", async (req, res) => {
   }
 })
 
-router.post("/gerar-lancamentos", async (req, res) => {
-  const transaction = await sequelize.transaction()
-  try {
-    const ids = [...new Set((req.body.ids || []).map(Number).filter(Number.isInteger))]
-    if (!ids.length) throw new Error("Selecione os movimentos conciliados que deseja lançar.")
-    const movimentos = await MovimentoBancario.findAll({
-      where: { id: { [Op.in]: ids }, statusConciliacao: "Conciliado", lancamentoContabilId: null },
-      transaction,
-      lock: transaction.LOCK.UPDATE,
-    })
-    if (!movimentos.length) throw new Error("Nenhum movimento conciliado disponível para lançamento.")
-    const planos = await PlanoConta.findAll({ where: { id: { [Op.in]: movimentos.map(m => m.planoContaId).filter(Boolean) } }, transaction })
-    const mapaPlanos = new Map(planos.map(p => [Number(p.id), p]))
-    let gerados = 0
-    for (const movimento of movimentos) {
-      const plano = mapaPlanos.get(Number(movimento.planoContaId))
-      if (!plano) throw new Error(`Plano de Contas não encontrado para: ${movimento.descricao}`)
-      const [ano, mes] = String(movimento.data).split("-")
-      const lancamento = await LancamentoContabil.create({
-        cliente: movimento.cliente,
-        data: movimento.data,
-        competencia: `${mes}/${ano}`,
-        tipo: movimento.natureza === "Entrada" ? "Receita" : "Despesa",
-        planoConta: plano.conta,
-        descricao: movimento.descricao,
-        quantidade: 1,
-        valorUnitario: Number(movimento.valor).toFixed(2),
-        valor: Number(movimento.valor).toFixed(2),
-        formaPagamento: "Bancos",
-        observacao: `Gerado pela Conciliação Bancária • Movimento ${movimento.id}`,
-        anexos: [],
-        empresaId: req.usuario?.empresaId || null,
-      }, { transaction })
-      await movimento.update({ statusConciliacao: "Lançado", lancamentoContabilId: lancamento.id }, { transaction })
-      gerados += 1
-    }
-    await transaction.commit()
-    res.status(201).json({ gerados })
-  } catch (error) {
-    await transaction.rollback()
-    console.error(error)
-    res.status(400).json({ message: error.message || "Erro ao gerar lançamentos contábeis" })
-  }
+router.post("/gerar-lancamentos", async (_req, res) => {
+  return res.status(403).json({
+    message: "A geração automática de Receita/Despesa pela Conciliação Bancária está desativada. O extrato serve somente para conferir Movimentos Clientes.",
+  })
 })
+
+
+function movimentoClienteEhBancario(item) {
+  const plano = normalizar(item?.planoContaNome)
+  if (plano) return plano.includes("banco")
+
+  const forma = normalizar(`${item?.formaPagamento || ""} ${item?.forma || ""}`)
+  return /pix|cartao|transferencia|ted|doc|debito|credito|banco/.test(forma)
+}
+
+function agruparPor(lista, chaveFn) {
+  const mapa = new Map()
+  for (const item of lista) {
+    const chave = chaveFn(item)
+    const grupo = mapa.get(chave) || []
+    grupo.push(item)
+    mapa.set(chave, grupo)
+  }
+  return mapa
+}
 
 function normalizar(valor) {
   return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim()
