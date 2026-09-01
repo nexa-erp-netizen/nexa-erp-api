@@ -1,4 +1,5 @@
 const express = require("express")
+const crypto = require("crypto")
 const fs = require("fs")
 const upload = require("../middlewares/upload")
 const MovimentoCliente = require("../models/MovimentoCliente")
@@ -11,7 +12,33 @@ const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
 
+// Evita que duplo clique, retry do navegador ou timeout grave o mesmo envio novamente.
+// Não depende de alterar o banco e é propositalmente uma janela curta.
+const lotesRecentes = new Map()
+const lotesEmProcessamento = new Set()
+const JANELA_LOTE_MS = 2 * 60 * 1000
+const JANELA_ITEM_UNICO_MS = 8 * 1000
+
+function limparLotesRecentes() {
+  const agora = Date.now()
+
+  for (const [chave, info] of lotesRecentes.entries()) {
+    if (!info || Number(info.expiraEm || 0) <= agora) {
+      lotesRecentes.delete(chave)
+    }
+  }
+}
+
 function normalizarNomeCliente(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+}
+
+function normalizarTextoAssinatura(valor) {
   return String(valor || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -58,7 +85,72 @@ function descricaoLancamento(movimento) {
   return movimento.descricao || "Movimento do cliente"
 }
 
-async function criarLancamentoContabilDoMovimento(movimento, usuario) {
+function assinaturaMovimento(item) {
+  return [
+    normalizarTextoAssinatura(item.cliente),
+    String(item.data || ""),
+    normalizarTextoAssinatura(item.tipo),
+    String(item.planoContaId || ""),
+    normalizarTextoAssinatura(item.planoContaNome || item.planoConta),
+    normalizarTextoAssinatura(item.descricao),
+    valorParaNumero(item.valor).toFixed(2),
+    normalizarTextoAssinatura(item.formaPagamento || item.forma),
+  ].join("|")
+}
+
+function obterProtecaoReenvio(lista, req) {
+  const chaveExplicita = String(
+    req.body?.chaveIdempotencia ||
+    req.headers["x-idempotency-key"] ||
+    ""
+  ).trim()
+
+  const usuario = String(
+    req.usuario?.id ||
+    req.usuario?.email ||
+    req.usuario?.clienteVinculado ||
+    "sem-usuario"
+  )
+
+  if (chaveExplicita) {
+    return {
+      chave: `explicit:${usuario}:${chaveExplicita}`,
+      ttl: JANELA_LOTE_MS,
+    }
+  }
+
+  const conteudo = lista.map(assinaturaMovimento).sort().join("\n")
+  const hash = crypto.createHash("sha256").update(conteudo).digest("hex")
+
+  return {
+    chave: `auto:${usuario}:${hash}`,
+    // Um único lançamento pode ser legitimamente repetido.
+    // Por isso a proteção heurística nele dura só alguns segundos.
+    ttl: lista.length === 1 ? JANELA_ITEM_UNICO_MS : JANELA_LOTE_MS,
+  }
+}
+
+function respostaPlana(resposta) {
+  return {
+    movimentos: (resposta.movimentos || []).map(item =>
+      typeof item?.toJSON === "function" ? item.toJSON() : item
+    ),
+    lancamentosContabeis: (resposta.lancamentosContabeis || []).map(item =>
+      typeof item?.toJSON === "function" ? item.toJSON() : item
+    ),
+    duplicadoEvitado: false,
+  }
+}
+
+function chavePossivelDuplicado(item) {
+  return assinaturaMovimento(item)
+}
+
+async function criarLancamentoContabilDoMovimento(
+  movimento,
+  usuario,
+  transaction = null
+) {
   const referencia = `movimento-cliente:${movimento.id}`
 
   const existente = await LancamentoContabil.findOne({
@@ -66,6 +158,7 @@ async function criarLancamentoContabilDoMovimento(movimento, usuario) {
       cliente: movimento.cliente,
       observacao: referencia,
     },
+    transaction,
   })
 
   const dadosLancamento = {
@@ -84,7 +177,7 @@ async function criarLancamentoContabilDoMovimento(movimento, usuario) {
   }
 
   if (existente) {
-    await existente.update(dadosLancamento)
+    await existente.update(dadosLancamento, { transaction })
     return existente
   }
 
@@ -92,10 +185,13 @@ async function criarLancamentoContabilDoMovimento(movimento, usuario) {
     cliente: movimento.cliente,
     ...dadosLancamento,
     observacao: referencia,
-  })
+  }, { transaction })
 }
 
-async function removerLancamentoContabilDoMovimento(movimento) {
+async function removerLancamentoContabilDoMovimento(
+  movimento,
+  transaction = null
+) {
   const referencia = `movimento-cliente:${movimento.id}`
 
   await LancamentoContabil.destroy({
@@ -103,24 +199,30 @@ async function removerLancamentoContabilDoMovimento(movimento) {
       cliente: movimento.cliente,
       observacao: referencia,
     },
+    transaction,
   })
 }
 
 async function corrigirEFiltrarDatasLegadas(movimentos, usuario) {
   const validos = []
+
   for (const movimento of movimentos) {
     const resultado = normalizarDataMovimento(movimento.data)
+
     if (!resultado.valida) {
       console.warn(`Movimento ${movimento.id} ignorado por data inválida: ${movimento.data}`)
       continue
     }
+
     if (resultado.corrigida) {
       await movimento.update({ data: resultado.data })
       await criarLancamentoContabilDoMovimento(movimento, usuario)
       console.warn(`Movimento ${movimento.id} corrigido de ano legado para ${resultado.data}`)
     }
+
     validos.push(movimento)
   }
+
   return validos
 }
 
@@ -139,7 +241,10 @@ router.get("/", autenticar, async (req, res) => {
       const movimentosDoCliente = movimentos.filter(
         (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
       )
-      return res.json(await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario))
+
+      return res.json(
+        await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario)
+      )
     }
 
     const nomesConsultados = []
@@ -165,7 +270,9 @@ router.get("/", autenticar, async (req, res) => {
     })
 
     if (!nomesConsultados.length) {
-      return res.json(await corrigirEFiltrarDatasLegadas(movimentos, req.usuario))
+      return res.json(
+        await corrigirEFiltrarDatasLegadas(movimentos, req.usuario)
+      )
     }
 
     const nomesNormalizados = new Set(
@@ -178,7 +285,9 @@ router.get("/", autenticar, async (req, res) => {
       nomesNormalizados.has(normalizarNomeCliente(movimento.cliente))
     )
 
-    res.json(await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario))
+    res.json(
+      await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario)
+    )
   } catch (error) {
     console.error("ERRO AO LISTAR MOVIMENTOS:", error)
 
@@ -188,104 +297,412 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
-router.post("/", autenticar, async (req, res) => {
+// Localiza possíveis duplicados existentes.
+// Não apaga nada: a decisão continua sendo do escritório.
+router.get("/duplicados", autenticar, async (req, res) => {
   try {
-    const dataValida = validarDataNova(req.body.data)
-    if (!dataValida) return res.status(400).json({ message: "Data inválida. Informe uma data entre 1900 e o próximo ano." })
-    let clienteFinal = req.body.cliente
+    const movimentos = await MovimentoCliente.findAll({
+      order: [["data", "DESC"], ["createdAt", "ASC"], ["id", "ASC"]],
+    })
+
+    let filtrados = movimentos
 
     if (req.usuario.perfil === "Cliente") {
-      if (!req.usuario.clienteVinculado) {
-        return res.status(403).json({
-          message: "Cliente não vinculado ao usuário",
-        })
-      }
+      const vinculado = normalizarNomeCliente(req.usuario.clienteVinculado)
 
-      clienteFinal = req.usuario.clienteVinculado
+      filtrados = filtrados.filter(
+        item => normalizarNomeCliente(item.cliente) === vinculado
+      )
+    } else if (req.query.cliente) {
+      const clienteConsulta = normalizarNomeCliente(req.query.cliente)
+
+      filtrados = filtrados.filter(
+        item => normalizarNomeCliente(item.cliente) === clienteConsulta
+      )
     }
 
-    const movimento = await MovimentoCliente.create({
-      ...req.body,
-      data: dataValida,
-      cliente: clienteFinal,
-      valor: valorParaNumero(req.body.valor),
-      status: req.body.status || "Pendente",
-    })
+    if (req.query.competencia) {
+      const competencia = String(req.query.competencia)
 
-    const lancamentoContabil = await criarLancamentoContabilDoMovimento(
-      movimento,
-      req.usuario
-    )
+      filtrados = filtrados.filter(
+        item => obterCompetencia(item.data) === competencia
+      )
+    }
 
-    res.status(201).json({
-      movimento,
-      lancamentoContabil,
+    const grupos = new Map()
+
+    for (const movimento of filtrados) {
+      const chave = chavePossivelDuplicado(movimento)
+
+      if (!grupos.has(chave)) grupos.set(chave, [])
+      grupos.get(chave).push(movimento)
+    }
+
+    const suspeitos = [...grupos.values()]
+      .filter(grupo => grupo.length > 1)
+      .map(grupo => {
+        const ordenados = [...grupo].sort(
+          (a, b) =>
+            new Date(a.createdAt || 0) - new Date(b.createdAt || 0) ||
+            Number(a.id) - Number(b.id)
+        )
+
+        const primeiro = ordenados[0]
+        const ultimo = ordenados[ordenados.length - 1]
+
+        const primeiroEm = new Date(primeiro.createdAt || 0).getTime()
+        const ultimoEm = new Date(ultimo.createdAt || 0).getTime()
+        const intervaloSegundos =
+          Number.isFinite(primeiroEm) && Number.isFinite(ultimoEm)
+            ? Math.max(0, Math.round((ultimoEm - primeiroEm) / 1000))
+            : null
+
+        return {
+          quantidade: ordenados.length,
+          confianca:
+            intervaloSegundos !== null && intervaloSegundos <= 120
+              ? "Alta"
+              : "Revisar",
+          intervaloSegundos,
+          manterSugeridoId: ordenados[0].id,
+          excluirSugeridosIds: ordenados.slice(1).map(item => item.id),
+          valorUnitario: valorParaNumero(ordenados[0].valor),
+          valorPossivelmenteDuplicado:
+            valorParaNumero(ordenados[0].valor) * (ordenados.length - 1),
+          cliente: ordenados[0].cliente,
+          data: ordenados[0].data,
+          tipo: ordenados[0].tipo,
+          planoContaId: ordenados[0].planoContaId || null,
+          planoContaNome: ordenados[0].planoContaNome || "",
+          descricao: ordenados[0].descricao || "",
+          formaPagamento:
+            ordenados[0].formaPagamento ||
+            ordenados[0].forma ||
+            "",
+          movimentos: ordenados,
+        }
+      })
+      .sort((a, b) => String(b.data).localeCompare(String(a.data)))
+
+    res.json({
+      grupos: suspeitos,
+      quantidadeGrupos: suspeitos.length,
+      quantidadeRegistrosSuspeitos: suspeitos.reduce(
+        (total, grupo) => total + grupo.quantidade,
+        0
+      ),
+      valorPossivelmenteDuplicado: suspeitos.reduce(
+        (total, grupo) => total + Number(grupo.valorPossivelmenteDuplicado || 0),
+        0
+      ),
+      observacao:
+        "São apenas possíveis duplicados. Compras legítimas podem ter a mesma data, descrição e valor. Nenhum registro foi excluído automaticamente.",
     })
   } catch (error) {
-    console.error("ERRO AO CRIAR MOVIMENTO:", error)
+    console.error("ERRO AO LOCALIZAR DUPLICADOS:", error)
 
     res.status(500).json({
-      message: "Erro ao criar movimento",
+      message: "Erro ao localizar possíveis duplicados",
       erro: error.message,
     })
   }
 })
 
-router.post("/massa", autenticar, async (req, res) => {
-  try {
-    const lista = req.body.movimentos || []
+// Exclui somente movimentos que o escritório confirmou como duplicados.
+router.post("/duplicados/remover", autenticar, async (req, res) => {
+  if (req.usuario.perfil === "Cliente") {
+    return res.status(403).json({
+      message: "Somente o escritório pode remover duplicados em lote.",
+    })
+  }
 
-    if (!Array.isArray(lista) || lista.length === 0) {
-      return res.status(400).json({
-        message: "Nenhum movimento enviado",
+  if (req.body.confirmar !== true) {
+    return res.status(400).json({
+      message: "Confirme explicitamente a remoção dos duplicados.",
+    })
+  }
+
+  const ids = [...new Set(
+    (Array.isArray(req.body.idsExcluir) ? req.body.idsExcluir : [])
+      .map(Number)
+      .filter(Number.isInteger)
+  )]
+
+  if (!ids.length) {
+    return res.status(400).json({
+      message: "Informe os IDs confirmados para exclusão.",
+    })
+  }
+
+  const transaction = await MovimentoCliente.sequelize.transaction()
+
+  try {
+    const removidos = []
+
+    for (const id of ids) {
+      const movimento = await MovimentoCliente.findByPk(id, { transaction })
+
+      if (!movimento) continue
+
+      await removerLancamentoContabilDoMovimento(movimento, transaction)
+      await movimento.destroy({ transaction })
+
+      removidos.push(id)
+    }
+
+    await transaction.commit()
+
+    res.json({
+      message: `${removidos.length} movimento(s) removido(s) após confirmação.`,
+      removidos,
+    })
+  } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback()
+    }
+
+    console.error("ERRO AO REMOVER DUPLICADOS:", error)
+
+    res.status(500).json({
+      message: "Erro ao remover duplicados confirmados",
+      erro: error.message,
+    })
+  }
+})
+
+router.post("/", autenticar, async (req, res) => {
+  const dataValida = validarDataNova(req.body.data)
+
+  if (!dataValida) {
+    return res.status(400).json({
+      message: "Data inválida. Informe uma data entre 1900 e o próximo ano.",
+    })
+  }
+
+  let clienteFinal = req.body.cliente
+
+  if (req.usuario.perfil === "Cliente") {
+    if (!req.usuario.clienteVinculado) {
+      return res.status(403).json({
+        message: "Cliente não vinculado ao usuário",
       })
     }
 
-    const dataInvalidaIndice = lista.findIndex((item) => !validarDataNova(item.data))
-    if (dataInvalidaIndice >= 0) {
-      return res.status(400).json({ message: `Data inválida na linha ${dataInvalidaIndice + 1}. Corrija o ano antes de salvar.` })
-    }
+    clienteFinal = req.usuario.clienteVinculado
+  }
 
-    const movimentosTratados = lista.map((item) => {
-      let clienteFinal = item.cliente
+  const movimentoTratado = {
+    ...req.body,
+    data: dataValida,
+    cliente: clienteFinal,
+    valor: valorParaNumero(req.body.valor),
+    status: req.body.status || "Pendente",
+  }
 
-      if (req.usuario.perfil === "Cliente") {
-        clienteFinal = req.usuario.clienteVinculado
-      }
+  limparLotesRecentes()
 
-      return {
-        ...item,
-        data: validarDataNova(item.data),
-        cliente: clienteFinal,
-        valor: valorParaNumero(item.valor),
-        status: item.status || "Pendente",
-      }
+  const protecao = obterProtecaoReenvio([movimentoTratado], req)
+  const { chave, ttl } = protecao
+
+  if (lotesRecentes.has(chave)) {
+    const anterior = lotesRecentes.get(chave)
+
+    return res.status(200).json({
+      ...(anterior.resposta || {}),
+      duplicadoEvitado: true,
+      message:
+        "Este mesmo lançamento acabou de ser recebido. Nenhum registro foi duplicado.",
+    })
+  }
+
+  if (lotesEmProcessamento.has(chave)) {
+    return res.status(409).json({
+      message:
+        "Este lançamento já está sendo salvo. Aguarde a conclusão antes de tentar novamente.",
+      duplicadoEvitado: true,
+    })
+  }
+
+  lotesEmProcessamento.add(chave)
+
+  const transaction = await MovimentoCliente.sequelize.transaction()
+
+  try {
+    const movimento = await MovimentoCliente.create(
+      movimentoTratado,
+      { transaction }
+    )
+
+    const lancamentoContabil = await criarLancamentoContabilDoMovimento(
+      movimento,
+      req.usuario,
+      transaction
+    )
+
+    await transaction.commit()
+
+    const resposta = respostaPlana({
+      movimentos: [movimento],
+      lancamentosContabeis: [lancamentoContabil],
     })
 
-    const movimentos = await MovimentoCliente.bulkCreate(movimentosTratados)
+    lotesRecentes.set(chave, {
+      expiraEm: Date.now() + ttl,
+      resposta: {
+        movimento: resposta.movimentos[0],
+        lancamentoContabil: resposta.lancamentosContabeis[0],
+        duplicadoEvitado: false,
+      },
+    })
+
+    res.status(201).json({
+      movimento,
+      lancamentoContabil,
+      duplicadoEvitado: false,
+    })
+  } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback()
+    }
+
+    console.error("ERRO AO CRIAR MOVIMENTO:", error)
+
+    res.status(500).json({
+      message:
+        "Erro ao criar movimento. A gravação foi desfeita para evitar duplicidade.",
+      erro: error.message,
+    })
+  } finally {
+    lotesEmProcessamento.delete(chave)
+  }
+})
+
+router.post("/massa", autenticar, async (req, res) => {
+  limparLotesRecentes()
+
+  const lista = req.body.movimentos || []
+
+  if (!Array.isArray(lista) || lista.length === 0) {
+    return res.status(400).json({
+      message: "Nenhum movimento enviado",
+    })
+  }
+
+  if (
+    req.usuario.perfil === "Cliente" &&
+    !req.usuario.clienteVinculado
+  ) {
+    return res.status(403).json({
+      message: "Cliente não vinculado ao usuário",
+    })
+  }
+
+  const dataInvalidaIndice = lista.findIndex(
+    item => !validarDataNova(item.data)
+  )
+
+  if (dataInvalidaIndice >= 0) {
+    return res.status(400).json({
+      message:
+        `Data inválida na linha ${dataInvalidaIndice + 1}. ` +
+        "Corrija o ano antes de salvar.",
+    })
+  }
+
+  const movimentosTratados = lista.map((item) => {
+    let clienteFinal = item.cliente
+
+    if (req.usuario.perfil === "Cliente") {
+      clienteFinal = req.usuario.clienteVinculado
+    }
+
+    return {
+      ...item,
+      data: validarDataNova(item.data),
+      cliente: clienteFinal,
+      valor: valorParaNumero(item.valor),
+      status: item.status || "Pendente",
+    }
+  })
+
+  const protecao = obterProtecaoReenvio(movimentosTratados, req)
+  const { chave, ttl } = protecao
+
+  if (lotesRecentes.has(chave)) {
+    const anterior = lotesRecentes.get(chave)
+
+    return res.status(200).json({
+      ...(anterior.resposta || {}),
+      duplicadoEvitado: true,
+      message:
+        "Este mesmo lote já havia sido recebido. Nenhum lançamento foi duplicado.",
+    })
+  }
+
+  if (lotesEmProcessamento.has(chave)) {
+    return res.status(409).json({
+      message:
+        "Este lote já está sendo salvo. Aguarde a conclusão antes de tentar novamente.",
+      duplicadoEvitado: true,
+    })
+  }
+
+  lotesEmProcessamento.add(chave)
+
+  const transaction = await MovimentoCliente.sequelize.transaction()
+
+  try {
+    // IMPORTANTE:
+    // MovimentoCliente + LancamentoContabil passam a ser uma única operação.
+    // Se qualquer parte falhar, todo o lote é desfeito.
+    const movimentos = await MovimentoCliente.bulkCreate(
+      movimentosTratados,
+      { transaction }
+    )
 
     const lancamentosContabeis = []
 
     for (const movimento of movimentos) {
       const lancamento = await criarLancamentoContabilDoMovimento(
         movimento,
-        req.usuario
+        req.usuario,
+        transaction
       )
 
       lancamentosContabeis.push(lancamento)
     }
 
-    res.status(201).json({
+    await transaction.commit()
+
+    const resposta = respostaPlana({
       movimentos,
       lancamentosContabeis,
     })
+
+    lotesRecentes.set(chave, {
+      expiraEm: Date.now() + ttl,
+      resposta,
+    })
+
+    res.status(201).json({
+      movimentos,
+      lancamentosContabeis,
+      duplicadoEvitado: false,
+    })
   } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback()
+    }
+
     console.error("ERRO AO CRIAR MOVIMENTOS EM MASSA:", error)
 
     res.status(500).json({
-      message: "Erro ao criar movimentos em massa",
+      message:
+        "Erro ao criar movimentos em massa. Nenhum item deste lote foi gravado.",
       erro: error.message,
     })
+  } finally {
+    lotesEmProcessamento.delete(chave)
   }
 })
 
@@ -313,11 +730,19 @@ router.put("/:id", autenticar, async (req, res) => {
     const dataInformada = req.body.data !== undefined
       ? validarDataNova(req.body.data)
       : normalizarDataMovimento(movimento.data).data
-    if (!dataInformada) return res.status(400).json({ message: "Data inválida. Corrija o ano antes de salvar." })
+
+    if (!dataInformada) {
+      return res.status(400).json({
+        message: "Data inválida. Corrija o ano antes de salvar.",
+      })
+    }
 
     await movimento.update({
       ...req.body,
-      cliente: req.usuario.perfil === "Cliente" ? req.usuario.clienteVinculado : (req.body.cliente || movimento.cliente),
+      cliente:
+        req.usuario.perfil === "Cliente"
+          ? req.usuario.clienteVinculado
+          : (req.body.cliente || movimento.cliente),
       data: dataInformada,
       valor:
         req.body.valor !== undefined
@@ -345,12 +770,16 @@ router.put("/:id", autenticar, async (req, res) => {
 })
 
 router.delete("/:id", autenticar, async (req, res) => {
+  const transaction = await MovimentoCliente.sequelize.transaction()
+
   try {
     const { id } = req.params
 
-    const movimento = await MovimentoCliente.findByPk(id)
+    const movimento = await MovimentoCliente.findByPk(id, { transaction })
 
     if (!movimento) {
+      await transaction.rollback()
+
       return res.status(404).json({
         message: "Movimento não encontrado",
       })
@@ -360,19 +789,26 @@ router.delete("/:id", autenticar, async (req, res) => {
       req.usuario.perfil === "Cliente" &&
       movimento.cliente !== req.usuario.clienteVinculado
     ) {
+      await transaction.rollback()
+
       return res.status(403).json({
         message: "Acesso não autorizado",
       })
     }
 
-    await removerLancamentoContabilDoMovimento(movimento)
+    await removerLancamentoContabilDoMovimento(movimento, transaction)
+    await movimento.destroy({ transaction })
 
-    await movimento.destroy()
+    await transaction.commit()
 
     res.json({
       message: "Movimento excluído com sucesso",
     })
   } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback()
+    }
+
     console.error("ERRO AO EXCLUIR MOVIMENTO:", error)
 
     res.status(500).json({
@@ -398,7 +834,8 @@ router.post(
 
       const fileBuffer = fs.readFileSync(file.path)
 
-      const nomeArquivo = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`
+      const nomeArquivo =
+        `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`
       const caminhoSupabase = `movimentos/${nomeArquivo}`
 
       const { error } = await supabase.storage
