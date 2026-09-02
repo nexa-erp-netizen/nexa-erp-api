@@ -146,6 +146,11 @@ function chavePossivelDuplicado(item) {
   return assinaturaMovimento(item)
 }
 
+function movimentoParaRespostaDuplicado(item) {
+  if (!item) return null
+  return typeof item.toJSON === "function" ? item.toJSON() : item
+}
+
 async function criarLancamentoContabilDoMovimento(
   movimento,
   usuario,
@@ -297,6 +302,127 @@ router.get("/", autenticar, async (req, res) => {
   }
 })
 
+// Verifica se um novo lançamento se parece com algo já salvo.
+// Apenas avisa: nunca bloqueia um lançamento legítimo confirmado pelo usuário.
+router.post("/duplicados/verificar", autenticar, async (req, res) => {
+  try {
+    const lista = Array.isArray(req.body.movimentos)
+      ? req.body.movimentos
+      : []
+
+    if (!lista.length) {
+      return res.json({
+        duplicados: [],
+        quantidade: 0,
+      })
+    }
+
+    if (
+      req.usuario.perfil === "Cliente" &&
+      !req.usuario.clienteVinculado
+    ) {
+      return res.status(403).json({
+        message: "Cliente não vinculado ao usuário",
+      })
+    }
+
+    const tratados = lista.map((item, indice) => {
+      const data = validarDataNova(item.data)
+
+      if (!data) {
+        return {
+          indice,
+          invalido: true,
+          item,
+        }
+      }
+
+      return {
+        indice,
+        invalido: false,
+        item: {
+          ...item,
+          data,
+          cliente:
+            req.usuario.perfil === "Cliente"
+              ? req.usuario.clienteVinculado
+              : item.cliente,
+          valor: valorParaNumero(item.valor),
+        },
+      }
+    })
+
+    const invalido = tratados.find(item => item.invalido)
+
+    if (invalido) {
+      return res.status(400).json({
+        message:
+          `Data inválida na linha ${invalido.indice + 1}. ` +
+          "Corrija antes de verificar duplicidade.",
+      })
+    }
+
+    const movimentosExistentes = await MovimentoCliente.findAll({
+      order: [["createdAt", "ASC"], ["id", "ASC"]],
+    })
+
+    const porAssinatura = new Map()
+
+    for (const existente of movimentosExistentes) {
+      const chave = assinaturaMovimento(existente)
+
+      if (!porAssinatura.has(chave)) {
+        porAssinatura.set(chave, [])
+      }
+
+      porAssinatura.get(chave).push(existente)
+    }
+
+    const vistosNoLote = new Map()
+    const duplicados = []
+
+    for (const tratado of tratados) {
+      const novo = tratado.item
+      const chave = assinaturaMovimento(novo)
+      const existentes = porAssinatura.get(chave) || []
+      const anterioresNoLote = vistosNoLote.get(chave) || []
+
+      if (existentes.length || anterioresNoLote.length) {
+        const referencia =
+          existentes[0] ||
+          anterioresNoLote[0]?.item ||
+          null
+
+        duplicados.push({
+          indice: tratado.indice,
+          novo,
+          existente: movimentoParaRespostaDuplicado(referencia),
+          quantidadeExistentes: existentes.length,
+          repetidoNoMesmoLote: anterioresNoLote.length > 0,
+        })
+      }
+
+      if (!vistosNoLote.has(chave)) {
+        vistosNoLote.set(chave, [])
+      }
+
+      vistosNoLote.get(chave).push(tratado)
+    }
+
+    res.json({
+      duplicados,
+      quantidade: duplicados.length,
+    })
+  } catch (error) {
+    console.error("ERRO AO VERIFICAR POSSÍVEL DUPLICIDADE:", error)
+
+    res.status(500).json({
+      message: "Erro ao verificar possíveis duplicados",
+      erro: error.message,
+    })
+  }
+})
+
 // Localiza possíveis duplicados existentes.
 // Não apaga nada: a decisão continua sendo do escritório.
 router.get("/duplicados", autenticar, async (req, res) => {
@@ -422,11 +548,19 @@ router.post("/duplicados/remover", autenticar, async (req, res) => {
     })
   }
 
+  const manterId = Number(req.body.manterId)
+
+  if (!Number.isInteger(manterId)) {
+    return res.status(400).json({
+      message: "Informe o lançamento que deve ser mantido.",
+    })
+  }
+
   const ids = [...new Set(
     (Array.isArray(req.body.idsExcluir) ? req.body.idsExcluir : [])
       .map(Number)
       .filter(Number.isInteger)
-  )]
+  )].filter(id => id !== manterId)
 
   if (!ids.length) {
     return res.status(400).json({
@@ -437,12 +571,32 @@ router.post("/duplicados/remover", autenticar, async (req, res) => {
   const transaction = await MovimentoCliente.sequelize.transaction()
 
   try {
+    const manter = await MovimentoCliente.findByPk(manterId, { transaction })
+
+    if (!manter) {
+      await transaction.rollback()
+
+      return res.status(404).json({
+        message: "O lançamento escolhido para manter não foi encontrado.",
+      })
+    }
+
+    const assinaturaManter = assinaturaMovimento(manter)
     const removidos = []
 
     for (const id of ids) {
       const movimento = await MovimentoCliente.findByPk(id, { transaction })
 
       if (!movimento) continue
+
+      if (assinaturaMovimento(movimento) !== assinaturaManter) {
+        await transaction.rollback()
+
+        return res.status(400).json({
+          message:
+            "A remoção foi cancelada porque um dos registros não é igual ao lançamento mantido.",
+        })
+      }
 
       await removerLancamentoContabilDoMovimento(movimento, transaction)
       await movimento.destroy({ transaction })
@@ -453,7 +607,10 @@ router.post("/duplicados/remover", autenticar, async (req, res) => {
     await transaction.commit()
 
     res.json({
-      message: `${removidos.length} movimento(s) removido(s) após confirmação.`,
+      message:
+        `${removidos.length} duplicado(s) removido(s). ` +
+        `O lançamento ${manterId} foi mantido.`,
+      manterId,
       removidos,
     })
   } catch (error) {

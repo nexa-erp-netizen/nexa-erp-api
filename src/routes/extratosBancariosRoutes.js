@@ -214,21 +214,48 @@ router.post("/fechamentos", async (req, res) => {
       movimentoClienteEhBancario(item)
     )
 
+    // O extrato é somente evidência bancária. Para o fechamento mensal,
+    // toda linha não justificada participa dos totais, mesmo se uma versão
+    // antiga da conciliação tiver gravado lancamentoContabilId.
     const movimentosComparaveis = movimentos.filter(item =>
-      item.statusConciliacao !== "Ignorado" &&
-      !item.lancamentoContabilId
+      item.statusConciliacao !== "Ignorado"
     )
 
-    const diferencas = calcularDiferencasDiarias(movimentosComparaveis, movimentosCliente)
-    const diasDiferentes = [...new Set(diferencas.map(item => item.data))]
+    const entradasBancoComparaveis = movimentosComparaveis
+      .filter(item => item.natureza === "Entrada")
+      .reduce((total, item) => total + Number(item.valor || 0), 0)
+    const saidasBancoComparaveis = movimentosComparaveis
+      .filter(item => item.natureza !== "Entrada")
+      .reduce((total, item) => total + Number(item.valor || 0), 0)
 
-    const diferencasRelevantes = diferencas.filter(item => Math.abs(Number(item.diferenca || 0)) > 0.10)
-    if (diferencasRelevantes.length) {
-      const diasRelevantes = [...new Set(diferencasRelevantes.map(item => item.data))]
+    const receitasCliente = movimentosCliente
+      .filter(item => item.tipo === "Receita")
+      .reduce((total, item) => total + Number(item.valor || 0), 0)
+    const despesasCliente = movimentosCliente
+      .filter(item => item.tipo === "Despesa")
+      .reduce((total, item) => total + Number(item.valor || 0), 0)
+
+    const diferencaEntradas = Number((entradasBancoComparaveis - receitasCliente).toFixed(2))
+    const diferencaSaidas = Number((saidasBancoComparaveis - despesasCliente).toFixed(2))
+    const TOLERANCIA_FECHAMENTO = 0.10
+
+    if (
+      Math.abs(diferencaEntradas) > TOLERANCIA_FECHAMENTO ||
+      Math.abs(diferencaSaidas) > TOLERANCIA_FECHAMENTO
+    ) {
       return res.status(409).json({
-        message: `Existem ${diasRelevantes.length} dia(s) com diferença relevante entre o banco e os lançamentos do cliente.`,
-        diasComDiferenca: diasRelevantes.length,
-        diferencas: diferencasRelevantes,
+        message:
+          `Ainda existem diferenças no mês. ` +
+          `Entradas: ${moedaPdf(diferencaEntradas)} • ` +
+          `Saídas: ${moedaPdf(diferencaSaidas)}.`,
+        diferencaEntradas,
+        diferencaSaidas,
+        totais: {
+          entradasBanco: Number(entradasBancoComparaveis.toFixed(2)),
+          receitasCliente: Number(receitasCliente.toFixed(2)),
+          saidasBanco: Number(saidasBancoComparaveis.toFixed(2)),
+          despesasCliente: Number(despesasCliente.toFixed(2)),
+        },
       })
     }
 
@@ -240,7 +267,7 @@ router.post("/fechamentos", async (req, res) => {
         statusConciliacao: "Conciliado",
         conciliadoEm: new Date(),
         conciliadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa",
-        observacoes: movimento.observacoes || "Nexa Auto • fechamento confirmado pelos totais diários",
+        observacoes: movimento.observacoes || "Nexa Auto • fechamento confirmado pelos totais mensais",
       })
     }
 
