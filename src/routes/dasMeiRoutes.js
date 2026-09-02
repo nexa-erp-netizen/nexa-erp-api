@@ -106,6 +106,8 @@ async function criarLancamentoDoMovimentoDas(movimento, guia, cliente) {
     valorUnitario: String(movimento.valor),
     valor: String(movimento.valor),
     formaPagamento: movimento.formaPagamento || movimento.forma || "",
+    origem: "Cliente",
+    movimentoClienteId: movimento.id,
     anexos: movimento.comprovante ? [{ nome: "Comprovante", caminho: movimento.comprovante }] : [],
     empresaId: guia.empresaId || cliente.empresaId || null,
   }

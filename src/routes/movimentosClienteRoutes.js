@@ -85,6 +85,10 @@ function descricaoLancamento(movimento) {
   return movimento.descricao || "Movimento do cliente"
 }
 
+function origemDoUsuario(usuario) {
+  return usuario?.perfil === "Cliente" ? "Cliente" : "Escritório"
+}
+
 function assinaturaMovimento(item) {
   return [
     normalizarTextoAssinatura(item.cliente),
@@ -158,13 +162,22 @@ async function criarLancamentoContabilDoMovimento(
 ) {
   const referencia = `movimento-cliente:${movimento.id}`
 
-  const existente = await LancamentoContabil.findOne({
+  let existente = await LancamentoContabil.findOne({
     where: {
-      cliente: movimento.cliente,
-      observacao: referencia,
+      movimentoClienteId: movimento.id,
     },
     transaction,
   })
+
+  if (!existente) {
+    existente = await LancamentoContabil.findOne({
+      where: {
+        cliente: movimento.cliente,
+        observacao: referencia,
+      },
+      transaction,
+    })
+  }
 
   const dadosLancamento = {
     data: movimento.data,
@@ -175,6 +188,8 @@ async function criarLancamentoContabilDoMovimento(
     valor: valorParaNumero(movimento.valor),
     formaPagamento:
       movimento.formaPagamento || movimento.forma || "",
+    origem: existente?.origem || origemDoUsuario(usuario),
+    movimentoClienteId: movimento.id,
     anexos: movimento.comprovante
       ? [{ nome: "Comprovante", caminho: movimento.comprovante }]
       : [],
@@ -198,6 +213,18 @@ async function removerLancamentoContabilDoMovimento(
   transaction = null
 ) {
   const referencia = `movimento-cliente:${movimento.id}`
+
+  const vinculado = await LancamentoContabil.findOne({
+    where: {
+      movimentoClienteId: movimento.id,
+    },
+    transaction,
+  })
+
+  if (vinculado) {
+    await vinculado.destroy({ transaction })
+    return
+  }
 
   await LancamentoContabil.destroy({
     where: {
@@ -864,12 +891,19 @@ router.post("/massa", autenticar, async (req, res) => {
 })
 
 router.put("/:id", autenticar, async (req, res) => {
+  const transaction = await MovimentoCliente.sequelize.transaction()
+
   try {
     const { id } = req.params
 
-    const movimento = await MovimentoCliente.findByPk(id)
+    const movimento = await MovimentoCliente.findByPk(
+      id,
+      { transaction }
+    )
 
     if (!movimento) {
+      await transaction.rollback()
+
       return res.status(404).json({
         message: "Movimento não encontrado",
       })
@@ -879,6 +913,8 @@ router.put("/:id", autenticar, async (req, res) => {
       req.usuario.perfil === "Cliente" &&
       movimento.cliente !== req.usuario.clienteVinculado
     ) {
+      await transaction.rollback()
+
       return res.status(403).json({
         message: "Acesso não autorizado",
       })
@@ -889,6 +925,8 @@ router.put("/:id", autenticar, async (req, res) => {
       : normalizarDataMovimento(movimento.data).data
 
     if (!dataInformada) {
+      await transaction.rollback()
+
       return res.status(400).json({
         message: "Data inválida. Corrija o ano antes de salvar.",
       })
@@ -905,22 +943,30 @@ router.put("/:id", autenticar, async (req, res) => {
         req.body.valor !== undefined
           ? valorParaNumero(req.body.valor)
           : movimento.valor,
-    })
+    }, { transaction })
 
     const lancamentoContabil = await criarLancamentoContabilDoMovimento(
       movimento,
-      req.usuario
+      req.usuario,
+      transaction
     )
+
+    await transaction.commit()
 
     res.json({
       movimento,
       lancamentoContabil,
     })
   } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback()
+    }
+
     console.error("ERRO AO ATUALIZAR MOVIMENTO:", error)
 
     res.status(500).json({
-      message: "Erro ao atualizar movimento",
+      message:
+        "Erro ao atualizar movimento. Nenhuma alteração parcial foi mantida.",
       erro: error.message,
     })
   }

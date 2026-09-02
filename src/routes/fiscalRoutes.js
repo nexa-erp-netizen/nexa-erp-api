@@ -615,6 +615,7 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
         descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
         valor: obrigacao.valor || "0",
         formaPagamento: "",
+        origem: "Escritório",
         observacao: referenciaLancamento,
         anexos: obrigacao.anexos || [],
         empresaId: req.usuario.empresaId || obrigacao.empresaId || null,

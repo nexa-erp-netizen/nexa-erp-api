@@ -346,7 +346,7 @@ async function executar(dados, usuario) {
       cliente: cliente.nome, data: dados.data, competencia: `${dados.data.slice(5, 7)}/${dados.data.slice(0, 4)}`,
       tipo: dados.tipo, planoConta: dados.planoContaNome, descricao: dados.descricao, quantidade: 1,
       valorUnitario: Number(dados.valor).toFixed(2), valor: Number(dados.valor).toFixed(2),
-      formaPagamento: dados.formaPagamento, observacao: referencia, anexos: [], empresaId: usuario?.empresaId || null,
+      formaPagamento: dados.formaPagamento, origem: "Escritório", movimentoClienteId: movimento.id, observacao: referencia, anexos: [], empresaId: usuario?.empresaId || null,
     }, { transaction })
     await transaction.commit()
     return respostaBase({

@@ -53,6 +53,16 @@ const LancamentoContabil = sequelize.define("LancamentoContabil", {
     allowNull: true,
   },
 
+  origem: {
+    type: DataTypes.STRING,
+    allowNull: true,
+  },
+
+  movimentoClienteId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+
   observacao: {
     type: DataTypes.TEXT,
     allowNull: true,

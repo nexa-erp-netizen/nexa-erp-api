@@ -354,6 +354,7 @@ async function executarConclusaoFiscal(acao, usuario) {
         descricao,
         valor: obrigacao.valor || "0",
         formaPagamento: "",
+        origem: "Escritório",
         observacao: obrigacao.observacao || "Gerado automaticamente pela Nexa Voice após confirmação.",
         anexos: obrigacao.anexos || [],
         empresaId,
