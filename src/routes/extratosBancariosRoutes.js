@@ -278,12 +278,29 @@ router.post("/fechamentos", async (req, res) => {
       inicioCompetencia: periodo.inicio,
       movimentos: anteriores,
     })
-    const saldoInicial = calculoSaldo.saldoAnterior
     const totalEntradas = movimentos.filter(m => m.natureza === "Entrada").reduce((total, m) => total + Number(m.valor || 0), 0)
     const totalSaidas = movimentos.filter(m => m.natureza === "Saída").reduce((total, m) => total + Number(m.valor || 0), 0)
+    const variacaoMes = totalEntradas - totalSaidas
+    const importacaoComSaldo = await ImportacaoExtratoBancario.findOne({
+      where: {
+        contaBancariaId,
+        saldoInformado: { [Op.ne]: null },
+        dataFim: { [Op.between]: [periodo.inicio, periodo.fim] },
+      },
+      order: [["createdAt", "DESC"]],
+    })
+    const saldoFinalOfx = importacaoComSaldo?.saldoInformado !== null && importacaoComSaldo?.saldoInformado !== undefined
+      ? Number(importacaoComSaldo.saldoInformado)
+      : null
+    const saldoInicial = saldoFinalOfx !== null && Number.isFinite(saldoFinalOfx)
+      ? saldoFinalOfx - variacaoMes
+      : calculoSaldo.saldoAnterior
+    const saldoFinal = saldoFinalOfx !== null && Number.isFinite(saldoFinalOfx)
+      ? saldoFinalOfx
+      : saldoInicial + variacaoMes
     const dados = {
       clienteId: conta.clienteId, cliente: conta.cliente, contaBancariaId, competencia,
-      saldoInicial, totalEntradas, totalSaidas, saldoFinal: saldoInicial + totalEntradas - totalSaidas,
+      saldoInicial, totalEntradas, totalSaidas, saldoFinal,
       quantidadeMovimentos: movimentos.length, status: "Fechado", fechadoEm: new Date(),
       fechadoPor: req.usuario.nome || req.usuario.email || "Equipe Nexa", reabertoEm: null, reabertoPor: null,
     }
