@@ -14,27 +14,24 @@ const {
   vincularClienteIdSeNecessario,
   clienteIdValido,
 } = require("../services/clienteFinanceiroService")
+const {
+  limparIdempotenciasExpiradas,
+  buscarIdempotenciaAtiva,
+  iniciarIdempotencia,
+  concluirIdempotencia,
+  ehConflitoDeIdempotencia,
+  respostaPersistida,
+} = require("../services/idempotenciaService")
 
 const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
 
-// Evita que duplo clique, retry do navegador ou timeout grave o mesmo envio novamente.
-// Não depende de alterar o banco e é propositalmente uma janela curta.
-const lotesRecentes = new Map()
-const lotesEmProcessamento = new Set()
+// Proteção de reenvio persistida no PostgreSQL.
+// Continua funcionando após reinício do Render e entre múltiplas instâncias da API.
+const JANELA_CHAVE_EXPLICITA_MS = 24 * 60 * 60 * 1000
 const JANELA_LOTE_MS = 2 * 60 * 1000
 const JANELA_ITEM_UNICO_MS = 8 * 1000
-
-function limparLotesRecentes() {
-  const agora = Date.now()
-
-  for (const [chave, info] of lotesRecentes.entries()) {
-    if (!info || Number(info.expiraEm || 0) <= agora) {
-      lotesRecentes.delete(chave)
-    }
-  }
-}
 
 function normalizarNomeCliente(valor) {
   return String(valor || "")
@@ -116,6 +113,12 @@ function obterProtecaoReenvio(lista, req) {
     ""
   ).trim()
 
+  const escritorio = String(
+    req.usuario?.escritorioId ||
+    req.escritorioId ||
+    "sem-escritorio"
+  )
+
   const usuario = String(
     req.usuario?.id ||
     req.usuario?.email ||
@@ -123,10 +126,13 @@ function obterProtecaoReenvio(lista, req) {
     "sem-usuario"
   )
 
+  const escopo = `${escritorio}:${usuario}`
+
   if (chaveExplicita) {
     return {
-      chave: `explicit:${usuario}:${chaveExplicita}`,
-      ttl: JANELA_LOTE_MS,
+      chave: `explicit:${escopo}:${chaveExplicita}`,
+      ttl: JANELA_CHAVE_EXPLICITA_MS,
+      tipo: lista.length === 1 ? "movimento-unico-explicito" : "movimento-lote-explicito",
     }
   }
 
@@ -134,10 +140,11 @@ function obterProtecaoReenvio(lista, req) {
   const hash = crypto.createHash("sha256").update(conteudo).digest("hex")
 
   return {
-    chave: `auto:${usuario}:${hash}`,
+    chave: `auto:${escopo}:${hash}`,
     // Um único lançamento pode ser legitimamente repetido.
     // Por isso a proteção heurística nele dura só alguns segundos.
     ttl: lista.length === 1 ? JANELA_ITEM_UNICO_MS : JANELA_LOTE_MS,
+    tipo: lista.length === 1 ? "movimento-unico-auto" : "movimento-lote-auto",
   }
 }
 
@@ -687,35 +694,33 @@ router.post("/", autenticar, async (req, res) => {
     status: req.body.status || "Pendente",
   }
 
-  limparLotesRecentes()
-
   const protecao = obterProtecaoReenvio([movimentoTratado], req)
-  const { chave, ttl } = protecao
+  const { chave, ttl, tipo } = protecao
 
-  if (lotesRecentes.has(chave)) {
-    const anterior = lotesRecentes.get(chave)
+  await limparIdempotenciasExpiradas()
 
+  const anterior = await buscarIdempotenciaAtiva(chave)
+  const respostaAnterior = respostaPersistida(anterior)
+
+  if (respostaAnterior) {
     return res.status(200).json({
-      ...(anterior.resposta || {}),
+      ...respostaAnterior,
       duplicadoEvitado: true,
       message:
-        "Este mesmo lançamento acabou de ser recebido. Nenhum registro foi duplicado.",
+        "Este mesmo lançamento já havia sido recebido. Nenhum registro foi duplicado.",
     })
   }
-
-  if (lotesEmProcessamento.has(chave)) {
-    return res.status(409).json({
-      message:
-        "Este lançamento já está sendo salvo. Aguarde a conclusão antes de tentar novamente.",
-      duplicadoEvitado: true,
-    })
-  }
-
-  lotesEmProcessamento.add(chave)
 
   const transaction = await MovimentoCliente.sequelize.transaction()
 
   try {
+    const idempotencia = await iniciarIdempotencia({
+      chave,
+      tipo,
+      ttlMs: ttl,
+      transaction,
+    })
+
     const movimento = await MovimentoCliente.create(
       movimentoTratado,
       { transaction }
@@ -727,30 +732,50 @@ router.post("/", autenticar, async (req, res) => {
       transaction
     )
 
+    const resposta = {
+      movimento:
+        typeof movimento?.toJSON === "function"
+          ? movimento.toJSON()
+          : movimento,
+      lancamentoContabil:
+        typeof lancamentoContabil?.toJSON === "function"
+          ? lancamentoContabil.toJSON()
+          : lancamentoContabil,
+      duplicadoEvitado: false,
+    }
+
+    await concluirIdempotencia(
+      idempotencia,
+      resposta,
+      transaction
+    )
+
     await transaction.commit()
 
-    const resposta = respostaPlana({
-      movimentos: [movimento],
-      lancamentosContabeis: [lancamentoContabil],
-    })
-
-    lotesRecentes.set(chave, {
-      expiraEm: Date.now() + ttl,
-      resposta: {
-        movimento: resposta.movimentos[0],
-        lancamentoContabil: resposta.lancamentosContabeis[0],
-        duplicadoEvitado: false,
-      },
-    })
-
-    res.status(201).json({
-      movimento,
-      lancamentoContabil,
-      duplicadoEvitado: false,
-    })
+    res.status(201).json(resposta)
   } catch (error) {
     if (!transaction.finished) {
       await transaction.rollback()
+    }
+
+    if (ehConflitoDeIdempotencia(error)) {
+      const persistida = await buscarIdempotenciaAtiva(chave)
+      const resposta = respostaPersistida(persistida)
+
+      if (resposta) {
+        return res.status(200).json({
+          ...resposta,
+          duplicadoEvitado: true,
+          message:
+            "Este mesmo lançamento já havia sido recebido. Nenhum registro foi duplicado.",
+        })
+      }
+
+      return res.status(409).json({
+        message:
+          "Este lançamento já está sendo processado. Aguarde a conclusão antes de tentar novamente.",
+        duplicadoEvitado: true,
+      })
     }
 
     console.error("ERRO AO CRIAR MOVIMENTO:", error)
@@ -760,14 +785,10 @@ router.post("/", autenticar, async (req, res) => {
         "Erro ao criar movimento. A gravação foi desfeita para evitar duplicidade.",
       erro: error.message,
     })
-  } finally {
-    lotesEmProcessamento.delete(chave)
   }
 })
 
 router.post("/massa", autenticar, async (req, res) => {
-  limparLotesRecentes()
-
   const lista = req.body.movimentos || []
 
   if (!Array.isArray(lista) || lista.length === 0) {
@@ -826,35 +847,34 @@ router.post("/massa", autenticar, async (req, res) => {
   }
 
   const protecao = obterProtecaoReenvio(movimentosTratados, req)
-  const { chave, ttl } = protecao
+  const { chave, ttl, tipo } = protecao
 
-  if (lotesRecentes.has(chave)) {
-    const anterior = lotesRecentes.get(chave)
+  await limparIdempotenciasExpiradas()
 
+  const anterior = await buscarIdempotenciaAtiva(chave)
+  const respostaAnterior = respostaPersistida(anterior)
+
+  if (respostaAnterior) {
     return res.status(200).json({
-      ...(anterior.resposta || {}),
+      ...respostaAnterior,
       duplicadoEvitado: true,
       message:
         "Este mesmo lote já havia sido recebido. Nenhum lançamento foi duplicado.",
     })
   }
 
-  if (lotesEmProcessamento.has(chave)) {
-    return res.status(409).json({
-      message:
-        "Este lote já está sendo salvo. Aguarde a conclusão antes de tentar novamente.",
-      duplicadoEvitado: true,
-    })
-  }
-
-  lotesEmProcessamento.add(chave)
-
   const transaction = await MovimentoCliente.sequelize.transaction()
 
   try {
-    // IMPORTANTE:
-    // MovimentoCliente + LancamentoContabil passam a ser uma única operação.
-    // Se qualquer parte falhar, todo o lote é desfeito.
+    const idempotencia = await iniciarIdempotencia({
+      chave,
+      tipo,
+      ttlMs: ttl,
+      transaction,
+    })
+
+    // MovimentoCliente + LancamentoContabil são uma única operação.
+    // Se qualquer parte falhar, inclusive a chave idempotente, todo o lote é desfeito.
     const movimentos = await MovimentoCliente.bulkCreate(
       movimentosTratados,
       { transaction }
@@ -872,26 +892,43 @@ router.post("/massa", autenticar, async (req, res) => {
       lancamentosContabeis.push(lancamento)
     }
 
-    await transaction.commit()
-
     const resposta = respostaPlana({
       movimentos,
       lancamentosContabeis,
     })
 
-    lotesRecentes.set(chave, {
-      expiraEm: Date.now() + ttl,
+    await concluirIdempotencia(
+      idempotencia,
       resposta,
-    })
+      transaction
+    )
 
-    res.status(201).json({
-      movimentos,
-      lancamentosContabeis,
-      duplicadoEvitado: false,
-    })
+    await transaction.commit()
+
+    res.status(201).json(resposta)
   } catch (error) {
     if (!transaction.finished) {
       await transaction.rollback()
+    }
+
+    if (ehConflitoDeIdempotencia(error)) {
+      const persistida = await buscarIdempotenciaAtiva(chave)
+      const resposta = respostaPersistida(persistida)
+
+      if (resposta) {
+        return res.status(200).json({
+          ...resposta,
+          duplicadoEvitado: true,
+          message:
+            "Este mesmo lote já havia sido recebido. Nenhum lançamento foi duplicado.",
+        })
+      }
+
+      return res.status(409).json({
+        message:
+          "Este lote já está sendo processado. Aguarde a conclusão antes de tentar novamente.",
+        duplicadoEvitado: true,
+      })
     }
 
     console.error("ERRO AO CRIAR MOVIMENTOS EM MASSA:", error)
@@ -901,8 +938,6 @@ router.post("/massa", autenticar, async (req, res) => {
         "Erro ao criar movimentos em massa. Nenhum item deste lote foi gravado.",
       erro: error.message,
     })
-  } finally {
-    lotesEmProcessamento.delete(chave)
   }
 })
 
