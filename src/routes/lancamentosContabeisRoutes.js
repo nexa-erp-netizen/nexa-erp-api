@@ -58,16 +58,97 @@ function movimentoIdDoLancamento(lancamento) {
   return achou ? Number(achou[1]) : null
 }
 
-async function sincronizarMovimentoDoLancamento(
+function escritorioIdSeguro(...valores) {
+  for (const valor of valores) {
+    const numero = Number(valor)
+    if (Number.isInteger(numero) && numero > 0) return numero
+  }
+  return null
+}
+
+async function localizarMovimentoDoLancamento(
   lancamento,
-  transaction = null
+  transaction = null,
+  escritorioIdForcado = null
 ) {
+  const escritorioId = escritorioIdSeguro(
+    escritorioIdForcado,
+    lancamento?.escritorioId
+  )
+
   let movimento = null
   const movimentoId = movimentoIdDoLancamento(lancamento)
 
+  // Busca sem o filtro multiempresa apenas pelo ID técnico já vinculado.
+  // Em seguida validamos o escritório antes de reutilizar o registro.
+  // Isso permite recuperar movimentos da v3.49.9 que possam ter sido
+  // gravados com escritorioId vazio e, por isso, ficaram invisíveis.
   if (movimentoId) {
-    movimento = await MovimentoCliente.findByPk(movimentoId, { transaction })
+    movimento = await MovimentoCliente.findByPk(movimentoId, {
+      transaction,
+      semIsolamentoEscritorio: true,
+    })
   }
+
+  if (!movimento && lancamento?.id) {
+    movimento = await MovimentoCliente.findOne({
+      where: {
+        observacao: `lancamento-contabil:${lancamento.id}`,
+      },
+      transaction,
+      semIsolamentoEscritorio: true,
+    })
+  }
+
+  if (!movimento) return null
+
+  const escritorioMovimento = escritorioIdSeguro(movimento.escritorioId)
+
+  if (
+    escritorioId &&
+    escritorioMovimento &&
+    escritorioMovimento !== escritorioId
+  ) {
+    throw new Error(
+      "Movimento vinculado pertence a outro escritório. Sincronização cancelada."
+    )
+  }
+
+  if (escritorioId && !escritorioMovimento) {
+    await movimento.update(
+      { escritorioId },
+      {
+        transaction,
+        semIsolamentoEscritorio: true,
+      }
+    )
+  }
+
+  if (Number(lancamento.movimentoClienteId) !== Number(movimento.id)) {
+    await lancamento.update(
+      { movimentoClienteId: movimento.id },
+      { transaction }
+    )
+  }
+
+  return movimento
+}
+
+async function sincronizarMovimentoDoLancamento(
+  lancamento,
+  transaction = null,
+  escritorioIdForcado = null
+) {
+  const escritorioId = escritorioIdSeguro(
+    escritorioIdForcado,
+    lancamento?.escritorioId
+  )
+
+  let movimento = await localizarMovimentoDoLancamento(
+    lancamento,
+    transaction,
+    escritorioId
+  )
 
   const dadosMovimento = {
     cliente: lancamento.cliente,
@@ -81,35 +162,76 @@ async function sincronizarMovimentoDoLancamento(
     descricao: lancamento.descricao || "Lançamento contábil",
     valor: numeroSeguro(lancamento.valor),
     status: movimento?.status || "Pendente",
+    ...(escritorioId ? { escritorioId } : {}),
   }
 
   if (movimento) {
-    await movimento.update(dadosMovimento, { transaction })
+    await movimento.update(dadosMovimento, {
+      transaction,
+      semIsolamentoEscritorio: true,
+    })
     return movimento
+  }
+
+  if (!escritorioId) {
+    throw new Error(
+      "Não foi possível identificar o escritório para criar o Movimento do cliente."
+    )
   }
 
   movimento = await MovimentoCliente.create({
     ...dadosMovimento,
     observacao: `lancamento-contabil:${lancamento.id}`,
-  }, { transaction })
+  }, {
+    transaction,
+    semIsolamentoEscritorio: true,
+  })
 
   await lancamento.update({
     movimentoClienteId: movimento.id,
   }, { transaction })
+
+  // Validação antes do commit: se o Movimento não estiver realmente
+  // persistido e pertencendo ao mesmo escritório, toda a operação falha.
+  const confirmado = await MovimentoCliente.findOne({
+    where: {
+      id: movimento.id,
+      escritorioId,
+    },
+    transaction,
+    semIsolamentoEscritorio: true,
+  })
+
+  if (!confirmado) {
+    throw new Error(
+      "Movimento do cliente não foi confirmado no mesmo escritório."
+    )
+  }
 
   return movimento
 }
 
 async function removerMovimentoDoLancamento(
   lancamento,
-  transaction = null
+  transaction = null,
+  escritorioIdForcado = null
 ) {
-  const movimentoId = movimentoIdDoLancamento(lancamento)
-  if (!movimentoId) return
+  const escritorioId = escritorioIdSeguro(
+    escritorioIdForcado,
+    lancamento?.escritorioId
+  )
 
-  const movimento = await MovimentoCliente.findByPk(movimentoId, { transaction })
+  const movimento = await localizarMovimentoDoLancamento(
+    lancamento,
+    transaction,
+    escritorioId
+  )
+
   if (movimento) {
-    await movimento.destroy({ transaction })
+    await movimento.destroy({
+      transaction,
+      semIsolamentoEscritorio: true,
+    })
   }
 }
 
@@ -236,7 +358,8 @@ router.post("/", autenticar, somenteEquipe, async (req, res) => {
 
     await sincronizarMovimentoDoLancamento(
       novoLancamento,
-      transaction
+      transaction,
+      req.usuario?.escritorioId
     )
 
     await transaction.commit()
@@ -354,7 +477,8 @@ router.put("/:id", autenticar, somenteEquipe, async (req, res) => {
 
     await sincronizarMovimentoDoLancamento(
       lancamento,
-      transaction
+      transaction,
+      req.usuario?.escritorioId
     )
 
     await transaction.commit()
@@ -391,7 +515,11 @@ router.delete("/:id", autenticar, somenteEquipe, async (req, res) => {
       })
     }
 
-    await removerMovimentoDoLancamento(lancamento, transaction)
+    await removerMovimentoDoLancamento(
+      lancamento,
+      transaction,
+      req.usuario?.escritorioId
+    )
     await lancamento.destroy({ transaction })
 
     await transaction.commit()
