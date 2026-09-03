@@ -331,19 +331,19 @@ async function executar(dados, usuario) {
     return respostaBase({ resposta: "O cliente não está disponível para este escritório. Nenhum lançamento foi criado.", acaoGuiadaConcluida: true })
   }
   const desde = new Date(Date.now() - 10 * 60 * 1000)
-  const duplicado = await MovimentoCliente.findOne({ where: { cliente: cliente.nome, tipo: dados.tipo, data: dados.data, descricao: dados.descricao, valor: dados.valor, createdAt: { [Op.gte]: desde } } })
+  const duplicado = await MovimentoCliente.findOne({ where: { clienteId: cliente.id, tipo: dados.tipo, data: dados.data, descricao: dados.descricao, valor: dados.valor, createdAt: { [Op.gte]: desde } } })
   if (duplicado) return respostaBase({ resposta: "Esse mesmo lançamento já foi registrado recentemente. A duplicidade foi bloqueada.", acaoGuiadaConcluida: true })
 
   const transaction = await MovimentoCliente.sequelize.transaction()
   try {
     const movimento = await MovimentoCliente.create({
-      cliente: cliente.nome, tipo: dados.tipo, data: dados.data, planoContaNome: dados.planoContaNome,
+      clienteId: cliente.id, cliente: cliente.nome, tipo: dados.tipo, data: dados.data, planoContaNome: dados.planoContaNome,
       forma: dados.formaPagamento, formaPagamento: dados.formaPagamento, descricao: dados.descricao,
       valor: dados.valor, status: "Conferido", observacao: "Criado pela Nexa Actions após confirmação",
     }, { transaction })
     const referencia = `movimento-cliente:${movimento.id}`
     const lancamento = await LancamentoContabil.create({
-      cliente: cliente.nome, data: dados.data, competencia: `${dados.data.slice(5, 7)}/${dados.data.slice(0, 4)}`,
+      clienteId: cliente.id, cliente: cliente.nome, data: dados.data, competencia: `${dados.data.slice(5, 7)}/${dados.data.slice(0, 4)}`,
       tipo: dados.tipo, planoConta: dados.planoContaNome, descricao: dados.descricao, quantidade: 1,
       valorUnitario: Number(dados.valor).toFixed(2), valor: Number(dados.valor).toFixed(2),
       formaPagamento: dados.formaPagamento, origem: "Escritório", movimentoClienteId: movimento.id, observacao: referencia, anexos: [], empresaId: usuario?.empresaId || null,

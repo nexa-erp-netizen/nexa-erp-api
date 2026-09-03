@@ -2,6 +2,11 @@ const { DataTypes } = require("sequelize")
 const sequelize = require("../config/database")
 
 const LancamentoContabil = sequelize.define("LancamentoContabil", {
+  clienteId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+
   cliente: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -77,6 +82,8 @@ const LancamentoContabil = sequelize.define("LancamentoContabil", {
     type: DataTypes.INTEGER,
     allowNull: true,
   },
+}, {
+  indexes: [{ fields: ["escritorioId", "clienteId"] }],
 })
 
 module.exports = LancamentoContabil

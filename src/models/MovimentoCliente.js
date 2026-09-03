@@ -2,6 +2,11 @@ const { DataTypes } = require("sequelize")
 const sequelize = require("../config/database")
 
 const MovimentoCliente = sequelize.define("MovimentoCliente", {
+  clienteId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+
   cliente: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -61,6 +66,8 @@ const MovimentoCliente = sequelize.define("MovimentoCliente", {
     type: DataTypes.ENUM("Pendente", "Conferido", "Rejeitado"),
     defaultValue: "Pendente",
   },
+}, {
+  indexes: [{ fields: ["escritorioId", "clienteId"] }],
 })
 
 module.exports = MovimentoCliente

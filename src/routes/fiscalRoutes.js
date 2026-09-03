@@ -4,6 +4,7 @@ const Fiscal = require("../models/Fiscal")
 const Notificacao = require("../models/Notificacao")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const MovimentoCliente = require("../models/MovimentoCliente")
+const { resolverClienteFinanceiro } = require("../services/clienteFinanceiroService")
 const Financeiro = require("../models/Financeiro")
 const Cliente = require("../models/Cliente")
 const DasMei = require("../models/DasMei")
@@ -199,10 +200,17 @@ function limparNomeArquivo(nome) {
 
 async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   const referencia = `fiscal:${obrigacao.id}`
+  const clienteFinanceiro = await resolverClienteFinanceiro({
+    cliente: usuario?.clienteVinculado || obrigacao.cliente,
+  })
+
+  if (!clienteFinanceiro) {
+    throw new Error("Não foi possível identificar o cliente cadastrado desta obrigação fiscal.")
+  }
 
   const movimentoExistente = await MovimentoCliente.findOne({
     where: {
-      cliente: usuario?.clienteVinculado || obrigacao.cliente,
+      clienteId: clienteFinanceiro.id,
       tipo: "Despesa",
       observacao: referencia,
     },
@@ -221,7 +229,8 @@ async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   }
 
   return MovimentoCliente.create({
-    cliente: usuario?.clienteVinculado || obrigacao.cliente,
+    clienteId: clienteFinanceiro.id,
+    cliente: clienteFinanceiro.nome,
     tipo: "Despesa",
     data: new Date().toISOString().slice(0, 10),
     planoContaId: null,
@@ -594,11 +603,15 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
     const referenciaLancamento = referenciaDas
       ? `DAS-MEI:${referenciaDas[1]}`
       : `fiscal:${obrigacao.id}`
+    const clienteFinanceiro = await resolverClienteFinanceiro({ cliente: obrigacao.cliente })
+    if (!clienteFinanceiro) {
+      return res.status(400).json({ message: "Não foi possível identificar o cliente cadastrado desta obrigação." })
+    }
     let lancamento = await LancamentoContabil.findOne({
       where: referenciaDas
         ? { observacao: referenciaLancamento }
         : {
-          cliente: obrigacao.cliente,
+          clienteId: clienteFinanceiro.id,
           descricao: `${nomeObrigacao} - ${obrigacao.competencia || ""}`,
           tipo: "Despesa",
         },
@@ -607,7 +620,8 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
 
     if (!lancamento) {
       lancamento = await LancamentoContabil.create({
-        cliente: obrigacao.cliente,
+        clienteId: clienteFinanceiro.id,
+        cliente: clienteFinanceiro.nome,
         data: new Date().toISOString().slice(0, 10),
         competencia: obrigacao.competencia || "00/0000",
         tipo: "Despesa",

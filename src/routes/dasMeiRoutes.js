@@ -66,7 +66,7 @@ async function sincronizarPendenciaFiscal(guia) {
 async function criarMovimentoPagamentoDas(guia, cliente) {
   const observacao = `das-mei:${guia.id}`
   const existente = await MovimentoCliente.findOne({
-    where: { cliente: cliente.nome, tipo: "Despesa", observacao },
+    where: { clienteId: cliente.id, tipo: "Despesa", observacao },
   })
   if (existente) return existente
 
@@ -76,6 +76,7 @@ async function criarMovimentoPagamentoDas(guia, cliente) {
   }
 
   return MovimentoCliente.create({
+    clienteId: cliente.id,
     cliente: cliente.nome,
     tipo: "Despesa",
     data: new Date().toISOString().slice(0, 10),
@@ -94,9 +95,10 @@ async function criarMovimentoPagamentoDas(guia, cliente) {
 async function criarLancamentoDoMovimentoDas(movimento, guia, cliente) {
   const observacao = `movimento-cliente:${movimento.id}`
   const existente = await LancamentoContabil.findOne({
-    where: { cliente: movimento.cliente, observacao },
+    where: { movimentoClienteId: movimento.id },
   })
   const dados = {
+    clienteId: cliente.id,
     data: movimento.data,
     competencia: String(movimento.data).slice(0, 7).split("-").reverse().join("/"),
     tipo: movimento.tipo,
@@ -115,7 +117,7 @@ async function criarLancamentoDoMovimentoDas(movimento, guia, cliente) {
     await existente.update(dados)
     return existente
   }
-  return LancamentoContabil.create({ cliente: movimento.cliente, ...dados, observacao })
+  return LancamentoContabil.create({ clienteId: cliente.id, cliente: cliente.nome, ...dados, observacao })
 }
 
 function respostaGuia(guia, hoje) {

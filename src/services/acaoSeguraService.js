@@ -346,6 +346,7 @@ async function executarConclusaoFiscal(acao, usuario) {
 
     if (!lancamentoExistente) {
       await LancamentoContabil.create({
+        clienteId: acao.clienteId || null,
         cliente: obrigacao.cliente,
         data: new Date().toISOString().slice(0, 10),
         competencia: obrigacao.competencia || "00/0000",

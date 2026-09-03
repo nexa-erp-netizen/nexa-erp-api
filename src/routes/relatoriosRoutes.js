@@ -1,6 +1,12 @@
 const express = require("express")
 const LancamentoContabil = require("../models/LancamentoContabil")
 const { autenticar } = require("../middlewares/authMiddleware")
+const {
+  resolverClienteFinanceiro,
+  resolverClienteDoUsuario,
+  registroPertenceAoCliente,
+  vincularClienteIdSeNecessario,
+} = require("../services/clienteFinanceiroService")
 
 const router = express.Router()
 
@@ -24,34 +30,40 @@ function normalizar(texto) {
 
 router.get("/dre", autenticar, async (req, res) => {
   try {
-    const { cliente } = req.query
-
-    const where = {}
+    const { cliente, clienteId } = req.query
+    let clienteFiltro = null
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente = req.usuario.clienteVinculado
+      clienteFiltro = await resolverClienteDoUsuario(req.usuario)
+      if (!clienteFiltro) {
+        return res.json({
+          cliente: req.usuario.clienteVinculado || "Cliente",
+          clienteId: null,
+          totalReceitas: 0,
+          totalDespesas: 0,
+          resultado: 0,
+          quantidadeLancamentos: 0,
+        })
+      }
+    } else if (clienteId || cliente) {
+      clienteFiltro = await resolverClienteFinanceiro({ clienteId, cliente })
+      if (!clienteFiltro) return res.status(404).json({ message: "Cliente não encontrado" })
     }
 
-    if (req.usuario.empresaId) {
-      where.empresaId = req.usuario.empresaId
-    }
+    const where = {}
+    if (req.usuario.empresaId) where.empresaId = req.usuario.empresaId
 
     let lancamentos = await LancamentoContabil.findAll({ where })
 
-    if (cliente && req.usuario.perfil !== "Cliente") {
-      lancamentos = lancamentos.filter(
-        (item) =>
-          normalizar(item.cliente) === normalizar(cliente)
-      )
+    if (clienteFiltro) {
+      lancamentos = lancamentos.filter((item) => registroPertenceAoCliente(item, clienteFiltro))
+      for (const item of lancamentos) {
+        await vincularClienteIdSeNecessario(item, clienteFiltro)
+      }
     }
 
-    const receitas = lancamentos.filter(
-      (item) => item.tipo === "Receita"
-    )
-
-    const despesas = lancamentos.filter(
-      (item) => item.tipo === "Despesa"
-    )
+    const receitas = lancamentos.filter((item) => normalizar(item.tipo) === "receita")
+    const despesas = lancamentos.filter((item) => normalizar(item.tipo) === "despesa")
 
     const totalReceitas = receitas.reduce(
       (total, item) => total + valorNumerico(item.valor),
@@ -64,10 +76,8 @@ router.get("/dre", autenticar, async (req, res) => {
     )
 
     res.json({
-      cliente:
-        req.usuario.perfil === "Cliente"
-          ? req.usuario.clienteVinculado
-          : cliente || "Todos",
+      cliente: clienteFiltro?.nome || "Todos",
+      clienteId: clienteFiltro?.id || null,
       totalReceitas,
       totalDespesas,
       resultado: totalReceitas - totalDespesas,

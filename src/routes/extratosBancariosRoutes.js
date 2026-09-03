@@ -8,6 +8,7 @@ const MovimentoBancario = require("../models/MovimentoBancario")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const PlanoConta = require("../models/PlanoConta")
 const LancamentoContabil = require("../models/LancamentoContabil")
+const { registroPertenceAoCliente } = require("../services/clienteFinanceiroService")
 const FechamentoConciliacaoBancaria = require("../models/FechamentoConciliacaoBancaria")
 const sequelize = require("../config/database")
 const { lerExtrato } = require("../services/extratoBancarioParser")
@@ -209,8 +210,9 @@ router.post("/fechamentos", async (req, res) => {
       order: [["data", "ASC"], ["id", "ASC"]],
     })
 
+    const clienteReferencia = { id: conta.clienteId, nome: conta.cliente }
     const movimentosCliente = movimentosClienteBrutos.filter(item =>
-      normalizar(item.cliente) === normalizar(conta.cliente) &&
+      registroPertenceAoCliente(item, clienteReferencia) &&
       movimentoClienteEhBancario(item)
     )
 
@@ -399,7 +401,7 @@ router.post("/movimentos/:id/registrar-ajuste", async (req, res) => {
     const referencia = await MovimentoCliente.findByPk(movimentoClienteReferenciaId, { transaction })
     if (!referencia) throw new Error("Movimento do cliente usado como referência não foi encontrado.")
 
-    if (normalizar(referencia.cliente) !== normalizar(movimento.cliente)) {
+    if (!registroPertenceAoCliente(referencia, { id: movimento.clienteId, nome: movimento.cliente })) {
       throw new Error("O movimento de referência pertence a outro cliente.")
     }
 
@@ -443,6 +445,7 @@ router.post("/movimentos/:id/registrar-ajuste", async (req, res) => {
       const observacaoTecnica = `ajuste-conciliacao-bancaria:${movimento.id}|referencia:${referencia.id}|tipo:Taxa`
 
       movimentoGerado = await MovimentoCliente.create({
+        clienteId: movimento.clienteId || null,
         cliente: movimento.cliente,
         tipo: "Despesa",
         data: movimento.data,
@@ -457,6 +460,7 @@ router.post("/movimentos/:id/registrar-ajuste", async (req, res) => {
       }, { transaction })
 
       lancamentoGerado = await LancamentoContabil.create({
+        clienteId: movimento.clienteId || null,
         cliente: movimento.cliente,
         data: movimento.data,
         competencia,
@@ -704,8 +708,9 @@ router.post("/movimentos/conciliar-automatico", async (req, res) => {
       transaction,
     })
 
+    const clienteReferencia = { id: conta.clienteId, nome: conta.cliente }
     const movimentosCliente = movimentosClienteBrutos.filter(item =>
-      normalizar(item.cliente) === normalizar(conta.cliente) &&
+      registroPertenceAoCliente(item, clienteReferencia) &&
       movimentoClienteEhBancario(item)
     )
 

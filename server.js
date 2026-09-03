@@ -61,6 +61,7 @@ require("./src/models/ExecucaoAgenteNexa")
 const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 const { capturarErroGlobal, monitorarRespostas } = require("./src/middlewares/incidenteMiddleware")
+const { backfillIdentidadeFinanceira } = require("./src/services/clienteFinanceiroService")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -440,6 +441,11 @@ async function inicializarBanco() {
   try {
     await sequelize.sync({ alter: true })
     await prepararMultiempresa()
+    const identidade = await backfillIdentidadeFinanceira({
+      MovimentoCliente,
+      LancamentoContabil,
+    })
+    console.log(`Identidade financeira: ${identidade.atualizados} vínculo(s) preenchido(s), ${identidade.ambiguos} ambíguo(s).`)
     bancoPronto = true
     console.log("PostgreSQL conectado com sucesso 🚀")
   } catch (error) {

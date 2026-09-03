@@ -4,6 +4,12 @@ const LancamentoContabil = require("../models/LancamentoContabil")
 const MovimentoCliente = require("../models/MovimentoCliente")
 const upload = require("../middlewares/upload")
 const { normalizarDataMovimento, competenciaDaData } = require("../services/dataMovimentoService")
+const {
+  resolverClienteFinanceiro,
+  resolverClienteDoUsuario,
+  registroPertenceAoCliente,
+  vincularClienteIdSeNecessario,
+} = require("../services/clienteFinanceiroService")
 
 const {
   autenticar,
@@ -144,6 +150,16 @@ async function sincronizarMovimentoDoLancamento(
     lancamento?.escritorioId
   )
 
+  const clienteFinanceiro = await resolverClienteFinanceiro({
+    clienteId: lancamento?.clienteId,
+    cliente: lancamento?.cliente,
+    transaction,
+  })
+
+  if (clienteFinanceiro) {
+    await vincularClienteIdSeNecessario(lancamento, clienteFinanceiro, transaction)
+  }
+
   let movimento = await localizarMovimentoDoLancamento(
     lancamento,
     transaction,
@@ -151,7 +167,8 @@ async function sincronizarMovimentoDoLancamento(
   )
 
   const dadosMovimento = {
-    cliente: lancamento.cliente,
+    clienteId: clienteFinanceiro?.id || lancamento.clienteId || movimento?.clienteId || null,
+    cliente: clienteFinanceiro?.nome || lancamento.cliente,
     tipo: String(lancamento.tipo || "").toLowerCase() === "receita"
       ? "Receita"
       : "Despesa",
@@ -264,11 +281,23 @@ function somenteEquipe(req, res, next) {
 
 router.get("/", autenticar, async (req, res) => {
   try {
-    const where = {}
+    let clienteFiltro = null
 
     if (req.usuario.perfil === "Cliente") {
-      where.cliente = req.usuario.clienteVinculado
+      clienteFiltro = await resolverClienteDoUsuario(req.usuario)
+      if (!clienteFiltro) return res.json([])
+    } else if (req.query.clienteId || req.query.cliente) {
+      clienteFiltro = await resolverClienteFinanceiro({
+        clienteId: req.query.clienteId,
+        cliente: req.query.cliente,
+      })
+
+      if (!clienteFiltro) {
+        return res.status(404).json({ message: "Cliente não encontrado" })
+      }
     }
+
+    const where = {}
 
     if (req.usuario.empresaId) {
       where.empresaId = req.usuario.empresaId
@@ -279,7 +308,17 @@ router.get("/", autenticar, async (req, res) => {
       order: [["createdAt", "DESC"]],
     })
 
-    res.json(await corrigirEFiltrarDatasLegadas(lancamentos))
+    const filtrados = clienteFiltro
+      ? lancamentos.filter((item) => registroPertenceAoCliente(item, clienteFiltro))
+      : lancamentos
+
+    if (clienteFiltro) {
+      for (const item of filtrados) {
+        await vincularClienteIdSeNecessario(item, clienteFiltro)
+      }
+    }
+
+    res.json(await corrigirEFiltrarDatasLegadas(filtrados))
   } catch (error) {
     console.error("ERRO AO LISTAR LANÇAMENTOS:", error)
 
@@ -334,8 +373,22 @@ router.post("/", autenticar, somenteEquipe, async (req, res) => {
     const valorUnitario = numeroParaBanco(valorUnitarioNumerico)
     const valor = numeroParaBanco(valorTotalNumerico)
 
-    const novoLancamento = await LancamentoContabil.create({
+    const clienteFinanceiro = await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId,
       cliente: req.body.cliente,
+      transaction,
+    })
+
+    if (!clienteFinanceiro) {
+      await transaction.rollback()
+      return res.status(400).json({
+        message: "Selecione um cliente cadastrado antes de salvar o lançamento.",
+      })
+    }
+
+    const novoLancamento = await LancamentoContabil.create({
+      clienteId: clienteFinanceiro.id,
+      cliente: clienteFinanceiro.nome,
       data,
       competencia,
       tipo: tipoContabil,
@@ -404,6 +457,22 @@ router.put("/:id", autenticar, somenteEquipe, async (req, res) => {
     }
 
     const dadosAtualizados = { ...req.body }
+
+    const clienteFinanceiro = await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId || lancamento.clienteId,
+      cliente: req.body.cliente || lancamento.cliente,
+      transaction,
+    })
+
+    if (!clienteFinanceiro) {
+      await transaction.rollback()
+      return res.status(400).json({
+        message: "Não foi possível identificar o cliente cadastrado deste lançamento.",
+      })
+    }
+
+    dadosAtualizados.clienteId = clienteFinanceiro.id
+    dadosAtualizados.cliente = clienteFinanceiro.nome
 
     // Origem registra quem criou o lançamento. Uma correção feita pelo
     // escritório não muda a origem original de um lançamento do cliente.

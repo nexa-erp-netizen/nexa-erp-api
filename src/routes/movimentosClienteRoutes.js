@@ -7,6 +7,13 @@ const LancamentoContabil = require("../models/LancamentoContabil")
 const Cliente = require("../models/Cliente")
 const supabase = require("../config/supabaseClient")
 const { normalizarDataMovimento, competenciaDaData } = require("../services/dataMovimentoService")
+const {
+  resolverClienteFinanceiro,
+  resolverClienteDoUsuario,
+  registroPertenceAoCliente,
+  vincularClienteIdSeNecessario,
+  clienteIdValido,
+} = require("../services/clienteFinanceiroService")
 
 const router = express.Router()
 
@@ -91,7 +98,7 @@ function origemDoUsuario(usuario) {
 
 function assinaturaMovimento(item) {
   return [
-    normalizarTextoAssinatura(item.cliente),
+    clienteIdValido(item.clienteId) || normalizarTextoAssinatura(item.cliente),
     String(item.data || ""),
     normalizarTextoAssinatura(item.tipo),
     String(item.planoContaId || ""),
@@ -180,6 +187,7 @@ async function criarLancamentoContabilDoMovimento(
   }
 
   const dadosLancamento = {
+    clienteId: movimento.clienteId || null,
     data: movimento.data,
     competencia: obterCompetencia(movimento.data),
     tipo: movimento.tipo,
@@ -202,6 +210,7 @@ async function criarLancamentoContabilDoMovimento(
   }
 
   return LancamentoContabil.create({
+    clienteId: movimento.clienteId || null,
     cliente: movimento.cliente,
     ...dadosLancamento,
     observacao: referencia,
@@ -260,66 +269,38 @@ async function corrigirEFiltrarDatasLegadas(movimentos, usuario) {
 
 router.get("/", autenticar, async (req, res) => {
   try {
-    if (req.usuario.perfil === "Cliente") {
-      if (!req.usuario.clienteVinculado) {
-        return res.json([])
-      }
+    let clienteFiltro = null
 
-      const nomeVinculado = normalizarNomeCliente(req.usuario.clienteVinculado)
-      const movimentos = await MovimentoCliente.findAll({
-        order: [["data", "DESC"], ["createdAt", "DESC"]],
+    if (req.usuario.perfil === "Cliente") {
+      if (!req.usuario.clienteVinculado) return res.json([])
+      clienteFiltro = await resolverClienteDoUsuario(req.usuario)
+      if (!clienteFiltro) return res.json([])
+    } else if (req.query.clienteId || req.query.cliente) {
+      clienteFiltro = await resolverClienteFinanceiro({
+        clienteId: req.query.clienteId,
+        cliente: req.query.cliente,
       })
 
-      const movimentosDoCliente = movimentos.filter(
-        (movimento) => normalizarNomeCliente(movimento.cliente) === nomeVinculado
-      )
-
-      return res.json(
-        await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario)
-      )
-    }
-
-    const nomesConsultados = []
-
-    if (req.query.clienteId) {
-      const clienteEncontrado = await Cliente.findByPk(req.query.clienteId)
-
-      if (!clienteEncontrado) {
-        return res.status(404).json({
-          message: "Cliente não encontrado",
-        })
+      if (!clienteFiltro) {
+        return res.status(404).json({ message: "Cliente não encontrado" })
       }
-
-      nomesConsultados.push(clienteEncontrado.nome)
-    }
-
-    if (req.query.cliente) {
-      nomesConsultados.push(req.query.cliente)
     }
 
     const movimentos = await MovimentoCliente.findAll({
       order: [["data", "DESC"], ["createdAt", "DESC"]],
     })
 
-    if (!nomesConsultados.length) {
-      return res.json(
-        await corrigirEFiltrarDatasLegadas(movimentos, req.usuario)
-      )
+    const filtrados = clienteFiltro
+      ? movimentos.filter((item) => registroPertenceAoCliente(item, clienteFiltro))
+      : movimentos
+
+    if (clienteFiltro) {
+      for (const item of filtrados) {
+        await vincularClienteIdSeNecessario(item, clienteFiltro)
+      }
     }
 
-    const nomesNormalizados = new Set(
-      nomesConsultados
-        .map(normalizarNomeCliente)
-        .filter(Boolean)
-    )
-
-    const movimentosDoCliente = movimentos.filter((movimento) =>
-      nomesNormalizados.has(normalizarNomeCliente(movimento.cliente))
-    )
-
-    res.json(
-      await corrigirEFiltrarDatasLegadas(movimentosDoCliente, req.usuario)
-    )
+    res.json(await corrigirEFiltrarDatasLegadas(filtrados, req.usuario))
   } catch (error) {
     console.error("ERRO AO LISTAR MOVIMENTOS:", error)
 
@@ -353,7 +334,11 @@ router.post("/duplicados/verificar", autenticar, async (req, res) => {
       })
     }
 
-    const tratados = lista.map((item, indice) => {
+    const clienteDoUsuario = req.usuario.perfil === "Cliente"
+      ? await resolverClienteDoUsuario(req.usuario)
+      : null
+
+    const tratados = await Promise.all(lista.map(async (item, indice) => {
       const data = validarDataNova(item.data)
 
       if (!data) {
@@ -364,20 +349,25 @@ router.post("/duplicados/verificar", autenticar, async (req, res) => {
         }
       }
 
+      const clienteFinanceiro = clienteDoUsuario || await resolverClienteFinanceiro({
+        clienteId: item.clienteId,
+        cliente: item.cliente,
+      })
+
       return {
         indice,
         invalido: false,
         item: {
           ...item,
           data,
-          cliente:
-            req.usuario.perfil === "Cliente"
-              ? req.usuario.clienteVinculado
-              : item.cliente,
+          clienteId: clienteFinanceiro?.id || item.clienteId || null,
+          cliente: clienteFinanceiro?.nome || (req.usuario.perfil === "Cliente"
+            ? req.usuario.clienteVinculado
+            : item.cliente),
           valor: valorParaNumero(item.valor),
         },
       }
-    })
+    }))
 
     const invalido = tratados.find(item => item.invalido)
 
@@ -459,19 +449,22 @@ router.get("/duplicados", autenticar, async (req, res) => {
     })
 
     let filtrados = movimentos
+    let clienteFiltro = null
 
     if (req.usuario.perfil === "Cliente") {
-      const vinculado = normalizarNomeCliente(req.usuario.clienteVinculado)
+      clienteFiltro = await resolverClienteDoUsuario(req.usuario)
+    } else if (req.query.clienteId || req.query.cliente) {
+      clienteFiltro = await resolverClienteFinanceiro({
+        clienteId: req.query.clienteId,
+        cliente: req.query.cliente,
+      })
+    }
 
-      filtrados = filtrados.filter(
-        item => normalizarNomeCliente(item.cliente) === vinculado
-      )
-    } else if (req.query.cliente) {
-      const clienteConsulta = normalizarNomeCliente(req.query.cliente)
-
-      filtrados = filtrados.filter(
-        item => normalizarNomeCliente(item.cliente) === clienteConsulta
-      )
+    if (clienteFiltro) {
+      filtrados = filtrados.filter((item) => registroPertenceAoCliente(item, clienteFiltro))
+      for (const item of filtrados) {
+        await vincularClienteIdSeNecessario(item, clienteFiltro)
+      }
     }
 
     if (req.query.competencia) {
@@ -663,7 +656,7 @@ router.post("/", autenticar, async (req, res) => {
     })
   }
 
-  let clienteFinal = req.body.cliente
+  let clienteFinanceiro
 
   if (req.usuario.perfil === "Cliente") {
     if (!req.usuario.clienteVinculado) {
@@ -671,14 +664,25 @@ router.post("/", autenticar, async (req, res) => {
         message: "Cliente não vinculado ao usuário",
       })
     }
+    clienteFinanceiro = await resolverClienteDoUsuario(req.usuario)
+  } else {
+    clienteFinanceiro = await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId,
+      cliente: req.body.cliente,
+    })
+  }
 
-    clienteFinal = req.usuario.clienteVinculado
+  if (!clienteFinanceiro) {
+    return res.status(400).json({
+      message: "Selecione um cliente cadastrado antes de salvar o movimento.",
+    })
   }
 
   const movimentoTratado = {
     ...req.body,
     data: dataValida,
-    cliente: clienteFinal,
+    clienteId: clienteFinanceiro.id,
+    cliente: clienteFinanceiro.nome,
     valor: valorParaNumero(req.body.valor),
     status: req.body.status || "Pendente",
   }
@@ -793,21 +797,33 @@ router.post("/massa", autenticar, async (req, res) => {
     })
   }
 
-  const movimentosTratados = lista.map((item) => {
-    let clienteFinal = item.cliente
+  const clienteDoUsuario = req.usuario.perfil === "Cliente"
+    ? await resolverClienteDoUsuario(req.usuario)
+    : null
 
-    if (req.usuario.perfil === "Cliente") {
-      clienteFinal = req.usuario.clienteVinculado
+  const movimentosTratados = []
+
+  for (const item of lista) {
+    const clienteFinanceiro = clienteDoUsuario || await resolverClienteFinanceiro({
+      clienteId: item.clienteId,
+      cliente: item.cliente,
+    })
+
+    if (!clienteFinanceiro) {
+      return res.status(400).json({
+        message: `Cliente não identificado para o movimento: ${item.cliente || "sem nome"}`,
+      })
     }
 
-    return {
+    movimentosTratados.push({
       ...item,
       data: validarDataNova(item.data),
-      cliente: clienteFinal,
+      clienteId: clienteFinanceiro.id,
+      cliente: clienteFinanceiro.nome,
       valor: valorParaNumero(item.valor),
       status: item.status || "Pendente",
-    }
-  })
+    })
+  }
 
   const protecao = obterProtecaoReenvio(movimentosTratados, req)
   const { chave, ttl } = protecao
@@ -909,9 +925,13 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    const clienteDoUsuario = req.usuario.perfil === "Cliente"
+      ? await resolverClienteDoUsuario(req.usuario, transaction)
+      : null
+
     if (
       req.usuario.perfil === "Cliente" &&
-      movimento.cliente !== req.usuario.clienteVinculado
+      (!clienteDoUsuario || !registroPertenceAoCliente(movimento, clienteDoUsuario))
     ) {
       await transaction.rollback()
 
@@ -939,12 +959,23 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    const clienteFinanceiro = clienteDoUsuario || await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId || movimento.clienteId,
+      cliente: req.body.cliente || movimento.cliente,
+      transaction,
+    })
+
+    if (!clienteFinanceiro) {
+      await transaction.rollback()
+      return res.status(400).json({
+        message: "Não foi possível identificar o cliente cadastrado deste movimento.",
+      })
+    }
+
     await movimento.update({
       ...req.body,
-      cliente:
-        req.usuario.perfil === "Cliente"
-          ? req.usuario.clienteVinculado
-          : (req.body.cliente || movimento.cliente),
+      clienteId: clienteFinanceiro.id,
+      cliente: clienteFinanceiro.nome,
       data: dataInformada,
       valor:
         req.body.valor !== undefined
@@ -995,9 +1026,13 @@ router.delete("/:id", autenticar, async (req, res) => {
       })
     }
 
+    const clienteDoUsuario = req.usuario.perfil === "Cliente"
+      ? await resolverClienteDoUsuario(req.usuario, transaction)
+      : null
+
     if (
       req.usuario.perfil === "Cliente" &&
-      movimento.cliente !== req.usuario.clienteVinculado
+      (!clienteDoUsuario || !registroPertenceAoCliente(movimento, clienteDoUsuario))
     ) {
       await transaction.rollback()
 
