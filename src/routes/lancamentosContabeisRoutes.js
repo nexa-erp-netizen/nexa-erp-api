@@ -396,6 +396,13 @@ router.put("/:id", autenticar, somenteEquipe, async (req, res) => {
       })
     }
 
+    if (String(lancamento.observacao || "").includes("ajuste-conciliacao-bancaria:")) {
+      await transaction.rollback()
+      return res.status(409).json({
+        message: "Este lançamento pertence a um ajuste da Conciliação Bancária. Edite ou desfaça o ajuste pela própria conciliação.",
+      })
+    }
+
     const dadosAtualizados = { ...req.body }
 
     // Origem registra quem criou o lançamento. Uma correção feita pelo
@@ -512,6 +519,13 @@ router.delete("/:id", autenticar, somenteEquipe, async (req, res) => {
       await transaction.rollback()
       return res.status(404).json({
         message: "Lançamento não encontrado",
+      })
+    }
+
+    if (String(lancamento.observacao || "").includes("ajuste-conciliacao-bancaria:")) {
+      await transaction.rollback()
+      return res.status(409).json({
+        message: "Este lançamento pertence a um ajuste da Conciliação Bancária. Desfaça o ajuste pela própria conciliação.",
       })
     }
 

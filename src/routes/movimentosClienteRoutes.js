@@ -920,6 +920,13 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    if (String(movimento.observacao || "").includes("ajuste-conciliacao-bancaria:")) {
+      await transaction.rollback()
+      return res.status(409).json({
+        message: "Este movimento foi gerado por um ajuste da Conciliação Bancária. Edite ou desfaça o ajuste pela própria conciliação.",
+      })
+    }
+
     const dataInformada = req.body.data !== undefined
       ? validarDataNova(req.body.data)
       : normalizarDataMovimento(movimento.data).data
@@ -996,6 +1003,13 @@ router.delete("/:id", autenticar, async (req, res) => {
 
       return res.status(403).json({
         message: "Acesso não autorizado",
+      })
+    }
+
+    if (String(movimento.observacao || "").includes("ajuste-conciliacao-bancaria:")) {
+      await transaction.rollback()
+      return res.status(409).json({
+        message: "Este movimento foi gerado por um ajuste da Conciliação Bancária. Desfaça o ajuste pela própria conciliação.",
       })
     }
 

@@ -223,10 +223,10 @@ router.post("/fechamentos", async (req, res) => {
 
     const entradasBancoComparaveis = movimentosComparaveis
       .filter(item => item.natureza === "Entrada")
-      .reduce((total, item) => total + Number(item.valor || 0), 0)
+      .reduce((total, item) => total + valorComparavelBanco(item), 0)
     const saidasBancoComparaveis = movimentosComparaveis
       .filter(item => item.natureza !== "Entrada")
-      .reduce((total, item) => total + Number(item.valor || 0), 0)
+      .reduce((total, item) => total + valorComparavelBanco(item), 0)
 
     const receitasCliente = movimentosCliente
       .filter(item => item.tipo === "Receita")
@@ -350,13 +350,268 @@ router.get("/fechamentos/:id/pdf", async (req, res) => {
       doc.text(moedaPdf(valor), 330, y + 11, { width: 195, align: "right" })
       doc.y = y + 42
     })
+    const periodoFechamento = periodoCompetencia(fechamento.competencia)
+    const movimentosFechamento = await MovimentoBancario.findAll({
+      where: {
+        contaBancariaId: fechamento.contaBancariaId,
+        data: { [Op.between]: [periodoFechamento.inicio, periodoFechamento.fim] },
+      },
+    })
+    const ajustesFechamento = movimentosFechamento.filter(item =>
+      item.ajusteTipo || Math.abs(Number(item.ajusteComparacao || 0)) > 0.001
+    )
+    const efeitoAjustes = ajustesFechamento.reduce((total, item) => total + Number(item.ajusteComparacao || 0), 0)
+
     doc.moveDown().fillColor("#354b63").font("Helvetica").fontSize(9).text(`${fechamento.quantidadeMovimentos} movimento(s) conferido(s).`)
+    if (ajustesFechamento.length) {
+      doc.text(`${ajustesFechamento.length} ajuste(s) reconhecido(s) na conciliação • efeito comparativo líquido ${moedaPdf(efeitoAjustes)}.`)
+    }
     doc.text(`Fechado por ${fechamento.fechadoPor || "Equipe Nexa"} em ${new Date(fechamento.fechadoEm).toLocaleString("pt-BR")}.`)
     doc.moveDown(3).fontSize(8).fillColor("#6b7d90").text("Documento gerado pelo Nexa ERP.", { align: "center" })
     doc.end()
   } catch (error) {
     console.error(error)
     res.status(500).json({ message: "Erro ao gerar relatório da conciliação" })
+  }
+})
+
+router.post("/movimentos/:id/registrar-ajuste", async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    const movimento = await MovimentoBancario.findByPk(Number(req.params.id), {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    if (!movimento) throw new Error("Movimento bancário não encontrado.")
+
+    const competencia = String(movimento.data || "").slice(0, 7)
+    const fechamento = await FechamentoConciliacaoBancaria.findOne({
+      where: { contaBancariaId: movimento.contaBancariaId, competencia, status: "Fechado" },
+      transaction,
+    })
+    if (fechamento) throw new Error("Esta competência está fechada. Reabra o mês antes de registrar um ajuste.")
+
+    if (movimento.ajusteTipo || Math.abs(Number(movimento.ajusteComparacao || 0)) > 0.001) {
+      throw new Error("Este movimento já possui um ajuste reconhecido. Desfaça o ajuste atual antes de registrar outro.")
+    }
+
+    const movimentoClienteReferenciaId = Number(req.body.movimentoClienteReferenciaId)
+    const referencia = await MovimentoCliente.findByPk(movimentoClienteReferenciaId, { transaction })
+    if (!referencia) throw new Error("Movimento do cliente usado como referência não foi encontrado.")
+
+    if (normalizar(referencia.cliente) !== normalizar(movimento.cliente)) {
+      throw new Error("O movimento de referência pertence a outro cliente.")
+    }
+
+    const tipoEsperado = movimento.natureza === "Entrada" ? "Receita" : "Despesa"
+    if (String(referencia.tipo || "") !== tipoEsperado) {
+      throw new Error(`Para esta linha do banco, selecione uma referência do tipo ${tipoEsperado}.`)
+    }
+
+    const distancia = diferencaDiasIso(String(movimento.data), String(referencia.data))
+    if (distancia > 3) {
+      throw new Error("A referência precisa estar na mesma data ou em até 3 dias de diferença.")
+    }
+
+    const valorBanco = Number(movimento.valor || 0)
+    const valorCliente = Number(referencia.valor || 0)
+    const diferenca = Number((valorCliente - valorBanco).toFixed(2))
+    const valorDiferenca = Math.abs(diferenca)
+    if (valorDiferenca <= 0.01) throw new Error("Os valores já são equivalentes; não há ajuste a registrar.")
+
+    const tipoAjuste = String(req.body.tipoAjuste || "").trim()
+    if (!['Taxa', 'Arredondamento'].includes(tipoAjuste)) {
+      throw new Error("Selecione Taxa/desconto ou Arredondamento/compensação.")
+    }
+
+    if (tipoAjuste === "Arredondamento" && valorDiferenca > 1) {
+      throw new Error("Arredondamento/compensação é permitido somente para diferenças de até R$ 1,00.")
+    }
+
+    let movimentoGerado = null
+    let lancamentoGerado = null
+
+    if (tipoAjuste === "Taxa") {
+      if (movimento.natureza !== "Entrada" || diferenca <= 0) {
+        throw new Error("Taxa/desconto só pode ser usada quando o crédito no banco é menor que a Receita registrada pelo cliente.")
+      }
+
+      const plano = await PlanoConta.findByPk(Number(req.body.planoContaId), { transaction })
+      if (!plano) throw new Error("Selecione o Plano de Contas da taxa/despesa.")
+
+      const descricaoAjuste = String(req.body.descricao || `Taxa/desconto • ${movimento.descricao || "recebimento"}`).trim().slice(0, 250)
+      const observacaoTecnica = `ajuste-conciliacao-bancaria:${movimento.id}|referencia:${referencia.id}|tipo:Taxa`
+
+      movimentoGerado = await MovimentoCliente.create({
+        cliente: movimento.cliente,
+        tipo: "Despesa",
+        data: movimento.data,
+        planoContaId: plano.id,
+        planoContaNome: plano.conta,
+        forma: "Desconto na liquidação",
+        formaPagamento: "Desconto na liquidação",
+        descricao: descricaoAjuste,
+        valor: valorDiferenca,
+        observacao: observacaoTecnica,
+        status: "Conferido",
+      }, { transaction })
+
+      lancamentoGerado = await LancamentoContabil.create({
+        cliente: movimento.cliente,
+        data: movimento.data,
+        competencia,
+        tipo: "Despesa",
+        planoConta: plano.conta,
+        descricao: descricaoAjuste,
+        quantidade: 1,
+        valorUnitario: valorDiferenca,
+        valor: valorDiferenca,
+        formaPagamento: "Desconto na liquidação",
+        origem: "Escritório",
+        movimentoClienteId: movimentoGerado.id,
+        observacao: observacaoTecnica,
+      }, { transaction })
+    }
+
+    const agora = new Date()
+    const usuario = req.usuario.nome || req.usuario.email || "Equipe Nexa"
+    const historicoAtual = Array.isArray(movimento.ajusteHistorico) ? movimento.ajusteHistorico : []
+    const observacaoUsuario = String(req.body.observacao || "").trim() || null
+    const descricaoHistorico = tipoAjuste === "Taxa"
+      ? `Taxa/desconto reconhecida de ${moedaPdf(valorDiferenca)}.`
+      : `Arredondamento/compensação reconhecido de ${moedaPdf(valorDiferenca)}.`
+
+    await movimento.update({
+      ajusteComparacao: diferenca,
+      ajusteTipo: tipoAjuste,
+      ajusteMovimentoClienteReferenciaId: referencia.id,
+      ajusteMovimentoClienteGeradoId: movimentoGerado?.id || null,
+      ajusteLancamentoContabilGeradoId: lancamentoGerado?.id || null,
+      ajusteObservacao: observacaoUsuario,
+      ajusteStatusAnterior: movimento.statusConciliacao,
+      ajusteObservacoesAnterior: movimento.observacoes,
+      ajustadoEm: agora,
+      ajustadoPor: usuario,
+      ajusteHistorico: [
+        ...historicoAtual,
+        {
+          acao: "Registrado",
+          tipo: tipoAjuste,
+          efeitoComparacao: diferenca,
+          valorBanco,
+          valorCliente,
+          movimentoClienteReferenciaId: referencia.id,
+          movimentoClienteGeradoId: movimentoGerado?.id || null,
+          lancamentoContabilGeradoId: lancamentoGerado?.id || null,
+          observacao: observacaoUsuario,
+          usuario,
+          em: agora.toISOString(),
+        },
+      ],
+      statusConciliacao: "Conciliado",
+      conciliadoEm: agora,
+      conciliadoPor: usuario,
+      observacoes: `Nexa Ajuste • ${descricaoHistorico} Banco ${moedaPdf(valorBanco)} × Cliente ${moedaPdf(valorCliente)} • Movimento Cliente #${referencia.id}${observacaoUsuario ? ` • ${observacaoUsuario}` : ""}`,
+    }, { transaction })
+
+    await transaction.commit()
+    res.json({
+      message: tipoAjuste === "Taxa"
+        ? "Taxa reconhecida, registrada contabilmente e vinculada à conciliação."
+        : "Arredondamento/compensação reconhecido e registrado na auditoria da conciliação.",
+      movimento,
+      ajuste: {
+        tipo: tipoAjuste,
+        efeitoComparacao: diferenca,
+        valor: valorDiferenca,
+        movimentoClienteReferenciaId: referencia.id,
+        movimentoClienteGeradoId: movimentoGerado?.id || null,
+        lancamentoContabilGeradoId: lancamentoGerado?.id || null,
+      },
+    })
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback()
+    console.error(error)
+    res.status(400).json({ message: error.message || "Erro ao registrar ajuste da conciliação." })
+  }
+})
+
+router.delete("/movimentos/:id/ajuste", async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    const movimento = await MovimentoBancario.findByPk(Number(req.params.id), {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+    if (!movimento) throw new Error("Movimento bancário não encontrado.")
+    if (!movimento.ajusteTipo && Math.abs(Number(movimento.ajusteComparacao || 0)) <= 0.001) {
+      throw new Error("Este movimento não possui ajuste reconhecido.")
+    }
+
+    const competencia = String(movimento.data || "").slice(0, 7)
+    const fechamento = await FechamentoConciliacaoBancaria.findOne({
+      where: { contaBancariaId: movimento.contaBancariaId, competencia, status: "Fechado" },
+      transaction,
+    })
+    if (fechamento) throw new Error("Esta competência está fechada. Reabra o mês antes de desfazer o ajuste.")
+
+    if (movimento.ajusteLancamentoContabilGeradoId) {
+      await LancamentoContabil.destroy({
+        where: { id: Number(movimento.ajusteLancamentoContabilGeradoId) },
+        transaction,
+      })
+    } else if (movimento.ajusteMovimentoClienteGeradoId) {
+      await LancamentoContabil.destroy({
+        where: { movimentoClienteId: Number(movimento.ajusteMovimentoClienteGeradoId) },
+        transaction,
+      })
+    }
+
+    if (movimento.ajusteMovimentoClienteGeradoId) {
+      await MovimentoCliente.destroy({
+        where: { id: Number(movimento.ajusteMovimentoClienteGeradoId) },
+        transaction,
+      })
+    }
+
+    const agora = new Date()
+    const usuario = req.usuario.nome || req.usuario.email || "Equipe Nexa"
+    const historicoAtual = Array.isArray(movimento.ajusteHistorico) ? movimento.ajusteHistorico : []
+    const historicoNovo = [
+      ...historicoAtual,
+      {
+        acao: "Desfeito",
+        tipo: movimento.ajusteTipo,
+        efeitoComparacao: Number(movimento.ajusteComparacao || 0),
+        usuario,
+        em: agora.toISOString(),
+      },
+    ]
+
+    await movimento.update({
+      ajusteComparacao: 0,
+      ajusteTipo: null,
+      ajusteMovimentoClienteReferenciaId: null,
+      ajusteMovimentoClienteGeradoId: null,
+      ajusteLancamentoContabilGeradoId: null,
+      ajusteObservacao: null,
+      ajustadoEm: null,
+      ajustadoPor: null,
+      statusConciliacao: movimento.ajusteStatusAnterior || "Pendente",
+      observacoes: movimento.ajusteObservacoesAnterior || null,
+      conciliadoEm: null,
+      conciliadoPor: null,
+      ajusteStatusAnterior: null,
+      ajusteObservacoesAnterior: null,
+      ajusteHistorico: historicoNovo,
+    }, { transaction })
+
+    await transaction.commit()
+    res.json({ message: "Ajuste desfeito. A linha voltou para revisão.", movimento })
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback()
+    console.error(error)
+    res.status(400).json({ message: error.message || "Erro ao desfazer ajuste da conciliação." })
   }
 })
 
@@ -705,7 +960,14 @@ router.post("/gerar-lancamentos", async (_req, res) => {
 })
 
 
+function valorComparavelBanco(item) {
+  return Number(item?.valor || 0) + Number(item?.ajusteComparacao || 0)
+}
+
 function movimentoClienteEhBancario(item) {
+  const observacao = normalizar(item?.observacao)
+  if (observacao.includes("ajuste-conciliacao-bancaria:")) return false
+
   const plano = normalizar(item?.planoContaNome)
   if (plano) return plano.includes("banco")
 
