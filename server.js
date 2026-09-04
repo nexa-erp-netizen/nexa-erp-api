@@ -63,6 +63,7 @@ const { autenticar } = require("./src/middlewares/authMiddleware")
 const { contextoDoEscritorio } = require("./src/middlewares/escritorioMiddleware")
 const { capturarErroGlobal, monitorarRespostas } = require("./src/middlewares/incidenteMiddleware")
 const { backfillIdentidadeFinanceira } = require("./src/services/clienteFinanceiroService")
+const { executarMigracoes } = require("./src/db/migrationService")
 
 const clientesRoutes = require("./src/routes/clientesRoutes")
 const fiscalRoutes = require("./src/routes/fiscalRoutes")
@@ -116,6 +117,7 @@ const app = express()
 const PORT = Number(process.env.PORT) || 3000
 let bancoPronto = false
 let erroInicializacaoBanco = null
+let estadoMigracoes = { status: "pendente", aplicadas: 0, jaAplicadas: 0, total: 0, bootstrap: false }
 
 app.use(cors())
 app.use(express.json())
@@ -132,6 +134,7 @@ app.get("/health", (_req, res) => {
     versao: NEXA_API_VERSION,
     timestamp: new Date().toISOString(),
     erro: erroInicializacaoBanco ? "falha-na-inicializacao" : null,
+    migracoes: estadoMigracoes,
   })
 })
 
@@ -440,7 +443,25 @@ app.listen(PORT, "0.0.0.0", () => {
 
 async function inicializarBanco() {
   try {
-    await sequelize.sync({ alter: true })
+    const migracoes = await executarMigracoes(sequelize)
+    estadoMigracoes = {
+      status: "ok",
+      aplicadas: migracoes.aplicadas,
+      jaAplicadas: migracoes.jaAplicadas,
+      total: migracoes.total,
+      bootstrap: migracoes.bootstrap,
+    }
+
+    if (migracoes.aplicadas > 0) {
+      console.log(`Migrations aplicadas: ${migracoes.nomesAplicadas.join(", ")}`)
+    } else {
+      console.log(`Migrations em dia: ${migracoes.jaAplicadas}/${migracoes.total}`)
+    }
+
+    if (migracoes.bootstrap) {
+      console.log("Banco vazio inicializado sem alter/force; próximas mudanças seguem por migrations.")
+    }
+
     await prepararMultiempresa()
     const identidade = await backfillIdentidadeFinanceira({
       MovimentoCliente,
@@ -450,8 +471,9 @@ async function inicializarBanco() {
     bancoPronto = true
     console.log("PostgreSQL conectado com sucesso 🚀")
   } catch (error) {
+    estadoMigracoes = { ...estadoMigracoes, status: "erro" }
     erroInicializacaoBanco = error
-    console.error("Erro ao conectar PostgreSQL:", error)
+    console.error("Erro ao conectar PostgreSQL ou executar migrations:", error)
   }
 }
 
