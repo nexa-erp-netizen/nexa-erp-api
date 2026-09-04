@@ -5,6 +5,42 @@ const { autenticar } = require("../middlewares/authMiddleware")
 
 const router = express.Router()
 
+const NATUREZAS_PADRAO = new Map([
+  ["receita bruta mensal", "Credora"],
+  ["simples a recolher", "Credora"],
+  ["simples nacional", "Devedora"],
+  ["caixa", "Devedora"],
+  ["bancos", "Devedora"],
+])
+
+function normalizarConta(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+}
+
+async function corrigirNaturezasPadrao() {
+  const contas = await PlanoConta.findAll()
+  const corrigidas = []
+
+  for (const conta of contas) {
+    const naturezaEsperada = NATUREZAS_PADRAO.get(normalizarConta(conta.conta))
+    if (!naturezaEsperada) continue
+
+    if (normalizarConta(conta.natureza) !== normalizarConta(naturezaEsperada)) {
+      await conta.update({ natureza: naturezaEsperada })
+      corrigidas.push(`${conta.codigo || "-"} - ${conta.conta}: ${naturezaEsperada}`)
+    }
+  }
+
+  if (corrigidas.length) {
+    console.log("PLANO DE CONTAS — naturezas padrão corrigidas:", corrigidas.join(" | "))
+  }
+}
+
 function somenteEquipe(req, res, next) {
   if (!["Administrador", "Funcionário"].includes(req.usuario.perfil)) {
     return res.status(403).json({ message: "Acesso negado" })
@@ -17,6 +53,8 @@ router.use(autenticar)
 
 router.get("/", async (req, res) => {
   try {
+    await corrigirNaturezasPadrao()
+
     const contas = await PlanoConta.findAll({
       order: [["createdAt", "DESC"]],
     })
