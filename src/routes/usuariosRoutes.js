@@ -1,7 +1,10 @@
 const express = require("express")
 const bcrypt = require("bcryptjs")
+const { Op } = require("sequelize")
 const Usuario = require("../models/Usuario")
 const Cliente = require("../models/Cliente")
+const { salvarBackup } = require("./backupRoutes")
+const { validarArquivamentoUsuario } = require("../services/arquivamentoSeguroService")
 
 const {
   autenticar,
@@ -18,7 +21,9 @@ router.get("/", autenticar, async (req, res) => {
       })
     }
 
+    const arquivados = req.query.arquivados === "true"
     const usuarios = await Usuario.findAll({
+      where: { arquivadoEm: arquivados ? { [Op.not]: null } : null },
       attributes: [
         "id",
         "nome",
@@ -27,6 +32,8 @@ router.get("/", autenticar, async (req, res) => {
         "clienteVinculado",
         "empresaId",
         "ativo",
+        "plataformaAdmin",
+        "arquivadoEm",
         "createdAt",
       ],
       order: [["createdAt", "DESC"]],
@@ -139,6 +146,8 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
+    if (usuario.arquivadoEm) return res.status(409).json({ message: "Restaure o usuário antes de alterá-lo" })
+
     const {
       nome,
       email,
@@ -203,10 +212,16 @@ router.delete("/:id", autenticar, async (req, res) => {
       })
     }
 
-    await usuario.destroy()
+    const permissao = validarArquivamentoUsuario(usuario, req.usuario)
+    if (!permissao.permitido) return res.status(permissao.status).json({ message: permissao.mensagem })
+    if (usuario.arquivadoEm) return res.json({ message: "Usuário já estava excluído com segurança" })
+
+    const backup = await salvarBackup({ origem: "antes-de-excluir-usuario", req, prefixo: `backup-usuario-${usuario.id}` })
+    await usuario.update({ ativo: false, arquivadoEm: new Date(), arquivadoPorUsuarioId: req.usuario.id })
 
     res.json({
-      message: "Usuário excluído com sucesso",
+      message: "Usuário excluído com segurança",
+      backup: { arquivo: backup.arquivo, checksumSha256: backup.checksumSha256 },
     })
   } catch (error) {
     console.error("ERRO AO EXCLUIR USUÁRIO:", error)
@@ -214,6 +229,26 @@ router.delete("/:id", autenticar, async (req, res) => {
     res.status(500).json({
       message: "Erro ao excluir usuário",
     })
+  }
+})
+
+router.patch("/:id/restaurar", autenticar, async (req, res) => {
+  try {
+    if (req.usuario.perfil !== "Administrador") return res.status(403).json({ message: "Acesso não autorizado" })
+    const usuario = await Usuario.findByPk(req.params.id)
+    if (!usuario) return res.status(404).json({ message: "Usuário não encontrado" })
+    if (!usuario.arquivadoEm) return res.status(409).json({ message: "Este usuário não está excluído" })
+
+    let ativo = true
+    if (usuario.perfil === "Cliente" && usuario.clienteVinculado) {
+      const cliente = await Cliente.findOne({ where: { nome: usuario.clienteVinculado, portalBloqueado: true } })
+      ativo = !cliente
+    }
+    await usuario.update({ ativo, arquivadoEm: null, arquivadoPorUsuarioId: null })
+    return res.json({ message: ativo ? "Usuário restaurado com sucesso" : "Usuário restaurado, mas permanece bloqueado pelo Portal do Cliente", ativo })
+  } catch (error) {
+    console.error("ERRO AO RESTAURAR USUÁRIO:", error)
+    return res.status(500).json({ message: "Erro ao restaurar usuário" })
   }
 })
 
@@ -225,6 +260,7 @@ router.patch("/:id/acesso", autenticar, async (req, res) => {
 
     const usuario = await Usuario.findByPk(req.params.id)
     if (!usuario) return res.status(404).json({ message: "Usuário não encontrado" })
+    if (usuario.arquivadoEm) return res.status(409).json({ message: "Restaure o usuário antes de alterar o acesso" })
 
     if (Number(usuario.id) === Number(req.usuario.id) && req.body.ativo === false) {
       return res.status(400).json({ message: "Você não pode bloquear o próprio acesso" })

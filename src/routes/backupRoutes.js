@@ -621,3 +621,4 @@ router.get("/download/:arquivo", async (req, res) => {
 })
 
 module.exports = router
+module.exports.salvarBackup = salvarBackup

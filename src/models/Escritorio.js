@@ -9,6 +9,8 @@ const Escritorio = sequelize.define("Escritorio", {
   telefone: { type: DataTypes.STRING, allowNull: true },
   status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Ativo" },
   plano: { type: DataTypes.STRING, allowNull: false, defaultValue: "Interno" },
+  arquivadoEm: { type: DataTypes.DATE, allowNull: true },
+  arquivadoPorUsuarioId: { type: DataTypes.INTEGER, allowNull: true },
 }, { semEscritorio: true })
 
 module.exports = Escritorio

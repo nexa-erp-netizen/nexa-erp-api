@@ -224,7 +224,7 @@ router.post("/login", async (req, res) => {
       })
     }
 
-    if (usuario.ativo === false) {
+    if (usuario.ativo === false || usuario.arquivadoEm) {
       if (usuario.perfil === "Cliente" && usuario.clienteVinculado) {
         const clienteBloqueado = await Cliente.findOne({
           where: {
@@ -243,6 +243,13 @@ router.post("/login", async (req, res) => {
       return res.status(403).json({
         message: "Este acesso está bloqueado. Procure o administrador do escritório.",
       })
+    }
+
+    if (!usuario.plataformaAdmin && usuario.escritorioId) {
+      const escritorio = await Escritorio.findByPk(usuario.escritorioId, { semIsolamentoEscritorio: true })
+      if (!escritorio || escritorio.arquivadoEm || escritorio.status === "Arquivado") {
+        return res.status(403).json({ message: "Este escritório está arquivado. Entre em contato com a administração da plataforma." })
+      }
     }
 
     if (usuario.perfil !== "Cliente" && !escritorioCodigo && !usuario.plataformaAdmin) {

@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken")
 const Usuario = require("../models/Usuario")
 const Cliente = require("../models/Cliente")
+const Escritorio = require("../models/Escritorio")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -29,11 +30,11 @@ async function autenticar(req, res, next) {
     const usuario = jwt.verify(token, JWT_SECRET)
 
     const usuarioAtual = await Usuario.findByPk(usuario.id, {
-      attributes: ["id", "ativo", "perfil", "clienteVinculado", "escritorioId", "plataformaAdmin"],
+      attributes: ["id", "ativo", "perfil", "clienteVinculado", "escritorioId", "plataformaAdmin", "arquivadoEm"],
       semIsolamentoEscritorio: true,
     })
 
-    if (!usuarioAtual || usuarioAtual.ativo === false) {
+    if (!usuarioAtual || usuarioAtual.ativo === false || usuarioAtual.arquivadoEm) {
       if (usuarioAtual?.perfil === "Cliente" && usuarioAtual.clienteVinculado) {
         const clienteBloqueado = await Cliente.findOne({
           where: {
@@ -53,6 +54,13 @@ async function autenticar(req, res, next) {
       return res.status(403).json({
         message: "Este acesso está bloqueado. Procure o administrador do escritório.",
       })
+    }
+
+    if (!usuarioAtual.plataformaAdmin && usuarioAtual.escritorioId) {
+      const escritorio = await Escritorio.findByPk(usuarioAtual.escritorioId, { semIsolamentoEscritorio: true })
+      if (!escritorio || escritorio.arquivadoEm || escritorio.status === "Arquivado") {
+        return res.status(403).json({ message: "Este escritório está arquivado. Entre em contato com a administração da plataforma." })
+      }
     }
 
     req.usuario = {

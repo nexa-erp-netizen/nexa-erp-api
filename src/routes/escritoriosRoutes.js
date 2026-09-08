@@ -3,6 +3,9 @@ const bcrypt = require("bcryptjs")
 const sequelize = require("../config/database")
 const Escritorio = require("../models/Escritorio")
 const Usuario = require("../models/Usuario")
+const { Op } = require("sequelize")
+const { salvarBackup } = require("./backupRoutes")
+const { validarArquivamentoEscritorio, confirmacaoNomeValida } = require("../services/arquivamentoSeguroService")
 
 const router = express.Router()
 
@@ -36,9 +39,43 @@ function somentePlataforma(req, res, next) {
   next()
 }
 
-router.get("/", somentePlataforma, async (_req, res) => {
-  const escritorios = await Escritorio.findAll({ order: [["nome", "ASC"]], semIsolamentoEscritorio: true })
-  res.json(escritorios)
+router.get("/", somentePlataforma, async (req, res) => {
+  const arquivados = req.query.arquivados === "true"
+  const escritorios = await Escritorio.findAll({ where: { arquivadoEm: arquivados ? { [Op.not]: null } : null }, order: [["nome", "ASC"]], semIsolamentoEscritorio: true })
+  const admins = await Usuario.findAll({ where: { plataformaAdmin: true }, attributes: ["escritorioId"], semIsolamentoEscritorio: true })
+  const protegidos = new Set(admins.map(item => Number(item.escritorioId)))
+  res.json(escritorios.map(item => ({ ...item.toJSON(), protegido: protegidos.has(Number(item.id)) })))
+})
+
+router.delete("/:id", somentePlataforma, async (req, res) => {
+  const escritorio = await Escritorio.findByPk(req.params.id, { semIsolamentoEscritorio: true })
+  const existe = validarArquivamentoEscritorio(escritorio, req.usuario, false)
+  if (!existe.permitido) return res.status(existe.status).json({ message: existe.mensagem })
+  const possuiAdminPlataforma = await Usuario.count({ where: { escritorioId: escritorio.id, plataformaAdmin: true }, semIsolamentoEscritorio: true })
+  const permissao = validarArquivamentoEscritorio(escritorio, req.usuario, possuiAdminPlataforma > 0)
+  if (!permissao.permitido) return res.status(permissao.status).json({ message: permissao.mensagem })
+  if (!confirmacaoNomeValida(escritorio.nome, req.body?.confirmacaoNome)) {
+    return res.status(400).json({ message: "Digite exatamente o nome do escritório para confirmar" })
+  }
+  if (escritorio.arquivadoEm) return res.json({ message: "Escritório já estava excluído com segurança" })
+
+  try {
+    const reqBackup = { ...req, usuario: { ...req.usuario, escritorioId: escritorio.id } }
+    const backup = await salvarBackup({ origem: "antes-de-excluir-escritorio", req: reqBackup, prefixo: `backup-escritorio-${escritorio.id}` })
+    await escritorio.update({ status: "Arquivado", arquivadoEm: new Date(), arquivadoPorUsuarioId: req.usuario.id }, { semIsolamentoEscritorio: true })
+    return res.json({ message: "Escritório excluído com segurança", backup: { arquivo: backup.arquivo, checksumSha256: backup.checksumSha256 } })
+  } catch (error) {
+    console.error("ERRO AO EXCLUIR ESCRITÓRIO:", error)
+    return res.status(500).json({ message: "Não foi possível gerar o backup e excluir o escritório" })
+  }
+})
+
+router.patch("/:id/restaurar", somentePlataforma, async (req, res) => {
+  const escritorio = await Escritorio.findByPk(req.params.id, { semIsolamentoEscritorio: true })
+  if (!escritorio) return res.status(404).json({ message: "Escritório não encontrado" })
+  if (!escritorio.arquivadoEm) return res.status(409).json({ message: "Este escritório não está excluído" })
+  await escritorio.update({ status: "Ativo", arquivadoEm: null, arquivadoPorUsuarioId: null }, { semIsolamentoEscritorio: true })
+  return res.json({ message: "Escritório restaurado com sucesso" })
 })
 
 router.post("/", somentePlataforma, async (req, res) => {
