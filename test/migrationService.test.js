@@ -46,3 +46,39 @@ test("bloqueia alteração de migration já aplicada", () => {
     /Migration já aplicada foi alterada/
   )
 })
+
+test("lock de migrations usa advisory lock e libera a mesma conexão", async () => {
+  const chamadas = []
+  let tentativas = 0
+  const connection = {
+    async query(sql) {
+      chamadas.push(sql)
+      if (sql.includes("pg_try_advisory_lock")) {
+        tentativas += 1
+        return { rows: [{ acquired: tentativas >= 2 }] }
+      }
+      if (sql.includes("pg_advisory_unlock")) return { rows: [{ released: true }] }
+      return { rows: [] }
+    },
+  }
+  let liberada = false
+  const sequelize = {
+    getDialect: () => "postgres",
+    connectionManager: {
+      getConnection: async () => connection,
+      releaseConnection: async conexao => {
+        assert.equal(conexao, connection)
+        liberada = true
+      },
+    },
+  }
+
+  const { adquirirLockMigracoes } = require("../src/db/migrationService")
+  const liberar = await adquirirLockMigracoes(sequelize, { timeoutMs: 1000, intervaloMs: 0 })
+
+  assert.equal(tentativas, 2)
+  assert.equal(liberada, false)
+  await liberar()
+  assert.equal(liberada, true)
+  assert.ok(chamadas.some(sql => sql.includes("pg_advisory_unlock")))
+})

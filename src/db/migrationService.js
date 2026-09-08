@@ -4,6 +4,9 @@ const crypto = require("crypto")
 
 const TABELA_MIGRACOES = "schema_migrations"
 const DIRETORIO_PADRAO = path.join(__dirname, "migrations")
+const LOCK_MIGRACOES_ID = 93550001
+const LOCK_MIGRACOES_TIMEOUT_MS = 120000
+const LOCK_MIGRACOES_INTERVALO_MS = 500
 
 function normalizarNomeTabela(valor) {
   if (!valor) return ""
@@ -39,6 +42,64 @@ function validarChecksumAplicado(registro, checksumAtual, nomeMigracao) {
   }
 
   return "aplicada"
+}
+
+function esperar(ms) {
+  return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)))
+}
+
+function lockAdquirido(resposta) {
+  return resposta?.rows?.[0]?.acquired === true || resposta?.rows?.[0]?.acquired === "t"
+}
+
+async function adquirirLockMigracoes(sequelize, opcoes = {}) {
+  const dialecto = typeof sequelize?.getDialect === "function" ? sequelize.getDialect() : ""
+  if (dialecto !== "postgres" || !sequelize?.connectionManager?.getConnection) {
+    return async () => {}
+  }
+
+  const timeoutMs = Number(opcoes.timeoutMs ?? LOCK_MIGRACOES_TIMEOUT_MS)
+  const intervaloMs = Number(opcoes.intervaloMs ?? LOCK_MIGRACOES_INTERVALO_MS)
+  const connection = await sequelize.connectionManager.getConnection({ type: "WRITE" })
+  const inicio = Date.now()
+  let adquirido = false
+
+  try {
+    while (!adquirido) {
+      const resposta = await connection.query(
+        "SELECT pg_try_advisory_lock($1) AS acquired",
+        [LOCK_MIGRACOES_ID]
+      )
+      adquirido = lockAdquirido(resposta)
+      if (adquirido) break
+
+      if (Date.now() - inicio >= timeoutMs) {
+        throw new Error(
+          `Tempo limite excedido aguardando o lock de migrations (${timeoutMs} ms). ` +
+          "Outra instância da API pode estar atualizando o banco."
+        )
+      }
+
+      await esperar(intervaloMs)
+    }
+  } catch (error) {
+    await sequelize.connectionManager.releaseConnection(connection)
+    throw error
+  }
+
+  let liberado = false
+  return async () => {
+    if (liberado) return
+    liberado = true
+    try {
+      await connection.query(
+        "SELECT pg_advisory_unlock($1) AS released",
+        [LOCK_MIGRACOES_ID]
+      )
+    } finally {
+      await sequelize.connectionManager.releaseConnection(connection)
+    }
+  }
 }
 
 async function garantirTabelaMigracoes(sequelize) {
@@ -83,71 +144,80 @@ async function executarMigracoes(sequelize, opcoes = {}) {
   const diretorio = opcoes.diretorio || DIRETORIO_PADRAO
 
   await sequelize.authenticate()
-  await garantirTabelaMigracoes(sequelize)
-  const bootstrap = await bootstrapSomenteBancoVazio(sequelize)
+  const liberarLock = await adquirirLockMigracoes(sequelize, opcoes.lock)
 
-  const aplicadasAntes = await lerMigracoesAplicadas(sequelize)
-  const arquivos = listarArquivosMigracao(diretorio)
-  const resultado = {
-    bootstrap,
-    total: arquivos.length,
-    aplicadas: 0,
-    jaAplicadas: 0,
-    nomesAplicadas: [],
-  }
+  try {
+    await garantirTabelaMigracoes(sequelize)
+    const bootstrap = await bootstrapSomenteBancoVazio(sequelize)
 
-  for (const arquivo of arquivos) {
-    const nomeArquivo = path.basename(arquivo)
-    const checksum = checksumArquivo(arquivo)
-    const registro = aplicadasAntes.get(nomeArquivo)
-    const status = validarChecksumAplicado(registro, checksum, nomeArquivo)
-
-    if (status === "aplicada") {
-      resultado.jaAplicadas += 1
-      continue
+    const aplicadasAntes = await lerMigracoesAplicadas(sequelize)
+    const arquivos = listarArquivosMigracao(diretorio)
+    const resultado = {
+      bootstrap,
+      total: arquivos.length,
+      aplicadas: 0,
+      jaAplicadas: 0,
+      nomesAplicadas: [],
     }
 
-    delete require.cache[require.resolve(arquivo)]
-    const migration = require(arquivo)
-    if (!migration || typeof migration.up !== "function") {
-      throw new Error(`Migration inválida: ${nomeArquivo}. É obrigatório exportar up().`)
-    }
+    for (const arquivo of arquivos) {
+      const nomeArquivo = path.basename(arquivo)
+      const checksum = checksumArquivo(arquivo)
+      const registro = aplicadasAntes.get(nomeArquivo)
+      const status = validarChecksumAplicado(registro, checksum, nomeArquivo)
 
-    const inicio = Date.now()
+      if (status === "aplicada") {
+        resultado.jaAplicadas += 1
+        continue
+      }
 
-    await sequelize.transaction(async transaction => {
-      await migration.up({
-        sequelize,
-        queryInterface: sequelize.getQueryInterface(),
-        transaction,
+      delete require.cache[require.resolve(arquivo)]
+      const migration = require(arquivo)
+      if (!migration || typeof migration.up !== "function") {
+        throw new Error(`Migration inválida: ${nomeArquivo}. É obrigatório exportar up().`)
+      }
+
+      const inicio = Date.now()
+
+      await sequelize.transaction(async transaction => {
+        await migration.up({
+          sequelize,
+          queryInterface: sequelize.getQueryInterface(),
+          transaction,
+        })
+
+        await sequelize.query(
+          `INSERT INTO "${TABELA_MIGRACOES}" ("name", "checksum", "appliedAt", "executionMs") VALUES (:name, :checksum, NOW(), :executionMs)`,
+          {
+            replacements: {
+              name: nomeArquivo,
+              checksum,
+              executionMs: Math.max(0, Date.now() - inicio),
+            },
+            transaction,
+          }
+        )
       })
 
-      await sequelize.query(
-        `INSERT INTO "${TABELA_MIGRACOES}" ("name", "checksum", "appliedAt", "executionMs") VALUES (:name, :checksum, NOW(), :executionMs)`,
-        {
-          replacements: {
-            name: nomeArquivo,
-            checksum,
-            executionMs: Math.max(0, Date.now() - inicio),
-          },
-          transaction,
-        }
-      )
-    })
+      resultado.aplicadas += 1
+      resultado.nomesAplicadas.push(nomeArquivo)
+    }
 
-    resultado.aplicadas += 1
-    resultado.nomesAplicadas.push(nomeArquivo)
+    return resultado
+  } finally {
+    await liberarLock()
   }
-
-  return resultado
 }
 
 module.exports = {
   TABELA_MIGRACOES,
+  LOCK_MIGRACOES_ID,
   normalizarNomeTabela,
   listarArquivosMigracao,
   checksumArquivo,
   validarChecksumAplicado,
+  lockAdquirido,
+  adquirirLockMigracoes,
   executarMigracoes,
   bancoAplicacaoEstaVazio,
 }
