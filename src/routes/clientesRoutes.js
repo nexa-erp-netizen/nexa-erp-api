@@ -5,6 +5,9 @@ const Usuario = require("../models/Usuario")
 const sequelize = require("../config/database")
 const upload = require("../middlewares/upload")
 const supabase = require("../config/supabase")
+const Credencial = require("../models/CredencialAcessoFiscal")
+const HistoricoCredencial = require("../models/HistoricoCredencialFiscal")
+const { criptografar, chaveConfigurada } = require("../services/cofreCredenciaisService")
 
 const {
   autenticar,
@@ -13,8 +16,9 @@ const {
 const router = express.Router()
 
 function limparDadosCliente(body) {
+  const { senhaGovBr: _senhaGovBr, ...dadosSemSenha } = body
   return {
-    ...body,
+    ...dadosSemSenha,
     ativo: body.ativo !== false,
     dataNascimento: body.dataNascimento || null,
     email: body.email || null,
@@ -37,7 +41,6 @@ function limparDadosCliente(body) {
     estado: body.estado || null,
     tituloEleitor: body.tituloEleitor || null,
     codigoSimplesNacional: body.codigoSimplesNacional || null,
-    senhaGovBr: body.senhaGovBr || null,
     cnaePrincipal: body.cnaePrincipal || null,
     inscricaoMunicipal: body.inscricaoMunicipal || null,
     inscricaoEstadual: body.inscricaoEstadual || null,
@@ -47,6 +50,57 @@ function limparDadosCliente(body) {
     anotacoes: Array.isArray(body.anotacoes) ? body.anotacoes : [],
     proximasAcoes: Array.isArray(body.proximasAcoes) ? body.proximasAcoes : [],
   }
+}
+
+function clienteSemSenha(cliente, possuiSenhaCriptografada = false) {
+  const dados = cliente?.toJSON ? cliente.toJSON() : { ...cliente }
+  const possuiSenhaGovBr = Boolean(dados.senhaGovBr || possuiSenhaCriptografada)
+  delete dados.senhaGovBr
+  return { ...dados, possuiSenhaGovBr }
+}
+
+async function salvarSenhaGovBr({ cliente, senha, req, transaction }) {
+  if (!senha) return null
+  if (req.usuario?.perfil !== "Administrador") {
+    const erro = new Error("Somente o administrador pode cadastrar a senha Gov.br.")
+    erro.status = 403
+    throw erro
+  }
+  if (!chaveConfigurada()) {
+    const erro = new Error("O cofre ainda não foi ativado no servidor.")
+    erro.status = 503
+    throw erro
+  }
+
+  const where = { clienteId: cliente.id, metodo: "GOV_BR" }
+  let credencial = await Credencial.findOne({ where, transaction })
+  const dados = {
+    cliente: cliente.nome,
+    identificador: cliente.cpf || cliente.cnpj || null,
+    segredoCriptografado: criptografar(senha),
+    status: "Configurado",
+    atualizadoPor: req.usuario?.nome || req.usuario?.email || `ID ${req.usuario?.id || "-"}`,
+    ativo: true,
+  }
+  if (credencial) await credencial.update(dados, { transaction })
+  else {
+    credencial = await Credencial.create({
+      ...dados,
+      ...where,
+      criadoPor: dados.atualizadoPor,
+    }, { transaction })
+  }
+  await cliente.update({ senhaGovBr: null }, { transaction })
+  await HistoricoCredencial.create({
+    credencialId: credencial.id,
+    clienteId: cliente.id,
+    cliente: cliente.nome,
+    metodo: "GOV_BR",
+    acao: credencial.createdAt?.getTime?.() === credencial.updatedAt?.getTime?.() ? "Cadastro" : "Atualização",
+    usuario: dados.atualizadoPor,
+    detalhes: "Senha Gov.br armazenada no cofre criptografado.",
+  }, { transaction })
+  return credencial
 }
 
 function extrairPathSupabase(valor) {
@@ -186,7 +240,12 @@ router.get("/", autenticar, async (req, res) => {
       order: [["createdAt", "DESC"]],
     })
 
-    res.json(clientes)
+    const idsComSenha = new Set((await Credencial.findAll({
+      where: { metodo: "GOV_BR", ativo: true },
+      attributes: ["clienteId"],
+    })).map((item) => String(item.clienteId)))
+
+    res.json(clientes.map((cliente) => clienteSemSenha(cliente, idsComSenha.has(String(cliente.id)))))
   } catch (error) {
     console.error("ERRO AO LISTAR CLIENTES:", error)
 
@@ -305,14 +364,19 @@ router.post("/", autenticar, async (req, res) => {
       })
     }
 
-    const novoCliente = await Cliente.create(limparDadosCliente(req.body))
+    const senhaGovBr = String(req.body.senhaGovBr || "").trim()
+    const novoCliente = await sequelize.transaction(async (transaction) => {
+      const cliente = await Cliente.create(limparDadosCliente(req.body), { transaction })
+      await salvarSenhaGovBr({ cliente, senha: senhaGovBr, req, transaction })
+      return cliente
+    })
 
-    res.status(201).json(novoCliente)
+    res.status(201).json(clienteSemSenha(novoCliente, Boolean(senhaGovBr)))
   } catch (error) {
     console.error("ERRO AO CRIAR CLIENTE:", error)
 
-    res.status(500).json({
-      message: "Erro ao criar cliente",
+    res.status(error.status || 500).json({
+      message: error.status ? error.message : "Erro ao criar cliente",
     })
   }
 })
@@ -334,16 +398,24 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
-    await cliente.update(limparDadosCliente(req.body))
+    const senhaGovBr = String(req.body.senhaGovBr || "").trim()
+    await sequelize.transaction(async (transaction) => {
+      await cliente.update(limparDadosCliente(req.body), { transaction })
+      await salvarSenhaGovBr({ cliente, senha: senhaGovBr, req, transaction })
+    })
 
-const clienteAtualizado = await Cliente.findByPk(id)
+    const clienteAtualizado = await Cliente.findByPk(id)
+    const possuiSenha = Boolean(senhaGovBr) || Boolean(await Credencial.findOne({
+      where: { clienteId: cliente.id, metodo: "GOV_BR", ativo: true },
+      attributes: ["id"],
+    }))
 
-res.json(clienteAtualizado)
+    res.json(clienteSemSenha(clienteAtualizado, possuiSenha))
   } catch (error) {
     console.error("ERRO AO ATUALIZAR CLIENTE:", error)
 
-    res.status(500).json({
-      message: "Erro ao atualizar cliente",
+    res.status(error.status || 500).json({
+      message: error.status ? error.message : "Erro ao atualizar cliente",
     })
   }
 })

@@ -2,8 +2,10 @@ const express = require("express")
 const multer = require("multer")
 const Credencial = require("../models/CredencialAcessoFiscal")
 const Historico = require("../models/HistoricoCredencialFiscal")
+const Cliente = require("../models/Cliente")
+const sequelize = require("../config/database")
 const { autenticar, autorizarPerfis } = require("../middlewares/authMiddleware")
-const { criptografar, chaveConfigurada } = require("../services/cofreCredenciaisService")
+const { criptografar, descriptografar, chaveConfigurada } = require("../services/cofreCredenciaisService")
 const { salvarCertificado, removerCertificado, armazenadoNoSupabase } = require("../services/certificadoStorageService")
 
 const router = express.Router()
@@ -59,6 +61,74 @@ router.get("/historico/:clienteId", ...somenteAdministrador, async (req, res) =>
     limit: 50,
   })
   res.json(itens)
+})
+
+router.post("/cliente/:clienteId/senha-gov/revelar", ...somenteAdministrador, async (req, res) => {
+  if (req.body?.confirmado !== true) {
+    return res.status(400).json({ message: "Confirme a consulta da senha Gov.br." })
+  }
+  if (!chaveConfigurada()) {
+    return res.status(503).json({ message: "O cofre ainda não foi ativado no servidor." })
+  }
+
+  try {
+    const cliente = await Cliente.findByPk(Number(req.params.clienteId))
+    if (!cliente) return res.status(404).json({ message: "Cliente não encontrado." })
+
+    let credencial = await Credencial.findOne({
+      where: { clienteId: cliente.id, metodo: "GOV_BR", ativo: true },
+      order: [["updatedAt", "DESC"]],
+    })
+    let segredo = null
+
+    if (credencial?.segredoCriptografado) {
+      segredo = descriptografar(credencial.segredoCriptografado).toString("utf8")
+    } else if (cliente.senhaGovBr) {
+      segredo = String(cliente.senhaGovBr)
+      await sequelize.transaction(async (transaction) => {
+        credencial = await Credencial.create({
+          clienteId: cliente.id,
+          cliente: cliente.nome,
+          metodo: "GOV_BR",
+          identificador: cliente.cpf || cliente.cnpj || null,
+          segredoCriptografado: criptografar(segredo),
+          status: "Configurado",
+          criadoPor: usuario(req),
+          atualizadoPor: usuario(req),
+          ativo: true,
+        }, { transaction })
+        await cliente.update({ senhaGovBr: null }, { transaction })
+        await Historico.create({
+          credencialId: credencial.id,
+          clienteId: cliente.id,
+          cliente: cliente.nome,
+          metodo: "GOV_BR",
+          acao: "Migração",
+          usuario: usuario(req),
+          detalhes: "Senha Gov.br antiga migrada para o cofre criptografado.",
+        }, { transaction })
+      })
+    }
+
+    if (!segredo) return res.status(404).json({ message: "Senha Gov.br não cadastrada para este cliente." })
+
+    await Historico.create({
+      credencialId: credencial?.id || null,
+      clienteId: cliente.id,
+      cliente: cliente.nome,
+      metodo: "GOV_BR",
+      acao: "Consulta",
+      usuario: usuario(req),
+      detalhes: "Senha Gov.br revelada pelo administrador.",
+    })
+
+    res.set("Cache-Control", "no-store, max-age=0")
+    res.set("Pragma", "no-cache")
+    return res.json({ segredo })
+  } catch (error) {
+    console.error("ERRO AO REVELAR SENHA GOV.BR:", error)
+    return res.status(500).json({ message: "Não foi possível revelar a senha Gov.br." })
+  }
 })
 
 router.post("/", ...somenteAdministrador, upload.single("certificado"), async (req, res) => {
