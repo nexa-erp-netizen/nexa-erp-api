@@ -6,6 +6,29 @@ const Usuario = require("../models/Usuario")
 
 const router = express.Router()
 
+function normalizarCodigo(valor) {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+async function gerarCodigoDisponivel(nome) {
+  const base = normalizarCodigo(nome) || "escritorio"
+  let codigo = base
+  let sufixo = 2
+
+  while (await Escritorio.findOne({ where: { codigo }, semIsolamentoEscritorio: true })) {
+    codigo = `${base}-${sufixo}`
+    sufixo += 1
+  }
+
+  return codigo
+}
+
 function somentePlataforma(req, res, next) {
   if (!req.usuario?.plataformaAdmin) {
     return res.status(403).json({ message: "Acesso exclusivo da administração da plataforma" })
@@ -20,10 +43,11 @@ router.get("/", somentePlataforma, async (_req, res) => {
 
 router.post("/", somentePlataforma, async (req, res) => {
   const { nome, codigo, cnpj, email, telefone, plano, adminNome, adminEmail, adminSenha } = req.body
-  const codigoLimpo = String(codigo || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "-")
+  const adminPerfil = req.body.adminPerfil === "Empresa" ? "Empresa" : "Administrador"
+  const codigoLimpo = normalizarCodigo(codigo) || await gerarCodigoDisponivel(nome)
 
-  if (!nome || !codigoLimpo || !adminNome || !adminEmail || !adminSenha) {
-    return res.status(400).json({ message: "Preencha escritório, código e dados do administrador" })
+  if (!nome || !adminNome || !adminEmail || !adminSenha) {
+    return res.status(400).json({ message: "Preencha o escritório e os dados do usuário responsável" })
   }
 
   const transacao = await sequelize.transaction()
@@ -34,11 +58,15 @@ router.post("/", somentePlataforma, async (req, res) => {
     )
     const senha = await bcrypt.hash(adminSenha, 10)
     const usuario = await Usuario.create(
-      { nome: adminNome, email: adminEmail, senha, perfil: "Administrador", escritorioId: escritorio.id },
+      { nome: adminNome, email: adminEmail, senha, perfil: adminPerfil, escritorioId: escritorio.id },
       { transaction: transacao, semIsolamentoEscritorio: true }
     )
     await transacao.commit()
-    res.status(201).json({ escritorio, administrador: { id: usuario.id, nome: usuario.nome, email: usuario.email } })
+    res.status(201).json({
+      escritorio,
+      usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, perfil: usuario.perfil },
+      administrador: { id: usuario.id, nome: usuario.nome, email: usuario.email },
+    })
   } catch (error) {
     await transacao.rollback()
     const duplicado = error?.name === "SequelizeUniqueConstraintError"

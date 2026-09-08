@@ -68,6 +68,12 @@ router.post("/", autenticar, async (req, res) => {
       return res.status(400).json({ message: "Perfil de usuário inválido" })
     }
 
+    if (perfil === "Empresa") {
+      return res.status(409).json({
+        message: "Cadastre a Empresa com um código de acesso para criar um escritório isolado",
+      })
+    }
+
     if (perfil === "Cliente" && !clienteVinculado) {
       return res.status(400).json({
         message: "Selecione o cliente vinculado",
