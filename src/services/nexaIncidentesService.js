@@ -1,5 +1,6 @@
 function normalizar(texto) { return String(texto || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() }
 const { diagnosticarIncidente } = require("./motorDiagnosticoIncidenteService")
+const { ehAdministradorPlataforma, registrarTentativaTecnicaBloqueada } = require("../utils/acessoPlataforma")
 
 async function garantirDiagnostico(item) {
   if (!item || item.categoria) return item
@@ -17,7 +18,10 @@ function pareceConsultaIncidentes(mensagem) {
 
 async function consultarIncidentesPelaNexa({ mensagem, usuario }) {
   if (!pareceConsultaIncidentes(mensagem)) return null
-  if (usuario?.perfil !== "Administrador") return { resposta: "A consulta técnica de incidentes é restrita ao administrador.", modo: "nexa-incidentes-bloqueado" }
+  if (!ehAdministradorPlataforma(usuario)) {
+    registrarTentativaTecnicaBloqueada(usuario, "consulta-incidentes")
+    return { resposta: "A consulta técnica de incidentes é exclusiva do administrador da plataforma.", modo: "nexa-incidentes-bloqueado" }
+  }
   const IncidenteSistema = require("../models/IncidenteSistema")
   const idSolicitado = normalizar(mensagem).match(/(?:incidente|erro|falha)?\s*#\s*(\d+)/)?.[1]
   if (idSolicitado) {

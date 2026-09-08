@@ -4,6 +4,7 @@ const Cliente = require("../models/Cliente")
 const IncidenteSistema = require("../models/IncidenteSistema")
 const { prepararCorrecao } = require("./nexaCorrecaoAutonomaService")
 const { detectarInconsistenciasCliente } = require("./nexaInconsistenciasService")
+const { ehAdministradorPlataforma, registrarTentativaTecnicaBloqueada } = require("../utils/acessoPlataforma")
 
 const CAMPOS_SENSIVEIS = /(senha|password|token|secret|chave|certificado|credencial|arquivo|anexo|conteudo|dadosCriptografados|cpf|cnpj|email|telefone|endereco)/i
 const MODELOS_BLOQUEADOS = new Set(["Usuario", "CredencialAcessoFiscal", "CertificadoDigital", "GoogleDriveConexao", "ExecucaoAgenteNexa"])
@@ -158,7 +159,10 @@ async function contextoCompletoCliente(argumentos, contexto) {
 }
 
 async function listarIncidentes(argumentos, contexto) {
-  if (contexto?.usuario?.perfil !== "Administrador") throw new Error("Acesso restrito ao administrador")
+  if (!ehAdministradorPlataforma(contexto?.usuario)) {
+    registrarTentativaTecnicaBloqueada(contexto?.usuario, "ferramenta-listar-incidentes")
+    throw new Error("Acesso exclusivo do administrador da plataforma")
+  }
   const id = Number(argumentos?.incidenteId)
   const where = Number.isInteger(id) && id > 0 ? { id } : (normalizar(argumentos?.status) === "todos" ? {} : { status: { [Op.notIn]: ["Corrigido", "Ignorado"] } })
   const itens = await IncidenteSistema.findAll({ where, order: [["ultimaOcorrenciaEm", "DESC"]], limit: 20 })
@@ -174,7 +178,10 @@ async function detectarInconsistencias(argumentos, contexto) {
 }
 
 async function verificarSaude(_argumentos, contexto) {
-  if (contexto?.usuario?.perfil !== "Administrador") throw new Error("Acesso restrito ao administrador")
+  if (!ehAdministradorPlataforma(contexto?.usuario)) {
+    registrarTentativaTecnicaBloqueada(contexto?.usuario, "ferramenta-saude-sistema")
+    throw new Error("Acesso exclusivo do administrador da plataforma")
+  }
   const inicio = Date.now()
   await sequelize.authenticate()
   await sequelize.query("SELECT 1")

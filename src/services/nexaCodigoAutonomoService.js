@@ -4,6 +4,7 @@ const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 const aiProvider = require("./nexaAiProviderService")
 const github = require("./nexaGitHubService")
 const { CONTEUDO_MEMORIA } = require("./nexaMemoriaTecnicaService")
+const { ehAdministradorPlataforma, registrarTentativaTecnicaBloqueada } = require("../utils/acessoPlataforma")
 
 const CAMINHOS_PROIBIDOS = /(^|\/)(\.github|node_modules|config|models?|migrations?|middlewares?|auth|credenciais?|secrets?|backup)(\/|$)|(^|\/)(package(?:-lock)?\.json|\.env|server\.js)$/i
 const EXTENSOES_PERMITIDAS = /\.(?:js|jsx|css)$/i
@@ -148,7 +149,7 @@ async function analisarCodigoSomenteLeitura({ mensagem, usuario }) {
     content: `Pedido do administrador: ${mensagem}\n\nAnalise somente os arquivos abaixo:${contextos.join("\n").slice(0, MAX_CONTEUDO_TOTAL)}`,
   }], { temperature: 0.1, maxTokens: 1800, timeout: 90000 })
   let plano = null
-  if (usuario?.id && usuario?.perfil === "Administrador" && consultados.length === 1 && consultados[0].candidatos.length) {
+  if (usuario?.id && ehAdministradorPlataforma(usuario) && consultados.length === 1 && consultados[0].candidatos.length) {
     const alvo = consultados[0]
     const fingerprint = crypto.createHash("sha256").update(`analise:${usuario.id}:${alvo.tipo}:${alvo.commit}:${mensagem}`).digest("hex")
     plano = await PlanoCorrecaoNexa.findOne({ where: { fingerprint, usuarioId: usuario.id }, order: [["createdAt", "DESC"]] })
@@ -272,7 +273,7 @@ async function gerarCorrecao({ incidente, tipo, arquivos }) {
 }
 
 async function prepararCorrecaoCodigo({ incidenteId, usuario }) {
-  if (usuario?.perfil !== "Administrador") throw new Error("O Modo Desenvolvedor é restrito ao administrador")
+  if (!ehAdministradorPlataforma(usuario)) throw new Error("O Modo Desenvolvedor é exclusivo do administrador da plataforma")
   const incidente = await IncidenteSistema.findByPk(Number(incidenteId))
   if (!incidente) throw new Error(`Não encontrei o incidente #${incidenteId}`)
   const tipo = tipoRepositorio(incidente)
@@ -313,7 +314,7 @@ async function prepararCorrecaoCodigo({ incidenteId, usuario }) {
 }
 
 async function prepararCorrecaoDaAnalise({ plano, usuario }) {
-  if (usuario?.perfil !== "Administrador" || Number(plano?.usuarioId) !== Number(usuario.id)) throw new Error("O plano não pertence ao Administrador atual")
+  if (!ehAdministradorPlataforma(usuario) || Number(plano?.usuarioId) !== Number(usuario.id)) throw new Error("O plano não pertence ao administrador da plataforma atual")
   if (plano.status !== "Analisado") throw new Error("Este plano não está disponível para preparar correção")
   const escopoAnterior = plano.escopo || {}
   const tipo = escopoAnterior.tipo
@@ -421,8 +422,11 @@ async function validarPublicacaoPlano({ plano, usuario }) {
 
 async function responderCodigoAutonomo({ mensagem, usuario }) {
   const texto = normalizar(mensagem)
-  if (usuario?.perfil !== "Administrador" && /\b(github|codigo|public|modo desenvolvedor)\b/.test(texto)) return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
-  if (usuario?.perfil !== "Administrador") return null
+  if (!ehAdministradorPlataforma(usuario) && /\b(github|codigo|public|modo desenvolvedor)\b/.test(texto)) {
+    registrarTentativaTecnicaBloqueada(usuario, "codigo-github")
+    return { resposta: "O Modo Desenvolvedor é exclusivo do administrador da plataforma.", modo: "nexa-dev-bloqueado" }
+  }
+  if (!ehAdministradorPlataforma(usuario)) return null
 
   if (pedidoAnalisarCodigo(mensagem)) {
     return analisarCodigoSomenteLeitura({ mensagem, usuario })

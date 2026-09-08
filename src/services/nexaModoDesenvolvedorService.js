@@ -1,5 +1,6 @@
 const crypto = require("crypto")
 const { responderCodigoAutonomo } = require("./nexaCodigoAutonomoService")
+const { ehAdministradorPlataforma, registrarTentativaTecnicaBloqueada } = require("../utils/acessoPlataforma")
 const { garantirMemoriaTecnica } = require("./nexaMemoriaTecnicaService")
 
 function normalizar(valor) {
@@ -139,7 +140,10 @@ function avaliarNaturezaIncidente(incidente, saude, agora = new Date()) {
 
 async function responderModoDesenvolvedor({ mensagem, usuario }) {
   if (!pareceComandoDesenvolvedor(mensagem)) return null
-  if (usuario?.perfil !== "Administrador") return { resposta: "O Modo Desenvolvedor é restrito ao administrador.", modo: "nexa-dev-bloqueado" }
+  if (!ehAdministradorPlataforma(usuario)) {
+    registrarTentativaTecnicaBloqueada(usuario, "modo-desenvolvedor")
+    return { resposta: "O Modo Desenvolvedor é exclusivo do administrador da plataforma.", modo: "nexa-dev-bloqueado" }
+  }
   try {
     await garantirMemoriaTecnica(usuario)
     const codigo = await responderCodigoAutonomo({ mensagem, usuario })

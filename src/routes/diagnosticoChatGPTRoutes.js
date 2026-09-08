@@ -5,9 +5,10 @@ const IncidenteSistema = require("../models/IncidenteSistema")
 const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
 const ExecucaoAgenteNexa = require("../models/ExecucaoAgenteNexa")
 const { version: NEXA_API_VERSION } = require("../../package.json")
+const { exigirAdministradorPlataforma } = require("../utils/acessoPlataforma")
 
 const router = express.Router()
-router.use(autenticar, autorizarPerfis("Administrador"))
+router.use(autenticar, autorizarPerfis("Administrador"), exigirAdministradorPlataforma)
 
 function textoSeguro(valor, limite = 2000) {
   return String(valor || "")

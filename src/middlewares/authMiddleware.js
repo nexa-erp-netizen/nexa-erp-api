@@ -29,7 +29,7 @@ async function autenticar(req, res, next) {
     const usuario = jwt.verify(token, JWT_SECRET)
 
     const usuarioAtual = await Usuario.findByPk(usuario.id, {
-      attributes: ["id", "ativo", "perfil", "clienteVinculado", "escritorioId"],
+      attributes: ["id", "ativo", "perfil", "clienteVinculado", "escritorioId", "plataformaAdmin"],
       semIsolamentoEscritorio: true,
     })
 
@@ -55,7 +55,13 @@ async function autenticar(req, res, next) {
       })
     }
 
-    req.usuario = usuario
+    req.usuario = {
+      ...usuario,
+      perfil: usuarioAtual.perfil,
+      clienteVinculado: usuarioAtual.clienteVinculado,
+      escritorioId: usuarioAtual.escritorioId,
+      plataformaAdmin: usuarioAtual.plataformaAdmin === true,
+    }
 
     next()
   } catch (error) {

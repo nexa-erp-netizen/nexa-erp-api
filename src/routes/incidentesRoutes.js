@@ -3,6 +3,7 @@ const IncidenteSistema = require("../models/IncidenteSistema")
 const { registrarIncidente } = require("../services/incidenteSistemaService")
 const { diagnosticoSaude, criarPlanoCorrecao } = require("../services/nexaModoDesenvolvedorService")
 const PlanoCorrecaoNexa = require("../models/PlanoCorrecaoNexa")
+const { exigirAdministradorPlataforma } = require("../utils/acessoPlataforma")
 
 const router = express.Router()
 
@@ -16,7 +17,7 @@ router.post("/capturar", async (req, res) => {
   }
 })
 
-router.use((req, res, next) => req.usuario.perfil === "Administrador" ? next() : res.status(403).json({ message: "Acesso restrito ao administrador." }))
+router.use(exigirAdministradorPlataforma)
 
 router.get("/saude", async (_req, res) => {
   res.json(await diagnosticoSaude())
