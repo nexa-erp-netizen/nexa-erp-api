@@ -21,6 +21,16 @@ test("middleware bloqueia administrador comum do escritório", () => {
   assert.deepEqual(corpo, { message: "Acesso exclusivo do administrador da plataforma." })
 })
 
+test("middleware bloqueia perfil não administrador mesmo com marca técnica inconsistente", () => {
+  let status = null
+  let avancou = false
+  const req = { method: "POST", originalUrl: "/escritorios", usuario: { id: 9, escritorioId: 4, perfil: "Profissional", plataformaAdmin: true } }
+  const res = { status(codigo) { status = codigo; return this }, json() { return this } }
+  exigirAdministradorPlataforma(req, res, () => { avancou = true })
+  assert.equal(avancou, false)
+  assert.equal(status, 403)
+})
+
 test("middleware libera somente o administrador da plataforma", () => {
   let avancou = false
   exigirAdministradorPlataforma({ usuario: { perfil: "Administrador", plataformaAdmin: true } }, {}, () => { avancou = true })
