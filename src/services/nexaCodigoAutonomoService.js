@@ -268,7 +268,7 @@ async function gerarCorrecao({ incidente, tipo, arquivos }) {
   }, {
     role: "user",
     content: `Incidente confirmado: ${JSON.stringify({ id: incidente.id, titulo: incidente.titulo, mensagem: incidente.mensagem, rota: incidente.rota, metodo: incidente.metodo, statusHttp: incidente.statusHttp, componente: incidente.componente, categoria: incidente.categoria, causaProvavel: incidente.causaProvavel, contexto: incidente.contexto }).slice(0, 10000)}\nRepositório: ${tipo}. Corrija somente se a causa estiver comprovada pelos arquivos. Se não estiver, retorne arquivos vazio.${contexto}`,
-  }], { temperature: 0.1, maxTokens: 12000, timeout: 120000, json: true, onlyProvider: "openai" })
+  }], { temperature: 0.1, maxTokens: 12000, timeout: 120000, json: true, providerPriority: ["openai", "groq"] })
   return { proposta: extrairJson(resultado.text), provedor: resultado.provider, modelo: resultado.model }
 }
 

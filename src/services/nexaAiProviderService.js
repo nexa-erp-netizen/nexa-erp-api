@@ -14,6 +14,16 @@ function providerOrder() {
   return [first, first === "openai" ? "groq" : "openai"].filter(configured)
 }
 
+function providerOrderFor(options = {}) {
+  const onlyProvider = options.onlyProvider ? String(options.onlyProvider).toLowerCase() : null
+  if (onlyProvider) return [onlyProvider].filter(configured)
+  if (Array.isArray(options.providerPriority)) {
+    return [...new Set(options.providerPriority.map((item) => String(item).toLowerCase()))]
+      .filter((item) => ["openai", "groq"].includes(item) && configured(item))
+  }
+  return providerOrder()
+}
+
 function extractOpenAI(data) {
   if (typeof data?.output_text === "string") return data.output_text.trim()
   return (Array.isArray(data?.output) ? data.output : [])
@@ -75,7 +85,7 @@ async function callGroq(messages, options, signal) {
 
 async function generate(messages, options = {}) {
   const onlyProvider = options.onlyProvider ? String(options.onlyProvider).toLowerCase() : null
-  const order = onlyProvider ? [onlyProvider].filter(configured) : providerOrder()
+  const order = providerOrderFor(options)
   if (!order.length) {
     const error = new Error(onlyProvider === "openai"
       ? "A OpenAI é obrigatória para preparar correções de código e não está configurada."
@@ -108,6 +118,7 @@ module.exports = {
   generate,
   configured,
   providerOrder,
+  providerOrderFor,
   preferredProvider: PREFERRED,
   models: { openai: OPENAI_MODEL, groq: GROQ_MODEL },
   extractOpenAI,
