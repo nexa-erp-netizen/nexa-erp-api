@@ -5,6 +5,7 @@ const { Op } = require("sequelize")
 const Usuario = require("../models/Usuario")
 const Cliente = require("../models/Cliente")
 const Escritorio = require("../models/Escritorio")
+const { registrarLoginEscritorio } = require("../services/acessoEscritorioService")
 const { autenticar } = require("../middlewares/authMiddleware")
 const AcessoCliente = require("../models/AcessoCliente")
 
@@ -270,6 +271,11 @@ router.post("/login", async (req, res) => {
       })
     }
 
+    const escritorioAcessado = usuario.escritorioId
+      ? await Escritorio.findByPk(usuario.escritorioId, { semIsolamentoEscritorio: true })
+      : null
+    await registrarLoginEscritorio(escritorioAcessado, usuario, req)
+
     const token = jwt.sign(
       {
         id: usuario.id,
@@ -312,9 +318,7 @@ router.post("/login", async (req, res) => {
         empresaId: usuario.empresaId,
         escritorioId: usuario.escritorioId,
         plataformaAdmin: Boolean(usuario.plataformaAdmin),
-        escritorio: usuario.escritorioId
-          ? await Escritorio.findByPk(usuario.escritorioId, { semIsolamentoEscritorio: true })
-          : null,
+        escritorio: escritorioAcessado,
       },
     })
   } catch (error) {
