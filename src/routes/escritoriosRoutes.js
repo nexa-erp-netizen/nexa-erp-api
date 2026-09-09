@@ -6,6 +6,7 @@ const Usuario = require("../models/Usuario")
 const { Op } = require("sequelize")
 const { salvarBackup } = require("./backupRoutes")
 const { validarArquivamentoEscritorio, confirmacaoNomeValida } = require("../services/arquivamentoSeguroService")
+const { exigirAdministradorPlataforma } = require("../utils/acessoPlataforma")
 
 const router = express.Router()
 
@@ -32,14 +33,9 @@ async function gerarCodigoDisponivel(nome) {
   return codigo
 }
 
-function somentePlataforma(req, res, next) {
-  if (!req.usuario?.plataformaAdmin) {
-    return res.status(403).json({ message: "Acesso exclusivo da administração da plataforma" })
-  }
-  next()
-}
+router.use(exigirAdministradorPlataforma)
 
-router.get("/", somentePlataforma, async (req, res) => {
+router.get("/", async (req, res) => {
   const arquivados = req.query.arquivados === "true"
   const escritorios = await Escritorio.findAll({ where: { arquivadoEm: arquivados ? { [Op.not]: null } : null }, order: [["nome", "ASC"]], semIsolamentoEscritorio: true })
   const admins = await Usuario.findAll({ where: { plataformaAdmin: true }, attributes: ["escritorioId"], semIsolamentoEscritorio: true })
@@ -47,7 +43,7 @@ router.get("/", somentePlataforma, async (req, res) => {
   res.json(escritorios.map(item => ({ ...item.toJSON(), protegido: protegidos.has(Number(item.id)) })))
 })
 
-router.delete("/:id", somentePlataforma, async (req, res) => {
+router.delete("/:id", async (req, res) => {
   const escritorio = await Escritorio.findByPk(req.params.id, { semIsolamentoEscritorio: true })
   const existe = validarArquivamentoEscritorio(escritorio, req.usuario, false)
   if (!existe.permitido) return res.status(existe.status).json({ message: existe.mensagem })
@@ -70,7 +66,7 @@ router.delete("/:id", somentePlataforma, async (req, res) => {
   }
 })
 
-router.patch("/:id/restaurar", somentePlataforma, async (req, res) => {
+router.patch("/:id/restaurar", async (req, res) => {
   const escritorio = await Escritorio.findByPk(req.params.id, { semIsolamentoEscritorio: true })
   if (!escritorio) return res.status(404).json({ message: "Escritório não encontrado" })
   if (!escritorio.arquivadoEm) return res.status(409).json({ message: "Este escritório não está excluído" })
@@ -78,7 +74,7 @@ router.patch("/:id/restaurar", somentePlataforma, async (req, res) => {
   return res.json({ message: "Escritório restaurado com sucesso" })
 })
 
-router.post("/", somentePlataforma, async (req, res) => {
+router.post("/", async (req, res) => {
   const { nome, codigo, cnpj, email, telefone, plano, adminNome, adminEmail, adminSenha } = req.body
   const adminPerfil = req.body.adminPerfil === "Empresa" ? "Empresa" : "Administrador"
   const codigoLimpo = normalizarCodigo(codigo) || await gerarCodigoDisponivel(nome)
