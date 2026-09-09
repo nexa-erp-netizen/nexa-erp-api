@@ -9,6 +9,13 @@ const Escritorio = sequelize.define("Escritorio", {
   telefone: { type: DataTypes.STRING, allowNull: true },
   status: { type: DataTypes.STRING, allowNull: false, defaultValue: "Ativo" },
   plano: { type: DataTypes.STRING, allowNull: false, defaultValue: "Interno" },
+  primeiroAcessoEm: { type: DataTypes.DATE, allowNull: true },
+  ultimoAcessoEm: { type: DataTypes.DATE, allowNull: true },
+  ultimaAtividadeEm: { type: DataTypes.DATE, allowNull: true },
+  totalAcessos: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+  ultimoAcessoUsuarioNome: { type: DataTypes.STRING, allowNull: true },
+  ultimoAcessoIp: { type: DataTypes.STRING(80), allowNull: true },
+  ultimoAcessoDispositivo: { type: DataTypes.STRING(160), allowNull: true },
   arquivadoEm: { type: DataTypes.DATE, allowNull: true },
   arquivadoPorUsuarioId: { type: DataTypes.INTEGER, allowNull: true },
 }, { semEscritorio: true })
