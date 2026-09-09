@@ -498,13 +498,17 @@ function rotuloCampoCadastro(campo) {
 function valorCampoCadastro(cliente, campo) {
   if (campo === "anotacoes") {
     const itens = Array.isArray(cliente?.anotacoes) ? cliente.anotacoes : []
-    const formatados = itens.slice(0, 10).map((item) => {
+    const chaves = new Set()
+    const formatados = itens.map((item) => {
       const texto = String(item?.texto || item?.conteudo || item?.observacao || "").trim()
       const tipo = String(item?.tipo || "Anotação").trim()
       const data = item?.data ? formatarData(item.data) : "sem data"
-      return texto ? `${data} — ${tipo}: ${texto}` : ""
-    }).filter(Boolean)
-    return formatados.length ? formatados.join(" | ") : null
+      const chave = `${String(item?.data || "").slice(0, 10)}|${normalizar(tipo)}|${normalizar(texto)}`
+      if (!texto || chaves.has(chave)) return ""
+      chaves.add(chave)
+      return `- ${data} — ${tipo}: ${texto.replace(/\s*\n\s*/g, " ")}`
+    }).filter(Boolean).slice(0, 10)
+    return formatados.length ? formatados.join("\n") : null
   }
   if (campo !== "endereco") return cliente?.[campo] || null
   const partes = [
@@ -524,7 +528,9 @@ function respostaDadoCadastral(cliente, campo) {
   const rotulo = rotuloCampoCadastro(campo)
   const valor = valorCampoCadastro(cliente, campo)
   const resposta = valor
-    ? `O ${rotulo} de ${nome} é ${valor}.`
+    ? campo === "anotacoes"
+      ? `Histórico de anotações de ${nome}:\n\n${valor}`
+      : `O ${rotulo} de ${nome} é ${valor}.`
     : `O ${rotulo} de ${nome} não está informado no cadastro.`
   return respostaConsulta({
     resposta,

@@ -26,6 +26,30 @@ const jonatan = {
   cpf: "987.654.321-00",
 }
 
+test("formata o histórico em lista e remove registros idênticos", async () => {
+  const cliente = {
+    ...hamilton,
+    anotacoes: [
+      { data: "2026-09-09T12:00:00.000Z", tipo: "WhatsApp", texto: "Mensagem enviada" },
+      { data: "2026-09-09T15:45:00.000Z", tipo: "WhatsApp", texto: "Mensagem enviada" },
+      { data: "2026-09-08T12:00:00.000Z", tipo: "Anotação", texto: "Documento recebido" },
+    ],
+  }
+
+  await comClientes([cliente], async () => {
+    const resultado = await detectarConsultaInteligente({
+      mensagem: "Qual é o histórico de anotações de Hamilton Michael dos Santos?",
+      clienteId: null,
+      usuario: { perfil: "Administrador" },
+    })
+
+    assert.match(resultado.resposta, /^Histórico de anotações de Hamilton Michael dos Santos:\n\n- /)
+    assert.equal((resultado.resposta.match(/Mensagem enviada/g) || []).length, 1)
+    assert.match(resultado.resposta, /\n- .*Documento recebido/)
+    assert.doesNotMatch(resultado.resposta, / \| /)
+  })
+})
+
 function comClientes(clientes, executar) {
   const original = Cliente.findAll
   Cliente.findAll = async () => clientes
