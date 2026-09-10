@@ -71,7 +71,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Conciliação Bancária", aliases: ["conciliacao bancaria", "conciliacao do banco", "extrato bancario"] },
   { pagina: "Pendências Clientes", aliases: ["pendencias dos clientes", "pendencias clientes", "pendencias"] },
   { pagina: "Acesso Rápido Fiscal", aliases: ["acesso rapido fiscal", "atalhos fiscais"] },
-  { pagina: "NF-e", aliases: ["nota fiscal eletronica", "emissor de nfe", "nfe", "nf-e"] },
+  { pagina: "NF-e", aliases: ["nota fiscal eletronica", "nota fiscal", "emissor de nfe", "nfe", "nf-e", "nf"] },
   { pagina: "NFS-e", aliases: ["nota fiscal de servico", "emissor de nfse", "nfse", "nfs-e"] },
   { pagina: "Documentos Digitais", aliases: ["documentos digitais", "documentos", "arquivos"] },
   { pagina: "WhatsApp Inteligente", aliases: ["whatsapp inteligente", "whatsapp"] },
@@ -849,9 +849,6 @@ function resolverClienteDaInterpretacao(clientes, resultado, clienteAtual) {
 }
 
 async function detectarComandoNavegacaoSemantico({ mensagem, clienteId, usuario, paginaAtual = "", historico = [] }) {
-  const apiKey = process.env.GROQ_API_KEY
-  if (!apiKey) return null
-
   let clientes = await Cliente.findAll({
     attributes: ["id", "nome", "regime", "situacaoEmpresa"],
     order: [["nome", "ASC"]],
@@ -909,31 +906,17 @@ FRASE DO USUÁRIO: ${String(mensagem || "").slice(0, 500)}
 Retorne SOMENTE JSON válido, sem markdown:
 {"intencao":"navegar|abrir-grupo|conversar|ambiguo","pagina":"nome canônico ou vazio","grupo":"nome canônico ou vazio","alvo":"pagina|central-cliente","secao":"servicos ou vazio","clienteId":null,"clienteNome":"","usarClienteAtual":false,"resposta":""}`
 
-  const controlador = new AbortController()
-  const timeout = setTimeout(() => controlador.abort(), 14000)
-
   try {
-    const resposta = await fetch(GROQ_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      signal: controlador.signal,
-      body: JSON.stringify({
-        model: MODELO_PADRAO,
-        messages: [
-          { role: "system", content: "Classifique comandos de navegação da Nexa ERP e devolva somente JSON válido." },
-          { role: "user", content: prompt },
-        ],
-        max_tokens: 180,
-        temperature: 0,
-      }),
+    const resposta = await aiProvider.generate([
+      { role: "system", content: "Classifique comandos de navegação da Nexa ERP e devolva somente JSON válido." },
+      { role: "user", content: prompt },
+    ], {
+      maxTokens: 220,
+      temperature: 0,
+      timeout: 14000,
+      json: true,
     })
-
-    if (!resposta.ok) return null
-    const dados = await resposta.json().catch(() => ({}))
-    const interpretado = extrairObjetoJsonLivre(extrairTextoGroq(dados))
+    const interpretado = extrairObjetoJsonLivre(resposta.text)
     if (!interpretado) return null
 
     const intencao = normalizar(interpretado.intencao).replace(/\s+/g, "-")
@@ -998,8 +981,6 @@ Retorne SOMENTE JSON válido, sem markdown:
   } catch (error) {
     console.warn("NAVEGAÇÃO SEMÂNTICA DA NEXA INDISPONÍVEL:", error?.message || error)
     return null
-  } finally {
-    clearTimeout(timeout)
   }
 }
 
@@ -2877,9 +2858,11 @@ async function conversar(req, res) {
       })
 
     let comandoNavegacao = null
+    const navegacaoExplicita = temVerboNavegacao(normalizar(mensagem))
     const deveTentarNavegacao = decisaoOperacional?.tipo === "navegacao"
       || rotaModelo?.rota === "navegacao"
       || (!rotaModelo && pareceComandoNavegacao(normalizar(mensagem)))
+      || navegacaoExplicita
     if (deveTentarNavegacao) {
       const parametrosNavegacao = {
         mensagem,
@@ -2918,6 +2901,28 @@ async function conversar(req, res) {
         roteadorModelo: rotaModelo,
         roteadorOperacional: decisaoOperacional,
       }, conversa))
+    }
+
+    // Uma intenção explícita de navegação nunca deve cair na conversa geral.
+    // Sem uma ação válida, o modelo poderia apenas escrever “aberto” sem que a
+    // Web tivesse algo para executar. Agora a Nexa assume a falha com clareza.
+    if (deveTentarNavegacao && !comandoNavegacao) {
+      const respostaNaoExecutada = respostaDeComando({
+        resposta: "Entendi que você quer abrir uma tela, mas não consegui identificar com segurança qual delas. Diga o nome da tela ou do módulo.",
+        fala: "Qual tela ou módulo você quer abrir?",
+        acao: null,
+        conversacionalV2: true,
+        atividade: "navegacao",
+        navegacaoNaoExecutada: true,
+      })
+      await salvarMensagemConversa({
+        conversa,
+        usuarioId: req.usuario.id,
+        autor: "nexa",
+        texto: respostaNaoExecutada.resposta,
+        dados: respostaNaoExecutada,
+      })
+      return res.json(anexarMetadadosConversa(respostaNaoExecutada, conversa))
     }
 
     if (rotaModelo?.rota === "esclarecer" && rotaModelo.resposta) {

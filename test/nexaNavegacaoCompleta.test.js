@@ -11,6 +11,8 @@ const paginasAdministrador = [
   ["Abra a calculadora de rescisão", "Calculadora de Rescisão"],
   ["Abra a conciliação bancária", "Conciliação Bancária"],
   ["Abra NF-e", "NF-e"],
+  ["Abrir nota fiscal", "NF-e"],
+  ["Abra NF", "NF-e"],
   ["Abra NFS-e", "NFS-e"],
   ["Abra o Google Drive", "Google Drive"],
   ["Abra Escritórios Nexa", "Escritórios Nexa"],
