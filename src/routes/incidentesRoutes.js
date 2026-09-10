@@ -17,6 +17,29 @@ router.post("/capturar", async (req, res) => {
   }
 })
 
+router.post("/capturar-acao", exigirAdministradorPlataforma, async (req, res) => {
+  try {
+    const incidente = await registrarIncidente({
+      ...req.body,
+      origem: req.body?.origem || "web-acao",
+      usuarioId: req.usuario.id,
+    })
+    const plano = await criarPlanoCorrecao({ incidente, usuario: req.usuario })
+    if (incidente.status === "Aberto") await incidente.update({ status: "Em diagnóstico" })
+    res.status(201).json({
+      registrado: true,
+      incidenteId: incidente.id,
+      planoId: plano.id,
+      diagnostico: incidente.diagnostico || incidente.causaProvavel,
+      correcaoSugerida: incidente.correcaoSugerida,
+      exigeConfirmacao: true,
+    })
+  } catch (error) {
+    console.error("ERRO AO AUTODIAGNOSTICAR AÇÃO:", error)
+    res.status(500).json({ message: "Não foi possível registrar o autodiagnóstico da ação." })
+  }
+})
+
 router.use(exigirAdministradorPlataforma)
 
 router.get("/saude", async (_req, res) => {
