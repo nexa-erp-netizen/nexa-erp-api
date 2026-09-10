@@ -1,6 +1,6 @@
 {
   "name": "contabilplus-api",
-  "version": "3.55.9",
+  "version": "3.56.0",
   "description": "",
   "main": "server.js",
   "scripts": {
