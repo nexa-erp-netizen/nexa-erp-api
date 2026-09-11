@@ -47,7 +47,16 @@ async function analisarDocumentoEnviado(req, res) {
     }
     await ativarConversa(req.usuario.id, conversa)
 
-    const resultado = await analisarDocumento({ arquivo: req.file, pergunta: req.body?.pergunta || "", clienteId })
+    const mensagensContexto = await MensagemNexa.findAll({
+      where: { conversaId: conversa.id, usuarioId: req.usuario.id },
+      order: [["createdAt", "DESC"]],
+      limit: 20,
+    })
+    const historicoConversa = mensagensContexto.reverse()
+      .map((item) => `${item.autor === "usuario" ? "Fabio" : "Nexa"}: ${String(item.texto || "").slice(0, 1200)}`)
+      .join("\n")
+      .slice(-12000)
+    const resultado = await analisarDocumento({ arquivo: req.file, pergunta: req.body?.pergunta || "", clienteId, historicoConversa })
     let analise = await DocumentoAnaliseNexa.findOne({ where: { conversaId: conversa.id, usuarioId: req.usuario.id, hashSha256: resultado.hashSha256 } })
     const dadosAnalise = {
       usuarioId: req.usuario.id,
@@ -71,8 +80,8 @@ async function analisarDocumentoEnviado(req, res) {
       clienteNome: resultado.clienteNome,
       documentoAnaliseId: analise.id,
       atividade: "analise-documental",
-      provedor: process.env.GROQ_API_KEY ? "groq" : "sistema",
-      modelo: "Nexa Documentos 2.0",
+      provedor: resultado.provedor,
+      modelo: resultado.modelo,
     }
     await MensagemNexa.create({ conversaId: conversa.id, usuarioId: req.usuario.id, autor: "usuario", texto: `Analisar documento: ${req.file.originalname}`, dados: { origem: "documento", nomeArquivo: req.file.originalname } })
     await MensagemNexa.create({ conversaId: conversa.id, usuarioId: req.usuario.id, autor: "nexa", texto: resultado.resposta, dados: metadadosPublicos })
