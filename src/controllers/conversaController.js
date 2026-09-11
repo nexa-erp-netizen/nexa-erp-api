@@ -81,7 +81,7 @@ const PAGINAS_NAVEGACAO = [
   { pagina: "Certificados Digitais", aliases: ["certificados digitais", "certificados", "certificado digital"] },
   { pagina: "Procurações e-CAC", aliases: ["procuracoes e-cac", "procuracoes ecac", "procuracoes"] },
   { pagina: "Identidade Digital", aliases: ["identidade digital"] },
-  { pagina: "Central e-CAC", aliases: ["central e-cac", "central ecac", "e-cac", "ecac"] },
+  { pagina: "Central e-CAC", aliases: ["cofre de acessos fiscais", "cofre de acessos", "cofre fiscal", "cofre da cliente", "cofre do cliente", "central e-cac", "central ecac", "cofre", "e-cac", "ecac"] },
   { pagina: "Memória da Nexa", aliases: ["memoria da nexa", "memoria nexa"] },
   { pagina: "Segundo Contador", aliases: ["segundo contador"] },
   { pagina: "Consultora Tributária", aliases: ["consultora tributaria", "consultora"] },
@@ -182,6 +182,7 @@ const PAGINAS_COM_FILTRO_CLIENTE = new Set([
   "Memória da Nexa",
   "Segundo Contador",
   "Consultora Tributária",
+  "Central e-CAC",
 ])
 
 const PALAVRAS_IGNORADAS_CLIENTE = new Set([
@@ -485,6 +486,13 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual, s
     && (!clienteAtual || String(clienteAcao.id) !== String(clienteAtual.id)),
   )
 
+  if (alvo === "cofre-cliente" && clienteAcao) {
+    return {
+      resposta: `Cofre de acessos fiscais de ${nomeCliente(clienteAcao)} aberto.`,
+      fala: `Certo, abri o Cofre de ${nomeCliente(clienteAcao)}.`,
+    }
+  }
+
   if (alvo === "central-cliente") {
     if (secao === "historico") {
       return {
@@ -517,6 +525,7 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual, s
     Financeiro: { resposta: "Financeiro aberto.", fala: "Pronto." },
     "Documentos Digitais": { resposta: "Documentos abertos.", fala: "Aqui está." },
     "Pendências Clientes": { resposta: "Pendências abertas.", fala: "Certo." },
+    "Central e-CAC": { resposta: "Cofre de acessos fiscais aberto.", fala: "Certo, abri o cofre." },
   }
 
   const natural = porPagina[pagina] || {
@@ -535,7 +544,7 @@ function respostaNaturalDeNavegacao({ pagina, alvo, clienteAcao, clienteAtual, s
   return natural
 }
 
-async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usuario, origem = "texto" }) {
+async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usuario, origem = "texto", historico = [] }) {
   const texto = normalizar(mensagem)
   if (!texto) return null
 
@@ -592,6 +601,10 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
     ? clientes.find((cliente) => String(cliente.id) === String(clienteId)) || null
     : null
   const localizado = localizarClienteNoTexto(clientes, texto)
+  const clienteHistorico = [...limparHistorico(historico)]
+    .reverse()
+    .map((item) => localizarClienteNoTexto(clientes, normalizar(item.texto)))
+    .find((resultado) => resultado.cliente && !resultado.ambiguo)?.cliente || null
   const nomeFalado = !localizado.cliente ? extrairNomeFaladoDaMensagem(texto) : ""
   const clienteSugerido = nomeFalado ? sugerirClientePorSom(clientes, nomeFalado) : null
 
@@ -650,9 +663,10 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
   }
 
   const referenciaContextual = /(esse cliente|este cliente|o mesmo cliente|do mesmo cliente|desse cliente|deste cliente|cliente selecionado|essa empresa|esta empresa|a mesma empresa|da mesma empresa|dessa empresa|desta empresa|desta mesma empresa|dela|dele)/.test(texto)
-  const clienteReferencia = localizado.cliente || (referenciaContextual ? clienteAtual : null)
+  const clienteReferencia = localizado.cliente || (referenciaContextual ? (clienteAtual || clienteHistorico) : null)
   const querCentralCliente = /(central.*cliente|cliente.*central|cadastro.*(?:cliente|dele|dela|deste|desse|desta|dessa)|dados.*(?:cliente|dele|dela|deste|desse|desta|dessa))/.test(texto)
   const mencionaClienteSingular = contemPalavra(texto, "cliente")
+  const ehCofreCliente = /\bcofre\b/.test(texto)
 
   const paginaEncontrada = paginaEncontradaInicial
   const ehServicosCobrancas = /(servicos? e cobrancas?|servicos? avulsos?|lancamento de servico avulso|lancar servico avulso)/.test(texto)
@@ -661,7 +675,10 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
   let alvo = "pagina"
   let secao = ""
 
-  if (ehServicosCobrancas) {
+  if (ehCofreCliente) {
+    pagina = "Central e-CAC"
+    alvo = "cofre-cliente"
+  } else if (ehServicosCobrancas) {
     pagina = "Clientes"
     alvo = "central-cliente"
     secao = "servicos"
@@ -678,6 +695,12 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
 
   if (!pagina) return null
 
+  if (ehCofreCliente && normalizar(usuario?.perfil) !== "administrador") {
+    return respostaDeComando({
+      resposta: "O Cofre de acessos fiscais está disponível somente para o Administrador.",
+    })
+  }
+
   if (!usuarioPodeAbrirPagina(usuario, pagina)) {
     return respostaDeComando({
       resposta: `Seu perfil não possui permissão para abrir ${pagina}.`,
@@ -686,13 +709,15 @@ async function detectarComandoNavegacaoDeterministico({ mensagem, clienteId, usu
 
   let clienteAcao = clienteReferencia
 
-  if (alvo === "central-cliente" && !clienteAcao) {
+  if ((alvo === "central-cliente" || alvo === "cofre-cliente") && !clienteAcao) {
     clienteAcao = clienteAtual
   }
 
-  if (alvo === "central-cliente" && !clienteAcao) {
+  if ((alvo === "central-cliente" || alvo === "cofre-cliente") && !clienteAcao) {
     return respostaDeComando({
-      resposta: "Qual cliente você quer abrir? Selecione um cliente no campo de contexto ou informe o nome na mensagem.",
+      resposta: ehCofreCliente
+        ? "De qual cliente você quer abrir o Cofre? Informe o nome ou selecione o cliente no contexto."
+        : "Qual cliente você quer abrir? Selecione um cliente no campo de contexto ou informe o nome na mensagem.",
     })
   }
 
