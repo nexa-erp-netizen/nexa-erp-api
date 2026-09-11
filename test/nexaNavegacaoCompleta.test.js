@@ -4,6 +4,12 @@ const assert = require("node:assert/strict")
 const { _test } = require("../src/controllers/conversaController")
 const Cliente = require("../src/models/Cliente")
 
+test("prioriza pedido explícito de Cofre antes da IA", () => {
+  assert.equal(_test.pedidoExplicitoCofre("abrir cofre cliente jarede"), true)
+  assert.equal(_test.pedidoExplicitoCofre("abra o cofre dela"), true)
+  assert.equal(_test.pedidoExplicitoCofre("a senha está no cofre"), false)
+})
+
 const paginasAdministrador = [
   ["Abra funcionários", "Funcionários"],
   ["Abra a folha de pagamento", "Folha de Pagamento"],
