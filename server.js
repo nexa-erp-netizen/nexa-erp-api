@@ -474,12 +474,24 @@ async function inicializarBanco() {
       console.log("Banco vazio inicializado sem alter/force; próximas mudanças seguem por migrations.")
     }
 
-    await prepararMultiempresa()
-    const identidade = await backfillIdentidadeFinanceira({
-      MovimentoCliente,
-      LancamentoContabil,
-    })
-    console.log(`Identidade financeira: ${identidade.atualizados} vínculo(s) preenchido(s), ${identidade.ambiguos} ambíguo(s).`)
+    // Estas rotinas são manutenção de dados legados. Depois que a conexão e
+    // as migrations estão íntegras, uma falha nelas não deve tirar toda a API
+    // do ar; o erro continua nos logs para correção sem bloquear o escritório.
+    try {
+      await prepararMultiempresa()
+    } catch (error) {
+      console.warn("Preparação multiempresa pendente; API seguirá disponível:", error)
+    }
+
+    try {
+      const identidade = await backfillIdentidadeFinanceira({
+        MovimentoCliente,
+        LancamentoContabil,
+      })
+      console.log(`Identidade financeira: ${identidade.atualizados} vínculo(s) preenchido(s), ${identidade.ambiguos} ambíguo(s).`)
+    } catch (error) {
+      console.warn("Backfill de identidade financeira pendente; API seguirá disponível:", error)
+    }
     bancoPronto = true
     erroInicializacaoBanco = null
     console.log("PostgreSQL conectado com sucesso 🚀")
