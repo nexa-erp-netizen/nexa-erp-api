@@ -31,6 +31,7 @@ const { gerarRelatorio, analisarDocumentoEnviado } = require("../controllers/nex
 const { analisarTela, auditarTela } = require("../controllers/nexaVisaoController")
 
 const router = express.Router()
+const { executarComUsuario } = require("../services/nexaInteligenciaPilotoContext")
 const uploadAudio = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024, files: 1 },
@@ -40,6 +41,7 @@ const uploadTela = multer({ storage: multer.memoryStorage(), limits: { fileSize:
 
 // A Nexa Inteligente contém dados amplos do escritório e fica exclusiva do Administrador.
 router.use(autenticar, autorizarPerfis("Administrador"))
+router.use((req, res, next) => executarComUsuario(req.usuario, next))
 
 router.get("/voz/status", autenticar, statusVoz)
 router.post("/voz/sintetizar", autenticar, sintetizarVoz)
