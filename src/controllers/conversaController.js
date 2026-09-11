@@ -1373,8 +1373,11 @@ function contextoLivre({ nomeUsuario, tipoContexto, interessadoNome, memorias, c
 async function obterOuCriarConversa({ usuarioId, conversaId, tipoContexto, clienteId, interessadoNome, primeiraMensagem }) {
   let conversa = null
   if (conversaId) {
-    const ativa = await obterConversaAtiva(usuarioId)
-    conversa = ativa || await ConversaNexa.findOne({ where: { id: conversaId, usuarioId } })
+    // A conversa escolhida na lateral é soberana. Usar primeiro qualquer
+    // sessão marcada como ativa podia salvar a mensagem em outro atendimento.
+    conversa = await ConversaNexa.findOne({
+      where: { id: conversaId, usuarioId, arquivada: false },
+    })
   }
 
   if (!conversa) {
@@ -1589,6 +1592,8 @@ Não acrescente uma aula, lista ou alerta que não foi solicitado, mas também n
   const regrasDoModo = conversaCasual
     ? `Esta é uma conversa casual. Responda com espontaneidade e cordialidade, sem transformar a conversa em relatório.`
     : `Use o CONTEXTO NEXA quando ele for relevante.
+O usuário é o responsável pelo atendimento no escritório. Oriente-o diretamente sobre o que conferir, pedir ao cliente, corrigir, comprovar ou protocolar. Nunca mande o usuário procurar, consultar ou agendar uma revisão com “o contador”, pois ele está executando esse trabalho com a Nexa.
+Em casos de clientes, recupere do histórico o que já aconteceu, diferencie o que foi concluído do que continua pendente e indique o próximo passo concreto. Se faltar um documento ou dado indispensável, peça exatamente esse item em uma pergunta curta.
 Não invente clientes, datas, valores, pendências, serviços ou ações.
 Trate os dados recebidos como a fonte oficial do ERP.
 Em perguntas contábeis ou empresariais conceituais, explique a regra geral com naturalidade. Não use a resposta genérica “não consegui confirmar” só porque a pergunta não veio do ERP.
@@ -3147,5 +3152,7 @@ module.exports = {
     detectarComandoNavegacaoDeterministico,
     pedidoExplicitoCofre,
     usuarioPodeAbrirPagina,
+    obterOuCriarConversa,
+    instrucoesNexa,
   },
 }

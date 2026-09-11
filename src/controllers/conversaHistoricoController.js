@@ -13,7 +13,7 @@ async function listarConversas(req, res) {
   try {
     const conversas = await ConversaNexa.findAll({
       where: { usuarioId: req.usuario.id, arquivada: false },
-      order: [["ultimaMensagemEm", "DESC"], ["updatedAt", "DESC"]],
+      order: [["fixada", "DESC"], ["ultimaMensagemEm", "DESC"], ["updatedAt", "DESC"]],
       limit: 100,
     })
     return res.json(conversas)
@@ -98,6 +98,7 @@ async function atualizarConversa(req, res) {
     const alteracoes = {}
     if (req.body?.titulo !== undefined) alteracoes.titulo = tituloAutomatico(req.body.titulo)
     if (req.body?.arquivada !== undefined) alteracoes.arquivada = Boolean(req.body.arquivada)
+    if (req.body?.fixada !== undefined) alteracoes.fixada = Boolean(req.body.fixada)
     if (["geral", "cliente", "interessado"].includes(req.body?.tipoContexto)) alteracoes.tipoContexto = req.body.tipoContexto
     if (req.body?.clienteId !== undefined) alteracoes.clienteId = req.body.clienteId ? Number(req.body.clienteId) : null
     if (req.body?.interessadoNome !== undefined) alteracoes.interessadoNome = String(req.body.interessadoNome || "").trim() || null
