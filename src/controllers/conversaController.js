@@ -363,6 +363,11 @@ function temVerboNavegacao(texto) {
   return /(^|\s)(abra|abre|abri|abrir|acessa|acesse|acessar|entra|entre|entrar|vai|va|ir|navega|navegue|navegar|mostra|mostre|mostrar|exiba|exibir|volta|volte|voltar|voltando|volto|retorna|retorne|retornar|quero|quero ir|quero ver|quero abrir|quero acessar|quero entrar|ver|me leva|me leve|direciona|direcione)(\s|$)/.test(texto)
 }
 
+function pedidoExplicitoCofre(valor) {
+  const texto = normalizar(valor)
+  return /\bcofre\b/.test(texto) && temVerboNavegacao(texto)
+}
+
 function pareceComandoNavegacao(texto) {
   const paginaEncontrada = configuracaoPaginaNoTexto(texto)
   if (!paginaEncontrada) return false
@@ -2784,6 +2789,25 @@ async function conversar(req, res) {
       return res.json(anexarMetadadosConversa({ ...respostaDesenvolvedor, respondidoEm: new Date().toISOString() }, conversa))
     }
 
+    // Navegação explícita para o Cofre deve ser resolvida antes do núcleo
+    // generativo. Caso contrário, o provedor pode tratar "cofre" como um
+    // pedido para revelar credenciais e recusar uma navegação autorizada.
+    if (pedidoExplicitoCofre(mensagem)) {
+      const comandoCofre = await detectarComandoNavegacao({
+        mensagem,
+        clienteId: clienteId || conversa.clienteId || null,
+        usuario: usuarioCompleto,
+        origem,
+        paginaAtual,
+        historico,
+      })
+      if (comandoCofre) {
+        const respostaCofre = { ...comandoCofre, conversacionalV2: true, atividade: "navegacao" }
+        await salvarMensagemConversa({ conversa, usuarioId: req.usuario.id, autor: "nexa", texto: respostaCofre.resposta, dados: respostaCofre })
+        return res.json(anexarMetadadosConversa(respostaCofre, conversa))
+      }
+    }
+
     // Perguntas abertas passam pelo núcleo agente. Quando a intenção exige uma
     // ação, ele devolve o controle aos fluxos operacionais seguros existentes.
     const respostaAgente = await executarNexaAgent({
@@ -3121,6 +3145,7 @@ module.exports = {
   painelDiario,
   _test: {
     detectarComandoNavegacaoDeterministico,
+    pedidoExplicitoCofre,
     usuarioPodeAbrirPagina,
   },
 }
