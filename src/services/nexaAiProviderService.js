@@ -4,6 +4,7 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6"
 const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b"
 const PREFERRED = String(process.env.NEXA_AI_PROVIDER || "openai").toLowerCase()
+const piloto = require("./nexaInteligenciaPilotoService")
 
 function configured(provider) {
   return provider === "openai" ? Boolean(process.env.OPENAI_API_KEY) : Boolean(process.env.GROQ_API_KEY)
@@ -43,7 +44,10 @@ async function callOpenAI(messages, options, signal) {
     role: item.role === "assistant" ? "assistant" : "user",
     content: String(item.content || ""),
   }))
-  const response = await fetch(OPENAI_URL, {
+  const reserva = await piloto.reservar({ mensagens: messages, maxTokens: options.maxTokens || 900 })
+  let response
+  try {
+    response = await fetch(OPENAI_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     signal,
@@ -55,9 +59,17 @@ async function callOpenAI(messages, options, signal) {
       max_output_tokens: options.maxTokens || 900,
       reasoning: { effort: process.env.OPENAI_REASONING_EFFORT || "low" },
     }),
-  })
+    })
+  } catch (error) {
+    await piloto.liberar(reserva)
+    throw error
+  }
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data?.error?.message || `OpenAI respondeu com status ${response.status}`)
+  if (!response.ok) {
+    await piloto.liberar(reserva)
+    throw new Error(data?.error?.message || `OpenAI respondeu com status ${response.status}`)
+  }
+  await piloto.finalizar(reserva, data?.usage || {})
   const text = extractOpenAI(data)
   if (!text) throw new Error("A OpenAI não retornou uma resposta.")
   return { text, provider: "openai", model: data?.model || process.env.OPENAI_MODEL || OPENAI_MODEL }
