@@ -119,6 +119,9 @@ const PORT = Number(process.env.PORT) || 3000
 let bancoPronto = false
 let erroInicializacaoBanco = null
 let estadoMigracoes = { status: "pendente", aplicadas: 0, jaAplicadas: 0, total: 0, bootstrap: false }
+let inicializacaoBancoEmAndamento = false
+let tentativaInicializacaoBanco = 0
+let timerNovaTentativaBanco = null
 
 app.use(cors())
 app.use(express.json())
@@ -443,6 +446,14 @@ app.listen(PORT, "0.0.0.0", () => {
 })
 
 async function inicializarBanco() {
+  if (bancoPronto || inicializacaoBancoEmAndamento) return
+  inicializacaoBancoEmAndamento = true
+  tentativaInicializacaoBanco += 1
+  if (timerNovaTentativaBanco) {
+    clearTimeout(timerNovaTentativaBanco)
+    timerNovaTentativaBanco = null
+  }
+
   try {
     const migracoes = await executarMigracoes(sequelize)
     estadoMigracoes = {
@@ -470,11 +481,17 @@ async function inicializarBanco() {
     })
     console.log(`Identidade financeira: ${identidade.atualizados} vínculo(s) preenchido(s), ${identidade.ambiguos} ambíguo(s).`)
     bancoPronto = true
+    erroInicializacaoBanco = null
     console.log("PostgreSQL conectado com sucesso 🚀")
   } catch (error) {
     estadoMigracoes = { ...estadoMigracoes, status: "erro" }
     erroInicializacaoBanco = error
     console.error("Erro ao conectar PostgreSQL ou executar migrations:", error)
+    const esperaMs = Math.min(60000, 5000 * tentativaInicializacaoBanco)
+    console.log(`Nova tentativa de inicialização do banco em ${Math.round(esperaMs / 1000)}s.`)
+    timerNovaTentativaBanco = setTimeout(inicializarBanco, esperaMs)
+  } finally {
+    inicializacaoBancoEmAndamento = false
   }
 }
 
