@@ -1707,6 +1707,7 @@ REGRAS IMPORTANTES:
 - “Tem mensagem de cliente?” significa mensagens-pendentes.
 - “Por que contador não pode ser MEI?” é conversa, não consulta do ERP.
 - “Escreva uma mensagem”, “monte um plano”, “traduza”, “resuma”, “calcule” e perguntas de qualquer tema são conversa.
+- Perguntas sobre capacidade (“você consegue?”, “você pode?”, “você sabe?”, “tem como?”, “aceita?”) são conversa e não autorizam executar a ação mencionada. Hipóteses, exemplos e negações também não são comandos.
 - “E qual empresa ele pode abrir?” continua o assunto anterior e é conversa.
 - “Quanto ele vai pagar de imposto?” deve ser esclarecer quando faltarem regime, atividade e faturamento; formule uma pergunta curta para obter o dado ausente.
 - A tela ou cliente atualmente aberto não substitui o assunto da conversa.
