@@ -52,6 +52,7 @@ const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("
 const PESQUISA_WEB_ATIVA = String(process.env.NEXA_WEB_SEARCH_ENABLED || "true").toLowerCase() !== "false"
 const PROVEDOR_PADRAO = aiProvider.preferredProvider
 const NEXA_CONVERSACIONAL_V2_ATIVA = String(process.env.NEXA_CONVERSACIONAL_V2 || "true").toLowerCase() !== "false"
+const nexaInteligenciaPiloto = require("../services/nexaInteligenciaPilotoService")
 const NEXA_MODEL_ROUTER_ATIVO = String(process.env.NEXA_MODEL_ROUTER || "true").toLowerCase() !== "false"
 
 
@@ -2038,6 +2039,7 @@ async function naturalizarResultadoSistema({
   atividade = "consulta",
 }) {
   const base = {
+    piloto,
     ...resultado,
     conversacionalV2: true,
     atividade,
@@ -2156,6 +2158,7 @@ ${JSON.stringify(contextoConfirmado)}`,
 }
 
 async function status(req, res) {
+  const piloto = await nexaInteligenciaPiloto.status(req.usuario)
   const apiKey = process.env.GROQ_API_KEY
   const base = {
     provedorPrincipal: PROVEDOR_PADRAO,
@@ -2196,7 +2199,7 @@ async function status(req, res) {
     const dados = await resposta.json().catch(() => ({}))
     const modelos = Array.isArray(dados?.data) ? dados.data.map((item) => item.id) : []
 
-    return res.json({
+  return res.json({
       ...base,
       groq: {
         ...base.groq,
