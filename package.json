@@ -1,6 +1,10 @@
 {
   "name": "contabilplus-api",
+<<<<<<< HEAD
   "version": "3.58.1",
+=======
+  "version": "3.58.3",
+>>>>>>> d7ee055 (Publica Nexa API v3.58.3)
   "description": "",
   "main": "server.js",
   "scripts": {

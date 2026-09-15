@@ -13,6 +13,7 @@ const FechamentoConciliacaoBancaria = require("../models/FechamentoConciliacaoBa
 const sequelize = require("../config/database")
 const { lerExtrato } = require("../services/extratoBancarioParser")
 const { calcularSaldoAnterior, diagnosticarSaldoAnterior } = require("../services/saldoConciliacaoService")
+const { classificarFormaRecebimento } = require("../services/formaRecebimentoExtratoService")
 const PDFDocument = require("pdfkit")
 
 const router = express.Router()
@@ -932,6 +933,95 @@ router.post("/movimentos/conciliar-automatico", async (req, res) => {
     await transaction.rollback()
     console.error(error)
     res.status(400).json({ message: error.message || "Erro na conciliação automática" })
+  }
+})
+
+router.post("/movimentos/corrigir-formas-recebimento", async (req, res) => {
+  const transaction = await sequelize.transaction()
+  try {
+    const contaBancariaId = Number(req.body.contaBancariaId)
+    const competencia = String(req.body.competencia || "").trim()
+    if (!contaBancariaId) throw new Error("Selecione uma conta bancária.")
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new Error("Competência inválida.")
+
+    const conta = await ContaBancariaCliente.findByPk(contaBancariaId, { transaction })
+    if (!conta || !conta.ativo) throw new Error("Conta bancária não encontrada ou inativa.")
+
+    const { inicio, fim } = periodoCompetencia(competencia)
+    const entradas = await MovimentoBancario.findAll({
+      where: {
+        contaBancariaId,
+        natureza: "Entrada",
+        data: { [Op.between]: [inicio, fim] },
+        statusConciliacao: "Conciliado",
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    })
+
+    const sugestoesPorMovimento = new Map()
+    for (const entrada of entradas) {
+      const forma = classificarFormaRecebimento(entrada)
+      if (!forma) continue
+      const ids = [...String(entrada.observacoes || "").matchAll(/#(\d+)/g)]
+        .map(resultado => Number(resultado[1]))
+      for (const id of ids) {
+        const sugestao = sugestoesPorMovimento.get(id) || new Set()
+        sugestao.add(forma)
+        sugestoesPorMovimento.set(id, sugestao)
+      }
+    }
+
+    let corrigidos = 0
+    let jaCorretos = 0
+    let ambiguos = 0
+    let naoEncontrados = 0
+
+    for (const [movimentoId, formas] of sugestoesPorMovimento.entries()) {
+      if (formas.size !== 1) {
+        ambiguos += 1
+        continue
+      }
+
+      const movimento = await MovimentoCliente.findByPk(movimentoId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      })
+      if (!movimento || !registroPertenceAoCliente(movimento, { id: conta.clienteId, nome: conta.cliente })) {
+        naoEncontrados += 1
+        continue
+      }
+
+      const forma = [...formas][0]
+      if (normalizar(movimento.formaPagamento || movimento.forma) === normalizar(forma)) {
+        jaCorretos += 1
+        continue
+      }
+
+      await movimento.update({ forma, formaPagamento: forma }, { transaction })
+      await LancamentoContabil.update(
+        { formaPagamento: forma },
+        { where: { movimentoClienteId: movimento.id }, transaction }
+      )
+      corrigidos += 1
+    }
+
+    await transaction.commit()
+    const partes = [`${corrigidos} lançamento(s) corrigido(s)`]
+    if (jaCorretos) partes.push(`${jaCorretos} já estava(m) correto(s)`)
+    if (ambiguos) partes.push(`${ambiguos} agrupado(s) misto(s) mantido(s) para revisão manual`)
+    if (naoEncontrados) partes.push(`${naoEncontrados} vínculo(s) não localizado(s)`)
+    res.json({
+      message: `${partes.join(" • ")}. Nenhum valor ou data foi alterado.`,
+      corrigidos,
+      jaCorretos,
+      ambiguos,
+      naoEncontrados,
+    })
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback()
+    console.error(error)
+    res.status(400).json({ message: error.message || "Erro ao corrigir formas de recebimento." })
   }
 })
 
