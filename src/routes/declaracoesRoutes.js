@@ -2,6 +2,7 @@ const express = require("express")
 const upload = require("../middlewares/upload")
 const Declaracao = require("../models/Declaracao")
 const Notificacao = require("../models/Notificacao")
+const { resolverClienteFinanceiro } = require("../services/clienteFinanceiroService")
 const supabase = require("../config/supabase")
 const { autenticar } = require("../middlewares/authMiddleware")
 
@@ -88,7 +89,7 @@ router.get("/", autenticar, async (req, res) => {
         return res.json([])
       }
 
-      where.cliente = req.usuario.clienteVinculado
+      where.clienteId = req.usuario.clienteId
     } else if (req.usuario.empresaId) {
       where.empresaId = req.usuario.empresaId
     }
@@ -148,9 +149,13 @@ router.post("/", autenticar, async (req, res) => {
     }
 
     const alerta = calcularAlerta(req.body.vencimento, req.body.status)
+    const cliente = await resolverClienteFinanceiro({ clienteId: req.body.clienteId, cliente: req.body.cliente })
+    if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
 
     const declaracao = await Declaracao.create({
       ...req.body,
+      clienteId: cliente.id,
+      cliente: cliente.nome,
       diasParaVencer: alerta.diasParaVencer,
       alerta: alerta.alerta,
       empresaId: req.usuario?.empresaId || req.body.empresaId || null,
@@ -184,9 +189,16 @@ router.put("/:id", autenticar, async (req, res) => {
     }
 
     const alerta = calcularAlerta(req.body.vencimento, req.body.status)
+    const cliente = await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId || declaracao.clienteId,
+      cliente: req.body.cliente || declaracao.cliente,
+    })
+    if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
 
     await declaracao.update({
       ...req.body,
+      clienteId: cliente.id,
+      cliente: cliente.nome,
       diasParaVencer: alerta.diasParaVencer,
       alerta: alerta.alerta,
       empresaId: req.usuario?.empresaId || declaracao.empresaId || null,
@@ -219,7 +231,7 @@ router.patch("/:id/documentos-enviados", autenticar, async (req, res) => {
       })
     }
 
-    if (declaracao.cliente !== req.usuario.clienteVinculado) {
+    if (Number(declaracao.clienteId) !== Number(req.usuario.clienteId)) {
       return res.status(403).json({
         message: "Acesso não autorizado",
       })
@@ -239,7 +251,7 @@ router.patch("/:id/documentos-enviados", autenticar, async (req, res) => {
     try {
       await Notificacao.create({
         empresaId: req.usuario.empresaId || declaracao.empresaId || 1,
-        clienteId: null,
+        clienteId: req.usuario.clienteId || declaracao.clienteId || null,
         usuarioId: req.usuario.id,
         titulo: "Documentos de declaração enviados",
         tipo: "declaracao_documentos_cliente",

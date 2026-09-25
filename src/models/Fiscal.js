@@ -2,6 +2,10 @@ const { DataTypes } = require("sequelize")
 const sequelize = require("../config/database")
 
 const Fiscal = sequelize.define("Fiscal", {
+  clienteId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
   cliente: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -57,6 +61,6 @@ const Fiscal = sequelize.define("Fiscal", {
   allowNull: true,
 
   },
-})
+}, { indexes: [{ fields: ["escritorioId", "clienteId"] }] })
 
 module.exports = Fiscal

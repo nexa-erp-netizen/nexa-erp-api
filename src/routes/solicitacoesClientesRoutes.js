@@ -2,6 +2,8 @@ const express = require("express")
 const upload = require("../middlewares/upload")
 
 const SolicitacaoCliente = require("../models/SolicitacaoCliente")
+const Cliente = require("../models/Cliente")
+const { resolverClienteFinanceiro } = require("../services/clienteFinanceiroService")
 
 const router = express.Router()
 
@@ -14,8 +16,8 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      if (req.usuario.clienteVinculado) {
-        where.cliente = req.usuario.clienteVinculado
+      if (req.usuario.clienteId) {
+        where.clienteId = req.usuario.clienteId
       } else {
         return res.json([])
       }
@@ -43,9 +45,16 @@ router.get("/", autenticar, async (req, res) => {
 
 router.post("/", autenticar, async (req, res) => {
   try {
+    const cliente = req.usuario.perfil === "Cliente"
+      ? await Cliente.findByPk(req.usuario.clienteId)
+      : await resolverClienteFinanceiro({ clienteId: req.body.clienteId, cliente: req.body.cliente })
+    if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
+
     const novaSolicitacao =
       await SolicitacaoCliente.create({
         ...req.body,
+        clienteId: cliente.id,
+        cliente: cliente.nome,
         empresaId:
           req.usuario?.empresaId || null,
       })
@@ -79,7 +88,14 @@ router.put("/:id", autenticar, async (req, res) => {
       })
     }
 
-    await solicitacao.update(req.body)
+    if (req.usuario.perfil === "Cliente" && Number(solicitacao.clienteId) !== Number(req.usuario.clienteId)) {
+      return res.status(403).json({ message: "Acesso não autorizado" })
+    }
+
+    const dados = req.usuario.perfil === "Cliente"
+      ? { ...req.body, clienteId: solicitacao.clienteId, cliente: solicitacao.cliente }
+      : req.body
+    await solicitacao.update(dados)
 
     res.json(solicitacao)
   } catch (error) {
@@ -97,6 +113,9 @@ router.put("/:id", autenticar, async (req, res) => {
 
 router.delete("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({ message: "Cliente não pode excluir solicitações" })
+    }
     const { id } = req.params
 
     const solicitacao =

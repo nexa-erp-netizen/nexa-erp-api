@@ -41,6 +41,7 @@ async function resolverClienteDoUsuario(usuario, transaction = null) {
   }
 
   return resolverClienteFinanceiro({
+    clienteId: usuario.clienteId,
     cliente: usuario.clienteVinculado,
     transaction,
   })

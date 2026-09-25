@@ -8,6 +8,12 @@ const Escritorio = require("../models/Escritorio")
 const { registrarLoginEscritorio } = require("../services/acessoEscritorioService")
 const { autenticar } = require("../middlewares/authMiddleware")
 const AcessoCliente = require("../models/AcessoCliente")
+const UsuarioCliente = require("../models/UsuarioCliente")
+const {
+  clientesVinculadosAoUsuario,
+  escolherClienteAtivo,
+  substituirClientesDoUsuario,
+} = require("../services/usuarioClienteService")
 
 const router = express.Router()
 
@@ -75,16 +81,61 @@ async function localizarUsuarioPorLogin(loginInformado, codigoEscritorio) {
     })
 
     if (cliente) {
-      usuario = await Usuario.findOne({
+      const vinculo = await UsuarioCliente.findOne({
         where: {
+          clienteId: cliente.id,
           escritorioId: cliente.escritorioId,
-          clienteVinculado: cliente.nome,
+          ativo: true,
         },
+        order: [["principal", "DESC"], ["createdAt", "ASC"]],
+        semIsolamentoEscritorio: true,
       })
+      usuario = vinculo
+        ? await Usuario.findByPk(vinculo.usuarioId, { semIsolamentoEscritorio: true })
+        : await Usuario.findOne({
+            where: {
+              escritorioId: cliente.escritorioId,
+              clienteVinculado: cliente.nome,
+            },
+            semIsolamentoEscritorio: true,
+          })
     }
   }
 
   return usuario
+}
+
+function criarToken(usuario, clienteAtivo = null) {
+  return jwt.sign(
+    {
+      id: usuario.id,
+      email: usuario.email,
+      perfil: usuario.perfil,
+      clienteId: clienteAtivo?.id || null,
+      clienteVinculado: clienteAtivo?.nome || usuario.clienteVinculado,
+      empresaId: usuario.empresaId,
+      escritorioId: usuario.escritorioId,
+      plataformaAdmin: Boolean(usuario.plataformaAdmin),
+    },
+    getJwtSecret(),
+    { expiresIn: "8h" },
+  )
+}
+
+function respostaUsuario(usuario, clienteAtivo = null, clientesVinculados = [], escritorio = null) {
+  return {
+    id: usuario.id,
+    nome: usuario.nome,
+    email: usuario.email,
+    perfil: usuario.perfil,
+    clienteId: clienteAtivo?.id || null,
+    clienteVinculado: clienteAtivo?.nome || usuario.clienteVinculado,
+    clientesVinculados,
+    empresaId: usuario.empresaId,
+    escritorioId: usuario.escritorioId,
+    plataformaAdmin: Boolean(usuario.plataformaAdmin),
+    escritorio,
+  }
 }
 
 router.post("/identificar-acesso", async (req, res) => {
@@ -171,9 +222,12 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
       senha,
       10
     )
-    const clientePortalBloqueado = perfil === "Cliente"
-      ? await Cliente.findOne({ where: { nome: clienteVinculado, escritorioId: req.usuario.escritorioId, portalBloqueado: true } })
+    const clienteSelecionado = perfil === "Cliente"
+      ? await Cliente.findOne({ where: { nome: clienteVinculado, escritorioId: req.usuario.escritorioId } })
       : null
+    if (perfil === "Cliente" && !clienteSelecionado) {
+      return res.status(400).json({ message: "Cliente vinculado não encontrado neste escritório" })
+    }
 
     const usuario = await Usuario.create({
       nome,
@@ -184,9 +238,12 @@ router.post("/registrar", autenticar, somenteAdmin, async (req, res) => {
         perfil === "Cliente" ? clienteVinculado : null,
       empresaId: empresaId || null,
       escritorioId: req.usuario.escritorioId,
-      ativo: !clientePortalBloqueado,
-      bloqueadoPeloCliente: Boolean(clientePortalBloqueado),
+      ativo: true,
+      bloqueadoPeloCliente: false,
     })
+    if (clienteSelecionado) {
+      await substituirClientesDoUsuario(usuario, [clienteSelecionado.id], clienteSelecionado.id)
+    }
 
     res.status(201).json({
       id: usuario.id,
@@ -226,21 +283,6 @@ router.post("/login", async (req, res) => {
     }
 
     if (usuario.ativo === false || usuario.arquivadoEm) {
-      if (usuario.perfil === "Cliente" && usuario.clienteVinculado) {
-        const clienteBloqueado = await Cliente.findOne({
-          where: {
-            nome: usuario.clienteVinculado,
-            escritorioId: usuario.escritorioId,
-            portalBloqueado: true,
-          },
-        })
-        if (clienteBloqueado) {
-          return res.status(403).json({
-            message: "Seu acesso ao Portal está temporariamente bloqueado. Entre em contato com o escritório para regularização.",
-            portalBloqueado: true,
-          })
-        }
-      }
       return res.status(403).json({
         message: "Este acesso está bloqueado. Procure o administrador do escritório.",
       })
@@ -276,28 +318,35 @@ router.post("/login", async (req, res) => {
       : null
     await registrarLoginEscritorio(escritorioAcessado, usuario, req)
 
-    const token = jwt.sign(
-      {
-        id: usuario.id,
-        email: usuario.email,
-        perfil: usuario.perfil,
-        clienteVinculado: usuario.clienteVinculado,
-        empresaId: usuario.empresaId,
-        escritorioId: usuario.escritorioId,
-        plataformaAdmin: Boolean(usuario.plataformaAdmin),
-      },
-      getJwtSecret(),
-      {
-        expiresIn: "8h",
-      }
-    )
+    const clientesVinculados = usuario.perfil === "Cliente"
+      ? await clientesVinculadosAoUsuario(usuario)
+      : []
+    const documentoLogin = limparDocumento(login)
+    const clientePeloDocumento = documentoLogin
+      ? clientesVinculados.find(cliente => limparDocumento(cliente.cpf) === documentoLogin || limparDocumento(cliente.cnpj) === documentoLogin)
+      : null
+    const clienteAtivo = usuario.perfil === "Cliente"
+      ? escolherClienteAtivo(clientesVinculados, clientePeloDocumento?.id)
+      : null
+
+    if (usuario.perfil === "Cliente" && !clienteAtivo) {
+      return res.status(403).json({ message: "Este acesso não possui empresa vinculada. Procure o escritório." })
+    }
+
+    if (clienteAtivo?.portalBloqueado) {
+      return res.status(403).json({
+        message: "O Portal desta empresa está temporariamente bloqueado. Entre em contato com o escritório para regularização.",
+        portalBloqueado: true,
+      })
+    }
+
+    const token = criarToken(usuario, clienteAtivo)
 
     if (usuario.perfil === "Cliente") {
-      const cliente = await Cliente.findOne({ where: { escritorioId: usuario.escritorioId, nome: usuario.clienteVinculado } })
       await AcessoCliente.create({
         usuarioId: usuario.id,
-        clienteId: cliente?.id || null,
-        clienteNome: cliente?.nome || usuario.clienteVinculado || usuario.nome,
+        clienteId: clienteAtivo?.id || null,
+        clienteNome: clienteAtivo?.nome || usuario.clienteVinculado || usuario.nome,
         tipo: "login",
         pagina: "Portal Cliente",
         descricao: "Entrada no Portal",
@@ -309,17 +358,7 @@ router.post("/login", async (req, res) => {
 
     res.json({
       token,
-      usuario: {
-        id: usuario.id,
-        nome: usuario.nome,
-        email: usuario.email,
-        perfil: usuario.perfil,
-        clienteVinculado: usuario.clienteVinculado,
-        empresaId: usuario.empresaId,
-        escritorioId: usuario.escritorioId,
-        plataformaAdmin: Boolean(usuario.plataformaAdmin),
-        escritorio: escritorioAcessado,
-      },
+      usuario: respostaUsuario(usuario, clienteAtivo, clientesVinculados, escritorioAcessado),
     })
   } catch (error) {
     console.error("ERRO AO FAZER LOGIN:", error)
@@ -327,6 +366,38 @@ router.post("/login", async (req, res) => {
     res.status(500).json({
       message: "Erro ao fazer login",
     })
+  }
+})
+
+router.post("/selecionar-cliente", autenticar, async (req, res) => {
+  try {
+    const usuario = await Usuario.findByPk(req.usuario.id, { semIsolamentoEscritorio: true })
+    if (!usuario || usuario.perfil !== "Cliente") {
+      return res.status(403).json({ message: "A seleção de empresa é exclusiva do Portal do Cliente." })
+    }
+
+    const clientesVinculados = await clientesVinculadosAoUsuario(usuario)
+    const clienteAtivo = escolherClienteAtivo(clientesVinculados, req.body.clienteId)
+    if (!clienteAtivo || Number(clienteAtivo.id) !== Number(req.body.clienteId)) {
+      return res.status(403).json({ message: "Esta empresa não está vinculada ao seu acesso." })
+    }
+    if (clienteAtivo.portalBloqueado) {
+      return res.status(403).json({
+        message: "O Portal desta empresa está temporariamente bloqueado. Entre em contato com o escritório.",
+        portalBloqueado: true,
+      })
+    }
+
+    const escritorio = usuario.escritorioId
+      ? await Escritorio.findByPk(usuario.escritorioId, { semIsolamentoEscritorio: true })
+      : null
+    return res.json({
+      token: criarToken(usuario, clienteAtivo),
+      usuario: respostaUsuario(usuario, clienteAtivo, clientesVinculados, escritorio),
+    })
+  } catch (error) {
+    console.error("ERRO AO SELECIONAR EMPRESA DO CLIENTE:", error)
+    return res.status(500).json({ message: "Erro ao selecionar empresa" })
   }
 })
 

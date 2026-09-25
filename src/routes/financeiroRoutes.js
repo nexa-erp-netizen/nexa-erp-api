@@ -110,8 +110,8 @@ router.get("/", autenticar, async (req, res) => {
     const where = {}
 
     if (req.usuario.perfil === "Cliente") {
-      if (req.usuario.clienteVinculado) {
-        where.cliente = req.usuario.clienteVinculado
+      if (req.usuario.clienteId) {
+        where.clienteId = req.usuario.clienteId
         where[Op.or] = [
           { origem: { [Op.notIn]: ["Serviço Avulso", "Serviço do Cliente"] } },
           { origem: { [Op.is]: null } },

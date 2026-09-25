@@ -9,6 +9,9 @@ const normalizar = (valor) => String(valor || "").normalize("NFD").replace(/[\u0
 
 async function clienteDoUsuario(req) {
   if (req.usuario.perfil !== "Cliente") return null
+  if (req.usuario.clienteId) {
+    return Cliente.findByPk(req.usuario.clienteId, { attributes: ["id", "nome"] })
+  }
   const nome = normalizar(req.usuario.clienteVinculado || req.usuario.nome)
   const clientes = await Cliente.findAll({ attributes: ["id", "nome"] })
   return clientes.find((item) => normalizar(item.nome) === nome) || null

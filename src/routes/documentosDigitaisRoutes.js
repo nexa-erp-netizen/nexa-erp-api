@@ -4,6 +4,7 @@ const upload = require("../middlewares/upload")
 const supabase = require("../config/supabase")
 const DocumentoDigital = require("../models/DocumentoDigital")
 const Notificacao = require("../models/Notificacao")
+const { resolverClienteFinanceiro } = require("../services/clienteFinanceiroService")
 
 const router = express.Router()
 
@@ -59,7 +60,7 @@ router.get("/", autenticar, async (req, res) => {
         return res.json([])
       }
 
-      where.cliente = req.usuario.clienteVinculado
+      where.clienteId = req.usuario.clienteId
     }
 
     const documentos = await DocumentoDigital.findAll({
@@ -84,6 +85,7 @@ router.get("/", autenticar, async (req, res) => {
 router.post("/", autenticar, async (req, res) => {
   try {
     let clienteFinal = req.body.cliente
+    let clienteIdFinal = req.body.clienteId
 
     if (req.usuario.perfil === "Cliente") {
       if (!req.usuario.clienteVinculado) {
@@ -93,17 +95,24 @@ router.post("/", autenticar, async (req, res) => {
       }
 
       clienteFinal = req.usuario.clienteVinculado
+      clienteIdFinal = req.usuario.clienteId
+    } else {
+      const cliente = await resolverClienteFinanceiro({ clienteId: clienteIdFinal, cliente: clienteFinal })
+      if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
+      clienteFinal = cliente.nome
+      clienteIdFinal = cliente.id
     }
 
     const novoDocumento = await DocumentoDigital.create({
       ...req.body,
+      clienteId: clienteIdFinal,
       cliente: clienteFinal,
     })
 
     if (req.usuario.perfil === "Cliente") {
       await Notificacao.create({
         empresaId: req.usuario.empresaId,
-        clienteId: null,
+        clienteId: clienteIdFinal || null,
         usuarioId: req.usuario.id,
         titulo: "Documento enviado",
         tipo: "documento_enviado",
@@ -137,14 +146,17 @@ router.put("/:id", autenticar, async (req, res) => {
 
     if (
       req.usuario.perfil === "Cliente" &&
-      documento.cliente !== req.usuario.clienteVinculado
+      Number(documento.clienteId) !== Number(req.usuario.clienteId)
     ) {
       return res.status(403).json({
         message: "Acesso não autorizado",
       })
     }
 
-    await documento.update(req.body)
+    const dados = req.usuario.perfil === "Cliente"
+      ? { ...req.body, clienteId: documento.clienteId, cliente: documento.cliente }
+      : req.body
+    await documento.update(dados)
 
     const documentoTratado = await prepararDocumento(documento)
 

@@ -14,15 +14,6 @@ const router = express.Router()
 
 const { autenticar } = require("../middlewares/authMiddleware")
 
-function normalizarNomeCliente(valor) {
-  return String(valor || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase()
-}
-
 function competenciaDasParaFiscal(competencia) {
   const [ano, mes] = String(competencia || "").split("-")
   return ano && mes ? `${mes}/${ano}` : String(competencia || "")
@@ -57,6 +48,7 @@ async function sincronizarDasMeiPublicadosNoFiscal() {
 
     const alerta = calcularAlertaFiscal(guia.vencimento, pagamentoConfirmado ? "Pago" : "Pendente")
     const dados = {
+      clienteId: cliente.id,
       cliente: cliente.nome,
       obrigacao: "DAS-MEI",
       competencia: competenciaDasParaFiscal(guia.competencia),
@@ -170,6 +162,7 @@ async function criarFinanceiroDaObrigacaoFiscal(obrigacao, usuario, origemAcao =
   const dadosFinanceiro = {
     descricao: `${obrigacao.obrigacao || "Serviço"} - ${obrigacao.competencia || ""}`.trim(),
     cliente: usuario?.clienteVinculado || obrigacao.cliente || "Cliente",
+    clienteId: usuario?.clienteId || obrigacao.clienteId || null,
     tipo: "Receber",
     centroCusto: obterPlanoContaDaObrigacao(obrigacao.obrigacao),
     formaPagamento: "Confirmado pelo cliente",
@@ -201,6 +194,7 @@ function limparNomeArquivo(nome) {
 async function criarMovimentoClienteFiscal(obrigacao, usuario) {
   const referencia = `fiscal:${obrigacao.id}`
   const clienteFinanceiro = await resolverClienteFinanceiro({
+    clienteId: usuario?.clienteId || obrigacao.clienteId,
     cliente: usuario?.clienteVinculado || obrigacao.cliente,
   })
 
@@ -253,30 +247,24 @@ router.get("/", autenticar, async (req, res) => {
   try {
     await sincronizarDasMeiPublicadosNoFiscal()
 
-    const where = {}
+    const where = req.usuario.perfil === "Cliente"
+      ? { clienteId: req.usuario.clienteId }
+      : {}
 
     const obrigacoesEncontradas = await Fiscal.findAll({
       where,
       order: [["createdAt", "DESC"]],
     })
 
-    const identificacaoCliente =
-      req.usuario.clienteVinculado || req.usuario.nome || ""
-    const nomeClienteVinculado = normalizarNomeCliente(identificacaoCliente)
-    const obrigacoes = req.usuario.perfil === "Cliente"
-      ? obrigacoesEncontradas.filter(
-          (item) => normalizarNomeCliente(item.cliente) === nomeClienteVinculado
-        )
-      : obrigacoesEncontradas
+    const obrigacoes = obrigacoesEncontradas
 
     if (req.usuario.perfil !== "Cliente") {
       return res.json(obrigacoes)
     }
 
-    const clientes = await Cliente.findAll()
-    const cliente = clientes.find(
-      (item) => normalizarNomeCliente(item.nome) === nomeClienteVinculado
-    )
+    const cliente = req.usuario.clienteId
+      ? await Cliente.findByPk(req.usuario.clienteId)
+      : await Cliente.findOne({ where: { nome: req.usuario.clienteVinculado } })
     if (!cliente) return res.json(obrigacoes)
 
     const guias = await DasMei.findAll({
@@ -367,8 +355,15 @@ router.post("/", autenticar, async (req, res) => {
       req.body.status
     )
 
+    const cliente = req.usuario.perfil === "Cliente"
+      ? await Cliente.findByPk(req.usuario.clienteId)
+      : await resolverClienteFinanceiro({ clienteId: req.body.clienteId, cliente: req.body.cliente })
+    if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
+
     const novaObrigacao = await Fiscal.create({
       ...req.body,
+      clienteId: cliente.id,
+      cliente: cliente.nome,
       diasParaVencer: alerta.diasParaVencer,
       alertaFiscal: alerta.alertaFiscal,
       empresaId:
@@ -402,7 +397,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
       })
     }
 
-    if (obrigacao.cliente !== req.usuario.clienteVinculado) {
+    if (Number(obrigacao.clienteId) !== Number(req.usuario.clienteId)) {
       return res.status(403).json({
         message: "Acesso não autorizado",
       })
@@ -438,7 +433,7 @@ router.patch("/:id/marcar-pago-cliente", autenticar, async (req, res) => {
 
     await Notificacao.create({
       empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
-      clienteId: null,
+      clienteId: req.usuario.clienteId || obrigacao.clienteId || null,
       usuarioId: req.usuario.id,
       titulo: "Pendência marcada como paga",
       tipo: "fiscal_pago_cliente",
@@ -481,7 +476,7 @@ router.post(
         })
       }
 
-      if (obrigacao.cliente !== req.usuario.clienteVinculado) {
+      if (Number(obrigacao.clienteId) !== Number(req.usuario.clienteId)) {
         return res.status(403).json({
           message: "Acesso não autorizado",
         })
@@ -557,7 +552,7 @@ router.post(
 
       await Notificacao.create({
         empresaId: req.usuario.empresaId || obrigacao.empresaId || 1,
-        clienteId: null,
+        clienteId: req.usuario.clienteId || obrigacao.clienteId || null,
         usuarioId: req.usuario.id,
         titulo: "Recibo de pagamento anexado",
         tipo: "fiscal_recibo_cliente",
@@ -603,7 +598,7 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
     const referenciaLancamento = referenciaDas
       ? `DAS-MEI:${referenciaDas[1]}`
       : `fiscal:${obrigacao.id}`
-    const clienteFinanceiro = await resolverClienteFinanceiro({ cliente: obrigacao.cliente })
+    const clienteFinanceiro = await resolverClienteFinanceiro({ clienteId: obrigacao.clienteId, cliente: obrigacao.cliente })
     if (!clienteFinanceiro) {
       return res.status(400).json({ message: "Não foi possível identificar o cliente cadastrado desta obrigação." })
     }
@@ -699,6 +694,9 @@ router.patch("/:id/concluir", autenticar, async (req, res) => {
 })
 router.put("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({ message: "Cliente não pode editar obrigação fiscal" })
+    }
     const { id } = req.params
     const obrigacao = await Fiscal.findByPk(id)
 
@@ -712,9 +710,16 @@ router.put("/:id", autenticar, async (req, res) => {
       req.body.vencimento,
       req.body.status
     )
+    const cliente = await resolverClienteFinanceiro({
+      clienteId: req.body.clienteId || obrigacao.clienteId,
+      cliente: req.body.cliente || obrigacao.cliente,
+    })
+    if (!cliente) return res.status(400).json({ message: "Selecione um cliente válido" })
 
     await obrigacao.update({
       ...req.body,
+      clienteId: cliente.id,
+      cliente: cliente.nome,
       diasParaVencer: alerta.diasParaVencer,
       alertaFiscal: alerta.alertaFiscal,
     })
@@ -744,6 +749,9 @@ router.put("/:id", autenticar, async (req, res) => {
 
 router.delete("/:id", autenticar, async (req, res) => {
   try {
+    if (req.usuario.perfil === "Cliente") {
+      return res.status(403).json({ message: "Cliente não pode excluir obrigação fiscal" })
+    }
     const { id } = req.params
     const obrigacao = await Fiscal.findByPk(id)
 

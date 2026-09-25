@@ -1,7 +1,6 @@
 const express = require("express")
 const fs = require("fs")
 const Cliente = require("../models/Cliente")
-const Usuario = require("../models/Usuario")
 const sequelize = require("../config/database")
 const upload = require("../middlewares/upload")
 const supabase = require("../config/supabase")
@@ -125,7 +124,9 @@ async function obterClienteDoUsuario(req) {
   }
 
   return Cliente.findOne({
-    where: { nome: req.usuario.clienteVinculado },
+    where: req.usuario.clienteId
+      ? { id: req.usuario.clienteId, escritorioId: req.usuario.escritorioId }
+      : { nome: req.usuario.clienteVinculado, escritorioId: req.usuario.escritorioId },
   })
 }
 
@@ -232,7 +233,8 @@ router.get("/", autenticar, async (req, res) => {
         return res.json([])
       }
 
-      where.nome = req.usuario.clienteVinculado
+      if (req.usuario.clienteId) where.id = req.usuario.clienteId
+      else where.nome = req.usuario.clienteVinculado
     }
 
     const clientes = await Cliente.findAll({
@@ -445,24 +447,6 @@ router.patch("/:id/acesso-portal", autenticar, async (req, res) => {
       portalBloqueadoEm: bloqueado ? new Date() : null,
       portalBloqueadoPor: bloqueado ? req.usuario.id : null,
     }, { transaction })
-
-    const whereUsuario = {
-      perfil: "Cliente",
-      clienteVinculado: cliente.nome,
-    }
-    if (cliente.escritorioId) whereUsuario.escritorioId = cliente.escritorioId
-
-    if (bloqueado) {
-      await Usuario.update(
-        { ativo: false, bloqueadoPeloCliente: true },
-        { where: { ...whereUsuario, ativo: true }, transaction },
-      )
-    } else {
-      await Usuario.update(
-        { ativo: true, bloqueadoPeloCliente: false },
-        { where: { ...whereUsuario, bloqueadoPeloCliente: true }, transaction },
-      )
-    }
 
     await transaction.commit()
     return res.json({

@@ -43,6 +43,7 @@ async function sincronizarPendenciaFiscal(guia) {
   const observacao = `DAS-MEI:${guia.id}`
   const alerta = alertaFiscal(guia.vencimento, pago)
   const dados = {
+    clienteId: cliente.id,
     cliente: cliente.nome,
     obrigacao: "DAS-MEI",
     competencia: competenciaFiscal(guia.competencia),

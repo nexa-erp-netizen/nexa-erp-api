@@ -1,8 +1,11 @@
 const jwt = require("jsonwebtoken")
 const Usuario = require("../models/Usuario")
-const Cliente = require("../models/Cliente")
 const Escritorio = require("../models/Escritorio")
 const { registrarAtividadeEscritorio } = require("../services/acessoEscritorioService")
+const {
+  clientesVinculadosAoUsuario,
+  escolherClienteAtivo,
+} = require("../services/usuarioClienteService")
 
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -36,22 +39,6 @@ async function autenticar(req, res, next) {
     })
 
     if (!usuarioAtual || usuarioAtual.ativo === false || usuarioAtual.arquivadoEm) {
-      if (usuarioAtual?.perfil === "Cliente" && usuarioAtual.clienteVinculado) {
-        const clienteBloqueado = await Cliente.findOne({
-          where: {
-            nome: usuarioAtual.clienteVinculado,
-            escritorioId: usuarioAtual.escritorioId,
-            portalBloqueado: true,
-          },
-          semIsolamentoEscritorio: true,
-        })
-        if (clienteBloqueado) {
-          return res.status(403).json({
-            message: "Seu acesso ao Portal está temporariamente bloqueado. Entre em contato com o escritório para regularização.",
-            portalBloqueado: true,
-          })
-        }
-      }
       return res.status(403).json({
         message: "Este acesso está bloqueado. Procure o administrador do escritório.",
       })
@@ -68,10 +55,28 @@ async function autenticar(req, res, next) {
       }
     }
 
+    let clienteAtivo = null
+    let clientesVinculados = []
+    if (usuarioAtual.perfil === "Cliente") {
+      clientesVinculados = await clientesVinculadosAoUsuario(usuarioAtual)
+      clienteAtivo = escolherClienteAtivo(clientesVinculados, usuario.clienteId)
+      if (!clienteAtivo) {
+        return res.status(403).json({ message: "Este acesso não possui empresa vinculada. Procure o escritório." })
+      }
+      if (clienteAtivo.portalBloqueado) {
+        return res.status(403).json({
+          message: "O Portal desta empresa está temporariamente bloqueado. Entre em contato com o escritório para regularização.",
+          portalBloqueado: true,
+        })
+      }
+    }
+
     req.usuario = {
       ...usuario,
       perfil: usuarioAtual.perfil,
-      clienteVinculado: usuarioAtual.clienteVinculado,
+      clienteId: clienteAtivo?.id || null,
+      clienteVinculado: clienteAtivo?.nome || usuarioAtual.clienteVinculado,
+      clientesVinculados,
       escritorioId: usuarioAtual.escritorioId,
       plataformaAdmin: usuarioAtual.plataformaAdmin === true,
     }
