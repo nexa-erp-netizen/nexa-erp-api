@@ -5,7 +5,11 @@ const Escritorio = require("../models/Escritorio")
 const Usuario = require("../models/Usuario")
 const { Op } = require("sequelize")
 const { salvarBackup } = require("./backupRoutes")
-const { validarArquivamentoEscritorio, confirmacaoNomeValida } = require("../services/arquivamentoSeguroService")
+const {
+  validarArquivamentoEscritorio,
+  confirmacaoNomeValida,
+  permiteArquivamentoReversivelSemBackup,
+} = require("../services/arquivamentoSeguroService")
 const { exigirAdministradorPlataforma } = require("../utils/acessoPlataforma")
 
 const router = express.Router()
@@ -62,6 +66,14 @@ router.delete("/:id", async (req, res) => {
     return res.json({ message: "Escritório excluído com segurança", backup: { arquivo: backup.arquivo, checksumSha256: backup.checksumSha256 } })
   } catch (error) {
     console.error("ERRO AO EXCLUIR ESCRITÓRIO:", error)
+    if (permiteArquivamentoReversivelSemBackup(escritorio)) {
+      await escritorio.update({ status: "Arquivado", arquivadoEm: new Date(), arquivadoPorUsuarioId: req.usuario.id }, { semIsolamentoEscritorio: true })
+      return res.json({
+        message: "Escritório sem acessos arquivado com segurança",
+        backup: null,
+        preservacao: "arquivamento-reversivel",
+      })
+    }
     return res.status(500).json({ message: "Não foi possível gerar o backup e excluir o escritório" })
   }
 })

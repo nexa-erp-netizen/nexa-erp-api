@@ -16,4 +16,16 @@ function confirmacaoNomeValida(nome, confirmacao) {
   return String(confirmacao || "").trim() === String(nome || "").trim()
 }
 
-module.exports = { validarArquivamentoUsuario, validarArquivamentoEscritorio, confirmacaoNomeValida }
+function permiteArquivamentoReversivelSemBackup(escritorio) {
+  if (!escritorio) return false
+  return Number(escritorio.totalAcessos || 0) === 0
+    && !escritorio.primeiroAcessoEm
+    && !escritorio.ultimoAcessoEm
+}
+
+module.exports = {
+  validarArquivamentoUsuario,
+  validarArquivamentoEscritorio,
+  confirmacaoNomeValida,
+  permiteArquivamentoReversivelSemBackup,
+}
