@@ -44,6 +44,7 @@ const aiProvider = require("../services/nexaAiProviderService")
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 const GROQ_MODELOS_URL = "https://api.groq.com/openai/v1/models"
+const OPENAI_MODELOS_URL = "https://api.openai.com/v1/models"
 const MODELO_PADRAO = process.env.GROQ_MODEL || "openai/gpt-oss-120b"
 const MODELO_PESQUISA_WEB_CONFIGURADO = process.env.GROQ_WEB_MODEL || "groq/compound"
 const MODELO_PESQUISA_WEB = String(MODELO_PESQUISA_WEB_CONFIGURADO).startsWith("groq/compound")
@@ -54,6 +55,41 @@ const PROVEDOR_PADRAO = aiProvider.preferredProvider
 const NEXA_CONVERSACIONAL_V2_ATIVA = String(process.env.NEXA_CONVERSACIONAL_V2 || "true").toLowerCase() !== "false"
 const nexaInteligenciaPiloto = require("../services/nexaInteligenciaPilotoService")
 const NEXA_MODEL_ROUTER_ATIVO = String(process.env.NEXA_MODEL_ROUTER || "true").toLowerCase() !== "false"
+
+let cacheStatusProvedores = null
+const STATUS_PROVEDORES_CACHE_MS = 60 * 1000
+
+async function verificarProvedor({ nome, apiKey, url, modelo }) {
+  if (!apiKey) return { configurada: false, online: false, modelo, mensagem: `${nome} não configurada` }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 5000)
+  const inicio = Date.now()
+  try {
+    const resposta = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: controller.signal })
+    const dados = await resposta.json().catch(() => ({}))
+    const modelos = Array.isArray(dados?.data) ? dados.data.map((item) => item.id) : []
+    return {
+      configurada: true,
+      online: resposta.ok,
+      modelo,
+      modeloDisponivel: resposta.ok ? modelos.includes(modelo) : false,
+      latenciaMs: Date.now() - inicio,
+      mensagem: resposta.ok ? `${nome} conectada` : `${nome} respondeu com status ${resposta.status}`,
+    }
+  } catch (error) {
+    return {
+      configurada: true,
+      online: false,
+      modelo,
+      modeloDisponivel: false,
+      latenciaMs: Date.now() - inicio,
+      mensagem: error?.name === "AbortError" ? `Tempo esgotado ao verificar a ${nome}` : `Não foi possível verificar a ${nome}`,
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 
 const PAGINAS_NAVEGACAO = [
@@ -2194,69 +2230,33 @@ ${JSON.stringify(contextoConfirmado)}`,
 }
 
 async function status(req, res) {
-  const piloto = await nexaInteligenciaPiloto.status(req.usuario)
-  const apiKey = process.env.GROQ_API_KEY
-  const base = {
+  const agora = Date.now()
+  const cacheValido = cacheStatusProvedores && agora - cacheStatusProvedores.criadoEm < STATUS_PROVEDORES_CACHE_MS
+  const [piloto, provedores] = await Promise.all([
+    nexaInteligenciaPiloto.status(req.usuario),
+    cacheValido ? Promise.resolve(cacheStatusProvedores.dados) : Promise.all([
+      verificarProvedor({ nome: "OpenAI", apiKey: process.env.OPENAI_API_KEY, url: OPENAI_MODELOS_URL, modelo: aiProvider.models.openai }),
+      verificarProvedor({ nome: "Groq", apiKey: process.env.GROQ_API_KEY, url: GROQ_MODELOS_URL, modelo: MODELO_PADRAO }),
+    ]),
+  ])
+  if (!cacheValido) cacheStatusProvedores = { criadoEm: agora, dados: provedores }
+  const [openai, groqBase] = provedores
+  const groq = { ...groqBase, pesquisaWebAtiva: PESQUISA_WEB_ATIVA, modeloPesquisaWeb: MODELO_PESQUISA_WEB }
+
+  return res.json({
     provedorPrincipal: PROVEDOR_PADRAO,
     conversacionalV2: NEXA_CONVERSACIONAL_V2_ATIVA,
     roteadorPorModelo: NEXA_MODEL_ROUTER_ATIVO,
-    groq: {
-      configurada: Boolean(apiKey),
-      online: false,
-      modelo: MODELO_PADRAO,
-      pesquisaWebAtiva: PESQUISA_WEB_ATIVA,
-      modeloPesquisaWeb: MODELO_PESQUISA_WEB,
-    },
-    openai: {
-      configurada: Boolean(process.env.OPENAI_API_KEY),
-      online: Boolean(process.env.OPENAI_API_KEY),
-      modelo: aiProvider.models.openai,
-      principal: PROVEDOR_PADRAO === "openai",
-      mensagem: process.env.OPENAI_API_KEY ? "OpenAI configurada" : "OpenAI não configurada",
-    },
+    status: openai.online || groq.online ? "online" : "indisponivel",
+    verificadoEm: new Date(cacheValido ? cacheStatusProvedores.criadoEm : agora).toISOString(),
+    groq,
+    openai: { ...openai, principal: PROVEDOR_PADRAO === "openai" },
     ollama: {
       tipo: "local",
       verificadoNoNavegador: true,
     },
-  }
-
-  if (!apiKey) {
-    return res.json(base)
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 7000)
-
-  try {
-    const resposta = await fetch(GROQ_MODELOS_URL, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: controller.signal,
-    })
-    const dados = await resposta.json().catch(() => ({}))
-    const modelos = Array.isArray(dados?.data) ? dados.data.map((item) => item.id) : []
-
-  return res.json({
-      ...base,
-      groq: {
-        ...base.groq,
-        online: resposta.ok,
-        modeloDisponivel: resposta.ok ? modelos.includes(MODELO_PADRAO) : false,
-        mensagem: resposta.ok ? "Groq conectada" : (dados?.error?.message || `Groq respondeu com status ${resposta.status}`),
-      },
-    })
-  } catch (error) {
-    return res.json({
-      ...base,
-      groq: {
-        ...base.groq,
-        online: false,
-        modeloDisponivel: false,
-        mensagem: error?.name === "AbortError" ? "Tempo esgotado ao verificar a Groq" : "Não foi possível verificar a Groq",
-      },
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
+    piloto,
+  })
 }
 
 async function contexto(req, res) {
