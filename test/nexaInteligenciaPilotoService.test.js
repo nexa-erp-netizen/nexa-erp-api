@@ -12,3 +12,7 @@ test("calcula custo configurado por milhão de tokens", () => {
   const custo = piloto._test.custoUsd(1_000_000, 1_000_000)
   assert.ok(custo > 0)
 })
+
+test("usa API paga sem bloqueio de piloto por padrão", () => {
+  assert.equal(piloto._test.pilotoAtivo, false)
+})

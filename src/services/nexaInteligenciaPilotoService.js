@@ -3,6 +3,9 @@ const NexaInteligenciaPiloto = require("../models/NexaInteligenciaPiloto")
 const { usuarioAtual } = require("./nexaInteligenciaPilotoContext")
 
 const DIAS_PILOTO = 30
+const PILOTO_ATIVO = ["1", "true", "sim", "yes"].includes(
+  String(process.env.NEXA_OPENAI_PILOT_ENABLED || "false").trim().toLowerCase()
+)
 const LIMITE_USD = Number(process.env.NEXA_OPENAI_PILOT_LIMIT_USD || 10)
 const CUSTO_ENTRADA_MILHAO = Number(process.env.OPENAI_INPUT_USD_PER_MILLION || 2.5)
 const CUSTO_SAIDA_MILHAO = Number(process.env.OPENAI_OUTPUT_USD_PER_MILLION || 15)
@@ -42,6 +45,8 @@ async function obterOuCriar(transaction, usuario) {
 
 async function reservar({ mensagens, maxTokens }) {
   const usuario = exigirAdministrador()
+  if (!PILOTO_ATIVO) return null
+
   const estimativa = custoUsd(estimarTokens(JSON.stringify(mensagens)), Number(maxTokens || 900))
   return sequelize.transaction(async (transaction) => {
     const registro = await obterOuCriar(transaction, usuario)
@@ -92,12 +97,26 @@ async function liberar(reserva) {
 async function status(usuario) {
   if (String(usuario?.perfil || "").toLowerCase() !== "administrador") return { permitido: false }
   const registro = await NexaInteligenciaPiloto.findOne({ where: { escritorioId: chaveEscritorio(usuario) } })
+  if (!PILOTO_ATIVO) {
+    return {
+      permitido: true,
+      ativo: true,
+      pilotoAtivo: false,
+      modo: "api-paga",
+      limiteAtivo: false,
+      consumidoUsdPiloto: Number(registro?.consumidoUsd || 0),
+      chamadasPiloto: Number(registro?.chamadas || 0),
+    }
+  }
   if (!registro) return { permitido: true, ativo: true, iniciado: false, dias: DIAS_PILOTO, limiteUsd: LIMITE_USD, consumidoUsd: 0, restanteUsd: LIMITE_USD, chamadas: 0 }
   const limiteUsd = Number(registro.limiteUsd)
   const consumidoUsd = Number(registro.consumidoUsd)
   return {
     permitido: true,
     ativo: Date.now() < new Date(registro.encerraEm).getTime() && consumidoUsd < limiteUsd,
+    pilotoAtivo: true,
+    modo: "piloto",
+    limiteAtivo: true,
     iniciado: true,
     iniciadoEm: registro.iniciadoEm,
     encerraEm: registro.encerraEm,
@@ -108,4 +127,4 @@ async function status(usuario) {
   }
 }
 
-module.exports = { reservar, finalizar, liberar, status, _test: { estimarTokens, custoUsd } }
+module.exports = { reservar, finalizar, liberar, status, _test: { estimarTokens, custoUsd, pilotoAtivo: PILOTO_ATIVO } }
